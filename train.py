@@ -8,7 +8,7 @@ BATCH_SIZE = 128
 BASE_WIDTH = 1024#4 * EMBED_DIM 
 N_HEADS = EMBED_DIM // 16
 N_KV_HEADS = N_HEADS // 4
-WINDOWS = CONTEXT_SIZE // 2
+WINDOWS = CONTEXT_SIZE // 4
 N_EXPERTS = 24
 CF = 1.25
 VAL = .9
@@ -27,9 +27,7 @@ import cProfile
 import pstats
 
 from engine.transformer import Transformer
-from engine.transformer_block import TransformerBlock
 from engine.tokenizer import Tokenizer
-from engine.embedding import Embedding
 from engine.dataloader import DataLoader
 from engine.sessions import Session
 import engine.backend as nx
@@ -44,8 +42,8 @@ session_configs = {
     "train_split":.9,
     "train_split":VAL,
     "optimizer_args":{
-        "min_lr":1e-4,
-        "max_lr":1e-2,
+        "min_lr":1e-6,
+        "max_lr":1e-3,
         "beta":0.9,
         "beta2":0.999,
         "epsilon":1e-8,
@@ -58,8 +56,9 @@ model_configs = {
     "n_blocks":4,
     "embed_dim":EMBED_DIM,
     "dtype": nx.float16,
+    "block_configs":{"ff_hidden_width": BASE_WIDTH,"ff_n_experts":N_EXPERTS,"ff_topk":TOP_K,"ff_cf":CF,"attn_n_heads":N_HEADS,"attn_n_kv_heads":N_KV_HEADS,"attn_windows":CONTEXT_SIZE//2},
     "block_overrides":{
-        1:{}, 2:{}
+        0:{}, 2:{}
     }
 }
 
@@ -86,16 +85,9 @@ session1 = Session(transformer, tokenizer1, True, session_configs)
 
 a = random.randint(1,9999999999999)
 a = str(a)
-# profiler = cProfile.Profile()
-# profiler.enable()
 start = time.perf_counter()
 session1.train(dataloader, display_message=True)
 end = time.perf_counter()
 print(f"training finished. time: {end - start:.3f}s")
-
-# profiler.disable()
-# stats = pstats.Stats(profiler)
-# stats.sort_stats("cumtime")
-# stats.print_stats(100)
 
 session1.save(f"{session1.count_params()}_params_{EPOCHS}_epochs")

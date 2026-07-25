@@ -14,8 +14,8 @@ class MoE:
         self.top_k = top_k
         self.dtype = dtype
 
-        init = nx.sqrt(6 / (embed_dim + n_experts), dtype=dtype) 
-        self.router = nx.uniform(-init,init,(self.embed_dim, self.n_experts), dtype=dtype)
+        init = nx.sqrt(6 / (embed_dim + n_experts), dtype=nx.float32) 
+        self.router = nx.uniform(-init,init,(self.embed_dim, self.n_experts), dtype=init.dtype)
         self.d_router = None
 
         scale = nx.sqrt(6 / (embed_dim+hidden_width), dtype=dtype)
@@ -28,19 +28,20 @@ class MoE:
     @staticmethod
     def forward(x:nx.ArrayLike, capacity_factor, top_k, router:nx.ArrayLike, n_expert:int,H:int,  Wcombined, Wout):
         #routing
+        # print("moe forward x", x.dtype)
         B, T, D = x.shape 
         N = B * T
         top_k = min(top_k, n_expert)
         capacity = math.ceil(capacity_factor * N * top_k / n_expert)
         flatten_x = x.reshape(-1, D)
-        scores =  flatten_x @ router #(N, E)
+        scores =  flatten_x.astype(nx.float32) @ router #(N, E) #type:ignore
         router_prob = softmax(scores, -1) #(N, E)
         #top-k
         top_expert_indices = nx.topk(router_prob, top_k) #(N, K)
         row_idx = nx.arange(N, dtype=nx.int32)[:, None]  #(N,1)
         top_gates = router_prob[row_idx, top_expert_indices] # (N, K)
-        top_gates = top_gates / nx.sum(top_gates, axis=-1, keepdims=True, dtype=nx.float32)#, dtype=DTYPE)
-        top_gates = top_gates.astype(x.dtype)
+        top_gates32 = top_gates / nx.sum(top_gates, axis=-1, keepdims=True, dtype=nx.float32)#, dtype=DTYPE)
+        top_gates = top_gates32.astype(x.dtype)
 
         flatten_top_expert_indices = top_expert_indices.reshape(-1) #(N*K,)
         flatten_top_gates = top_gates.reshape(-1) #(N*K,)
@@ -79,26 +80,29 @@ class MoE:
         projected = expert_input @ Wcombined.transpose(0,2,1) #(E, capacity, 2H)
         gate_half = projected[..., :H]
         value_half = projected[..., H:]
-        s = swish(gate_half)
+        s = swish(gate_half, x.dtype)
+        # print("swish", s.dtype)
         hidden = s * value_half #(E, capacity, H) 
-        raw_output = hidden @ Wout #(E, capacity, D) fp16
+        raw_output = hidden @ Wout #(E, capacity, D) 
+        # print("raw output", raw_output.dtype)
         gated_output = raw_output * expert_gate[..., None]
         final_output = gated_output[flatten_top_expert_indices, safe_slot]
         final_output = final_output * valid[..., None]
         final_output = final_output.reshape(N,top_k,D)
-        final_output = nx.sum(final_output, axis=1, dtype=nx.float32,).reshape(B,T,D) #check
+        final_output = nx.sum(final_output, axis=1, dtype=nx.float32).reshape(B,T,D) #check
+        final_output = final_output.astype(x.dtype)
         # print("final output", final_output.dtype)
         # print("expert_input",expert_input.dtype)
         # print("gate",expert_gate.dtype)
         # print("projected",projected.dtype)
         # print("hidden",hidden.dtype)
         # print("router forward", router.dtype)
-        cache = (flatten_x, router_prob, top_expert_indices, top_gates, flatten_top_expert_indices, assignement_tokens, valid, safe_slot, expert_input, expert_gate, projected, hidden, raw_output, normalized_histogram)
+        cache = (flatten_x, router_prob, top_expert_indices, top_gates32, flatten_top_expert_indices, assignement_tokens, valid, safe_slot, expert_input, expert_gate, projected, hidden, raw_output, normalized_histogram)
         return final_output, cache, router_loss, normalized_histogram
 
     @staticmethod
     def backward(gradient , caches, moe_configs, ff_params):
-        flatten_x, router_prob, top_expert_indices, top_gates, flatten_top_expert_indices, assignement_tokens, valid, safe_slot, expert_input, expert_gate, projected, hidden, raw_output, normalized_histogram = caches
+        flatten_x, router_prob, top_expert_indices, top_gates32 , flatten_top_expert_indices, assignement_tokens, valid, safe_slot, expert_input, expert_gate, projected, hidden, raw_output, normalized_histogram = caches
         Wout, Wcombined = ff_params
         capacity_factor, n_experts, hidden_width, router, LAMBDA = moe_configs
         top_k = top_expert_indices.shape[1]
@@ -159,21 +163,20 @@ class MoE:
         token_rows = nx.arange(N, dtype=nx.int32)[:,None]
         selected_prob = router_prob[token_rows, top_expert_indices] #N,K
         gate_sum = nx.sum(selected_prob, -1, keepdims=True, dtype=nx.float32) #(N,1)
-        coupling = nx.sum(d_chosen_gate * top_gates, -1, keepdims=True, dtype=nx.float32) #(N,1)
+        coupling = nx.sum(d_chosen_gate * top_gates32, -1, keepdims=True, dtype=nx.float32) #(N,1)
         d_selected_prob = (d_chosen_gate - coupling)/gate_sum #(N,K)
         d_selected_prob = d_selected_prob.reshape(-1,)
 
-        d_router_prob = nx.zeros((N,n_experts), dtype=d_selected_prob.dtype)
+        d_router_prob = nx.zeros((N,n_experts), dtype=d_selected_prob.dtype) #fp32
         d_router_prob[assignement_tokens, flatten_top_expert_indices] = d_selected_prob
 
         d_avg_prob = n_experts * normalized_histogram
         d_router_prob += LAMBDA * (d_avg_prob / N)
 
         d_scores = softmax_derivative(router_prob, d_router_prob) #(N,E)
-        d_scores = d_scores.astype(gradient.dtype)
         # print("d_scores", d_scores.dtype)
 
-        d_router = flatten_x.T @ d_scores #(D,E) #grad dtype
+        d_router = flatten_x.astype(nx.float32).T @ d_scores #(D,E) #fp32
         # print("droter", d_router.dtype)
         d_x_router = d_scores @ router.T #(N, D)
         # print("router", router.dtype)
@@ -188,7 +191,7 @@ class MoE:
 
     def to_dict(self) -> dict:
         return {
-            "configs":(self.cf, self.top_k, self.n_experts, self.hidden_width,self.embed_dim, self.dtype),
+            "moe_configs":(self.cf, self.top_k, self.n_experts, self.hidden_width,self.embed_dim, nx.dtype_to_srt[self.dtype]),
             "router": self.router.tolist(),
             "Wcombine":self.Wcombined.tolist(),
             "Wout":self.Wout.tolist(),
@@ -196,9 +199,10 @@ class MoE:
     
     @classmethod
     def from_dict(cls, thing:dict) -> "MoE":
-        capacity_factor, top_k, n_experts, hidden_width, embed_dim, dtype = thing["configs"]
+        capacity_factor, top_k, n_experts, hidden_width, embed_dim, dtype = thing["moe_configs"]
+        dtype = nx.str_to_dtype[dtype]
         moe = cls(capacity_factor, top_k, n_experts, embed_dim, hidden_width, dtype)
         moe.Wcombined = nx.array(thing["Wcombine"], dtype=moe.dtype)
         moe.Wout = nx.array(thing["Wout"], dtype=moe.dtype)
-        moe.router = nx.array(thing["router"], dtype=nx.float32)
+        moe.router = nx.array(thing["router"], dtype=moe.dtype)
         return moe

@@ -18,6 +18,7 @@ class AttentionLayer:
         assert n_heads % n_kv_heads == 0, "cant have more kv heads than query heads."
         self.head_dim = embed_dim // n_heads
         self.W = W
+        self.dtype = dtype
 
         scale = 1 / nx.sqrt(self.head_dim, dtype=dtype)
         self.n_rep = self.n_heads // self.n_kv_heads 
@@ -30,7 +31,6 @@ class AttentionLayer:
     @staticmethod
     def _forward(x:nx.ArrayLike, causal_mask:nx.ArrayLike, embed_dim:int, n_kv_heads:int, n_heads:int, n_rep:int, head_dim:int, W, freqs:int, Wqkv:nx.ArrayLike, Wo:nx.ArrayLike):
         combined = x @ Wqkv.T 
-        SCALE = nx.sqrt(head_dim, dtype=x.dtype)
 
         Q = combined[..., :embed_dim] #shape: (B, T, D)
         K = combined[..., embed_dim: embed_dim + (n_kv_heads * head_dim)]  #shape: (B, T, n_kv_heads * H)
@@ -68,12 +68,12 @@ class AttentionLayer:
         # start = time.perf_counter()
         # print("swa scores unscaled",scores.dtype)
         scores = scores[:,:,:,:,0,:].reshape(B, -1, T, W+1)
-        scores = scores.reshape(B, -1, T, W+1)
-        scores /= SCALE
-        scores = nx.where(causal_mask, -1e9, scores)
-        weights = softmax(scores) #(B, n_heads, T, W+1) #fp32
+        scores = scores.astype(nx.float32) /  nx.sqrt(head_dim, dtype=nx.float32)
+        scores = nx.where(causal_mask, -nx.inf, scores)
+        weights_softmax = softmax(scores) #(B, n_heads, T, W+1) #fp32
         # print("weights softmax", weights.dtype)
-        weights = weights.astype(scores.dtype)
+
+        weights = weights_softmax.astype(x.dtype)
         weights = weights.reshape(B, n_kv_heads, n_rep, T, W+1)
         # print("weights after cast", weights.dtype)
 
@@ -98,16 +98,16 @@ class AttentionLayer:
         # print("wink forward", windows_K.dtype)
         # print("winv forward", windows_V.dtype)
         # print("weights forward", weights.dtype)
-        cache = (x, Q, windows_K, windows_V, weights, output_concat)
+        cache = (x, Q, windows_K, windows_V, weights_softmax, output_concat)
         return output_projected, cache
     
     @staticmethod
     def _backward(gradient:nx.ArrayLike, caches:tuple[Any,...], attn_params: tuple[Any,...]) :#-> tuple[nx.ArrayLike,...]:
-        x, Q, windows_K, windows_V, weights, output_concat = caches
+        x, Q, windows_K, windows_V, weights_softmax, output_concat = caches
         n_heads, head_dim, embed_dim, n_kv_heads, n_rep, W, Wo, freqs, Wqkv = attn_params
-
-        scale = nx.sqrt(head_dim, dtype=nx.float16)
         B, T, D = x.shape
+        weights_softmax = weights_softmax.reshape(B, n_kv_heads, n_rep, T, W+1)
+        weights = weights_softmax.astype(x.dtype)
         d_output_concat = nx.einsum("btd,fd->btf",gradient, Wo) #(B,T,D)
         # print("doutput", d_output_concat.dtype)
         # print("wo", Wo.dtype)
@@ -133,9 +133,9 @@ class AttentionLayer:
         # end = time.perf_counter()
         # print(f"d_windows_V {end-start:.5f}")
 
-        d_weights = d_weights[:,:,:,:,0,:]
-        d_scores = softmax_derivative(weights, d_weights) / scale #(B, n_kv_heads, n_rep, T, W+1)
-        d_scores = d_scores.astype(nx.float16)
+        d_weights = d_weights[:,:,:,:,0,:].astype(nx.float32)
+        d_scores = softmax_derivative(weights_softmax, d_weights) / nx.sqrt(head_dim, dtype=nx.float32) #(B, n_kv_heads, n_rep, T, W+1)
+        d_scores = d_scores.astype(x.dtype)
 
         # start = time.perf_counter()
         d_scores_6d = d_scores[:,:,:,:,None,:] #(B, n_kv_heads, n_rep, T, 1,W+1)
@@ -247,6 +247,7 @@ class AttentionLayer:
             "embed_dim":self.embed_dim,
             "n_heads":self.n_heads,
             "n_kv_heads":self.n_kv_heads,
+            "dtype": nx.dtype_to_srt[self.dtype],
             "W":self.W,
             "Wqkv":self.Wqkv.tolist(),
             "Wo":self.Wo.tolist(),
@@ -261,8 +262,9 @@ class AttentionLayer:
         W = thing["W"]
         Wqkv = thing["Wqkv"]
         Wo = thing["Wo"]
+        dtype = nx.str_to_dtype[thing["dtype"]]
 
-        attention = cls(embed_dim,n_heads, n_kv_heads, W)
+        attention = cls(embed_dim,n_heads, n_kv_heads, W, dtype)
         attention.Wqkv = nx.array(Wqkv, dtype=nx.float16)
         attention.Wo = nx.array(Wo, dtype=nx.float16)
 

@@ -1,7 +1,6 @@
-import engine.backend as mx
 from engine.sessions import Session
 
-session = Session.load("artifacts/sessions/session_19454464_params_5_epochs.ram2n")
+session = Session.load("artifacts/sessions/session_19446272_params_1_epochs.ram2n")
 session.configs["epochs"] = 20
 tokenizer = session.tokenizer
 context_size = session.configs["context_size"]

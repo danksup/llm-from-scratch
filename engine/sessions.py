@@ -95,11 +95,11 @@ class Session:
             print(f"netowk optimizer time mean: {np.mean(network_optimizer_times)} | max times: {np.max(network_optimizer_times)} | min times: {np.min(network_optimizer_times)}")
             print(f"benchmarking {i}. time: {end_per - start_per:.3f}s")
 
-        # if total_histograms:
-        #     for idx, histogram in enumerate(total_histograms):
-        #         hmin = nx.min(histogram).item()
-        #         hmax = nx.max(histogram).item()
-        #         print(f"block{idx}: ideal: {1/histogram.shape[0]} | spread: {hmax-hmin} | min: {hmin} | max: {hmax}")
+            if total_histograms:
+                for idx, histogram in enumerate(total_histograms):
+                    hmin = nx.min(histogram).item()
+                    hmax = nx.max(histogram).item()
+                    print(f"block{idx}: ideal: {1/histogram.shape[0]} | spread: {hmax-hmin} | min: {hmin} | max: {hmax}")
 
     def train(self,dataloader:DataLoader,patience:int=10, display_message:bool=True):
         """

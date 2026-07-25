@@ -35,8 +35,8 @@ session_configs = {
     "train_split":.9,
     "train_split":VAL,
     "optimizer_args":{
-        "min_lr":1e-4,
-        "max_lr":1e-2,
+        "min_lr":1e-5,
+        "max_lr":1e-3,
         "beta":0.9,
         "beta2":0.999,
         "epsilon":1e-8,
@@ -48,8 +48,11 @@ session_configs = {
 model_configs = {
     "n_blocks":4,
     "embed_dim":EMBED_DIM,
-    "dtype": nx.float16,
-    "block_overrides":{}
+    "dtype": nx.float32,
+    "block_configs":{"ff_hidden_width": BASE_WIDTH,"ff_n_experts":N_EXPERTS,"ff_topk":TOP_K,"ff_cf":CF,"attn_n_heads":N_HEADS,"attn_n_kv_heads":N_KV_HEADS,"attn_windows":CONTEXT_SIZE//2},
+    "block_overrides":{
+        1:{}, 2:{}
+    }
 }
 
 corpus = ""
@@ -71,7 +74,6 @@ weight_n = CONTEXT_SIZE * EMBED_DIM
 real_vocab_size = len(tokenizer1.vocab)
 model_configs["vocab_size"] = real_vocab_size
 
-DTYPE = nx.float16
 embedding1 = Embedding(real_vocab_size, EMBED_DIM)
 transformer = Transformer(model_configs)
 start = time.perf_counter()
@@ -90,7 +92,7 @@ session1 = Session(transformer, tokenizer1, True, session_configs)
 # profiler.enable()
 start = time.perf_counter()
 # mx.metal.start_capture("transformer.gputrace")
-session1.benchmark(dataloader, 5, 7)
+session1.benchmark(dataloader, 10, 10)
 end = time.perf_counter()
 # mx.metal.stop_capture()
 print(f"benchmarking finished. time: {end - start:.3f}s")

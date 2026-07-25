@@ -73,7 +73,6 @@ class TransformerBlock:
     @nx.compile
     @staticmethod
     def _backward(gradient:Any, mask1:Any, mask2:Any, p, caches_attn:tuple[Any,...], caches_ff:tuple[Any,...], caches_rmsnorm1:tuple[Any,...], caches_rmsnorm2:tuple[Any,...], attn_params:tuple[Any,...], gamma1:Any, gamma2:Any, ff_params:tuple, moe_configs) -> tuple[Any, Any, Any, Any, Any, Any, Any, Any]:
-        gradient = gradient.astype(gradient.dtype)
         d_ff_drop = Dropout._backward(gradient, mask2, 0.1) #grad dtype
         dx_ff,  dWcombined, dWout, d_router = MoE.backward(d_ff_drop, caches_ff, moe_configs, ff_params) #out:fp32
         d_rmsn2,d_gamma2 = RMSNorm._backward(dx_ff, caches_rmsnorm2 ,gamma2)
@@ -115,24 +114,22 @@ class TransformerBlock:
                 "hidden_width":self.hidden_width,
                 "embed_dim":self.embed_dim,
                 "n_kv_heads": self.n_kv_heads,
-                "dtype":self.dtype
+                "dtype": nx.dtype_to_srt[self.dtype]
             },
             "attention":self.attention.to_dict(),
             "ff":self.ff.to_dict(),
             "rmsnorm1":self.rmsnorm1.to_dict(),
             "rmsnorm2":self.rmsnorm2.to_dict(),
-            # "causal_mask":self.causal_mask.tolist() if self.causal_mask is not None else None
         } 
     
     @classmethod
     def from_dict(cls,thing:dict) -> "TransformerBlock":
         configs = thing["block_configs"]
-        transformer_block = cls(configs["embed_dim"], configs["hidden_width"], configs["n_heads"], configs["n_kv_heads"], configs["n_experts"],configs["cf"], dtype = configs["dtype"])
+        transformer_block = cls(configs["embed_dim"], configs["hidden_width"], configs["n_heads"], configs["n_kv_heads"], configs["n_experts"],configs["cf"], dtype = nx.str_to_dtype[configs["dtype"]])
         transformer_block.attention = AttentionLayer.from_dict(thing["attention"])
         transformer_block.ff = MoE.from_dict(thing["ff"])
         transformer_block.rmsnorm1 = RMSNorm.from_dict(thing["rmsnorm1"])
         transformer_block.rmsnorm2 = RMSNorm.from_dict(thing["rmsnorm2"])
-        # transformer_block.causal_mask = nx.array(thing["causal_mask"], dtype=nx.bool_)
         return transformer_block
 
   

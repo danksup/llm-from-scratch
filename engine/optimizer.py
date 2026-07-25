@@ -48,8 +48,8 @@ class AdamW:
             gradients = nx.stack([i[2] for i in thing])
             if shape not in self.state:
                 self.state[shape] = {
-                    "m": nx.zeros_like(params),
-                    "v": nx.zeros_like(params),
+                    "m": nx.zeros_like(params, nx.float32),
+                    "v": nx.zeros_like(params,  nx.float32),
                     # "t": nx.float_32(.0)
 
                 }
@@ -65,7 +65,7 @@ class AdamW:
     @staticmethod
     def __step(m_v_t, params:Any, grads:Any, lr:Any, epsilon:float, beta1:float, beta2:float, weight_decay:float) -> tuple[Any,...]: 
         m,v,t = m_v_t       
-        norm = nx.sqrt(nx.sum(grads**2, axis=tuple(range(1, grads.ndim)), keepdims=True))
+        norm = nx.sqrt(nx.sum(grads**2, axis=tuple(range(1, grads.ndim)), keepdims=True, dtype=nx.float32), dtype=nx.float32)
         grads = nx.where(norm > 1.0, grads * (1.0 / (norm + epsilon)), grads)
         m = beta1 * m + (1.0 - beta1) * grads
         v = beta2 * v + (1.0 - beta2) * (grads**2)

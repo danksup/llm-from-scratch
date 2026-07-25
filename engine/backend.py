@@ -26,13 +26,37 @@ else:
     backend = "NumPy"
 
 e = _nx.e
+inf = _nx.inf
+nan = _nx.nan
 pi = _nx.pi
 float16 = _nx.float16
 float32 = _nx.float32
+float64 = _nx.float64
 int64 = _nx.int64
 int32 = _nx.int32
+int16 = _nx.int16
+int8 = _nx.int8
 bool_ = _nx.bool_
+bf16 = _nx.bfloat16 if backend == "MLX" else _nx.float32
 
+dtype_to_srt = {
+    float16: "float16",
+    float32: "float32",
+    int64: "int64",
+    int32: "int32",
+    bool_: "bool",
+    bf16: "bf16",
+}
+
+str_to_dtype = {
+    "float16":float16,
+    "float32":float32,
+    "int64":int64,
+    "int32":int32,
+    "bool":bool_,
+    "bf16":bf16,
+}
+    
 def array(x:Any, dtype=None) -> ArrayLike:
     if dtype is None:
         dtype = float32
@@ -379,3 +403,7 @@ def full(shape, vals, dtype=None):
 
 def isfinite(a):
     return _nx.isfinite(a)
+
+def isinf(a):
+    return _nx.isinf(a)
+

@@ -82,8 +82,34 @@ z = np.lib.stride_tricks.as_strided(b, shape=shape, strides= np_stride)
 
 # a = np.sqrt(a, dtype=np.longdouble)
 # print(a)
-a = {"transformer_configs":{}}
-transformer = a["transformer_configs"]
-transformer["vocab_size"] = 2
-print(a)
+# a = {"transformer_configs":{}}
+# transformer = a["transformer_configs"]
+# transformer["vocab_size"] = 2
+# print(a)
+
+d = mx.random.uniform(-0.1, 0.1, (4096,4096), dtype=mx.float32)
+i = np.float16
+
+import time
+
+a = time.perf_counter()
+mx.eval(d)
+b = time.perf_counter()
+print(b-a)
+
+a = time.perf_counter()
+d = d.astype(mx.float32)
+mx.eval(d)
+b = time.perf_counter()
+print(b-a)
+
+a = time.perf_counter()
+d = d.astype(mx.float16)
+mx.eval(d)
+b = time.perf_counter()
+print(b-a)
+
+
+
+
 

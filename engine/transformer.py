@@ -153,7 +153,7 @@ class Transformer:
         
         return current_grad
     
-    def train(self, dataloader:DataLoader, optimizer:AdamW, total_epoch:int, batch_size:int=32, min_lr = 1e-4, max_lr= 1e-3):
+    def train(self, dataloader:DataLoader, optimizer:AdamW, total_epoch:int, batch_size:int=32):
         '''
         Args:
             dataloader: Dataloader object
@@ -176,8 +176,10 @@ class Transformer:
             loss = nx.mean(loss) + LAMBDA * total_router_loss
 
             if not nx.isfinite(loss):
-                raise FloatingPointError("inf")
-            
+                forward_nan = nx.isnan(loss)
+                forward_inf = nx.isinf(loss)
+                raise FloatingPointError(f"[FORWARD] backward inf of value {loss.item()} at {batch_counter}. isnan: {forward_nan} | isinf: {forward_inf}")
+
             batch_gradient = cross_entropy_gradient(batch_scores, next_tokens)
             batch_gradient /= (batch_gradient.shape[0] * batch_gradient.shape[1])
 
@@ -187,6 +189,13 @@ class Transformer:
             d_table = batch_gradient.reshape(-1, self.vocab_size).T @ last_output.reshape(-1, self.embed_dim) 
             
             current_grad = self.backward(block_gradient, self.embedding.lookup_table, last_output, all_masks, all_caches)
+
+            if not nx.isfinite(current_grad).all().item():
+                backward_max = max(current_grad)
+                backward_min = min(current_grad)
+                backward_nan = nx.isnan(current_grad)
+                backward_inf = nx.isinf(current_grad)
+                raise FloatingPointError(f"[BACKWARD] backward inf at {batch_counter}. isnan: {backward_nan} | isinf: {backward_inf}.\nmin value: {backward_min}\nmax value: {backward_max}")
 
             embedding_gradient = nx.zeros_like(self.embedding.lookup_table, dtype=nx.float32)
             embedding_gradient = nx.add_at(embedding_gradient, contexts, current_grad)
@@ -204,7 +213,7 @@ class Transformer:
                     (f"ff_router_{i}", block.ff.router.astype(nx.float32), block.ff.d_router.astype(nx.float32)),
                     (f"rmsnorm1_gamma_{i}", block.rmsnorm1.gamma.astype(nx.float32), block.rmsnorm1.d_gamma.astype(nx.float32)),
                     (f"rmsnorm2_gamma_{i}", block.rmsnorm2.gamma.astype(nx.float32), block.rmsnorm2.d_gamma.astype(nx.float32))])
-            all_network_params.extend([("embedding",self.embedding.lookup_table, total_embedding_gradient)])
+            all_network_params.extend([("embedding",self.embedding.lookup_table.astype(nx.float32), total_embedding_gradient)])
             
             optimized = optimizer.step_many(all_network_params,dataloader.train_contexts, batch_size, total_epoch)
             for i,block in enumerate(self.blocks):
@@ -212,7 +221,7 @@ class Transformer:
                 block.attention.Wo = optimized[f"Wo_{i}"].astype(self.dtype)
                 block.ff.Wcombined = optimized[f"ff_wcombined_{i}"].astype(self.dtype)
                 block.ff.Wout = optimized[f"ff_wout_{i}"].astype(self.dtype)
-                block.ff.router = optimized[f"ff_router_{i}"].astype(self.dtype)
+                block.ff.router = optimized[f"ff_router_{i}"]
                 block.rmsnorm1.gamma = optimized[f"rmsnorm1_gamma_{i}"]
                 block.rmsnorm2.gamma = optimized[f"rmsnorm2_gamma_{i}"]
             self.embedding.lookup_table = optimized["embedding"].astype(self.dtype)
@@ -293,7 +302,7 @@ class Transformer:
                     (f"ff_router_{i}", block.ff.router.astype(nx.float32), block.ff.d_router.astype(nx.float32)),
                     (f"rmsnorm1_gamma_{i}", block.rmsnorm1.gamma.astype(nx.float32), block.rmsnorm1.d_gamma.astype(nx.float32)),
                     (f"rmsnorm2_gamma_{i}", block.rmsnorm2.gamma.astype(nx.float32), block.rmsnorm2.d_gamma.astype(nx.float32))])
-            all_network_params.extend([("embedding",self.embedding.lookup_table, total_embedding_gradient)])
+            all_network_params.extend([("embedding",self.embedding.lookup_table.astype(nx.float32), total_embedding_gradient)])
             
             optimized = optimizer.step_many(all_network_params,dataloader.train_contexts, batch_size, total_epoch)
             for i,block in enumerate(self.blocks):
@@ -301,7 +310,7 @@ class Transformer:
                 block.attention.Wo = optimized[f"Wo_{i}"].astype(self.dtype)
                 block.ff.Wcombined = optimized[f"ff_wcombined_{i}"].astype(self.dtype)
                 block.ff.Wout = optimized[f"ff_wout_{i}"].astype(self.dtype)
-                block.ff.router = optimized[f"ff_router_{i}"].astype(self.dtype)
+                block.ff.router = optimized[f"ff_router_{i}"]
                 block.rmsnorm1.gamma = optimized[f"rmsnorm1_gamma_{i}"]
                 block.rmsnorm2.gamma = optimized[f"rmsnorm2_gamma_{i}"]
             self.embedding.lookup_table = optimized["embedding"].astype(self.dtype)
@@ -339,7 +348,7 @@ class Transformer:
                 total_histograms[i] /= batch_idx
         return nx.float_32(final_loss), loss_times, backward_times, network_optimizer_times, total_histograms
     
-    def validate(self, dataloader:DataLoader, batch_size, train_split=.9):
+    def validate(self, dataloader:DataLoader, batch_size:int, train_split=.9):
         total_loss = nx.float_32(0.0)
         count = 0
         dataloader.train_split = train_split
@@ -356,40 +365,34 @@ class Transformer:
         final_loss = total_loss / count
         return nx.float_32(final_loss)
 
-    def to_dict(self) -> dict:
+    def to_dict(self) -> dict[str, Any]:
         """
         get dictionary
         """
-        a = {"transformer_configs":{}}
-        transformer = a["transformer_configs"]
-        transformer["vocab_size"] = self.vocab_size
-        transformer["embed_dim"] = self.embed_dim
-        transformer["dtype"] = self.dtype
-        transformer["embedding"] = self.embedding.to_dict()
+        a:dict[str,Any] = {"transformer_configs":{}}
+        transformer_configs = a["transformer_configs"]
+        transformer_configs["vocab_size"] = self.vocab_size
+        transformer_configs["embed_dim"] = self.embed_dim
+        transformer_configs["dtype"] = nx.dtype_to_srt[self.dtype]
+        a["embedding"] = self.embedding.to_dict()
         blocks = []
         for block in self.blocks:
             blocks.append(block.to_dict())
-        transformer["blocks"] = blocks
+        a["blocks"] = blocks
         return a
     
     @classmethod
-    def from_dict(cls,thing:dict) -> "Transformer":
+    def from_dict(cls,thing:dict[str, Any]) -> "Transformer":
         configs = thing["transformer_configs"]
-        vocab_size = configs["vocab_size"]
-        embed_dim = configs["embed_dim"]
-        dtype = configs["dtype"]
-        raw_blocks = configs["blocks"]
+        configs["dtype"] = nx.str_to_dtype[configs["dtype"]]
+        raw_blocks = thing["blocks"]
         blocks = []
         for block in raw_blocks:
             a = TransformerBlock.from_dict(block)
             blocks.append(a)
-        
-        configs ={
-            "vocab_size":vocab_size,
-            "embed_dim":embed_dim,
-            "dtype":dtype
-        }
+    
         transformer = cls(configs, blocks=blocks)
+        transformer.embedding = Embedding.from_dict(thing["embedding"])
         
         return transformer
        

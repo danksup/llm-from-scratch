@@ -57,7 +57,8 @@ logs:
 - broadcast instead of repeat in attention
 - moe noise
 - moe router z loss
-- inference optimization
+- inference optimization 
+- inference quantization
 - conversation memory
 - more optimization
   

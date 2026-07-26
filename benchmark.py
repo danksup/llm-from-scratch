@@ -48,8 +48,8 @@ session_configs = {
 model_configs = {
     "n_blocks":4,
     "embed_dim":EMBED_DIM,
-    "dtype": nx.float32,
-    "block_configs":{"ff_hidden_width": BASE_WIDTH,"ff_n_experts":N_EXPERTS,"ff_topk":TOP_K,"ff_cf":CF,"attn_n_heads":N_HEADS,"attn_n_kv_heads":N_KV_HEADS,"attn_windows":CONTEXT_SIZE//2},
+    "dtype": nx.float16,
+    "block_configs":{"ff_hidden_width": BASE_WIDTH,"ff_n_experts":N_EXPERTS,"ff_topk":TOP_K,"ff_cf":CF,"attn_n_heads":N_HEADS,"attn_n_kv_heads":N_KV_HEADS,"attn_windows":WINDOWS},
     "block_overrides":{
         1:{}, 2:{}
     }

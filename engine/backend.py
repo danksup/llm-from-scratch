@@ -37,7 +37,7 @@ int32 = _nx.int32
 int16 = _nx.int16
 int8 = _nx.int8
 bool_ = _nx.bool_
-bf16 = _nx.bfloat16 if backend == "MLX" else _nx.float32
+bfloat16 = _nx.bfloat16 if backend == "MLX" else _nx.float32
 
 dtype_to_srt = {
     float16: "float16",
@@ -45,7 +45,7 @@ dtype_to_srt = {
     int64: "int64",
     int32: "int32",
     bool_: "bool",
-    bf16: "bf16",
+    bfloat16: "bf16",
 }
 
 str_to_dtype = {
@@ -54,7 +54,7 @@ str_to_dtype = {
     "int64":int64,
     "int32":int32,
     "bool":bool_,
-    "bf16":bf16,
+    "bf16":bfloat16,
 }
     
 def array(x:Any, dtype=None) -> ArrayLike:

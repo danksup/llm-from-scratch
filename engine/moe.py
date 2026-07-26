@@ -193,7 +193,7 @@ class MoE:
         return {
             "moe_configs":(self.cf, self.top_k, self.n_experts, self.hidden_width,self.embed_dim, nx.dtype_to_srt[self.dtype]),
             "router": self.router.tolist(),
-            "Wcombine":self.Wcombined.tolist(),
+            "Wcombined":self.Wcombined.tolist(),
             "Wout":self.Wout.tolist(),
         }
     
@@ -202,7 +202,7 @@ class MoE:
         capacity_factor, top_k, n_experts, hidden_width, embed_dim, dtype = thing["moe_configs"]
         dtype = nx.str_to_dtype[dtype]
         moe = cls(capacity_factor, top_k, n_experts, embed_dim, hidden_width, dtype)
-        moe.Wcombined = nx.array(thing["Wcombine"], dtype=moe.dtype)
+        moe.Wcombined = nx.array(thing["Wcombined"], dtype=moe.dtype)
         moe.Wout = nx.array(thing["Wout"], dtype=moe.dtype)
-        moe.router = nx.array(thing["router"], dtype=moe.dtype)
+        moe.router = nx.array(thing["router"], dtype=nx.float32)
         return moe

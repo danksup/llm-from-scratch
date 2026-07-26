@@ -8,6 +8,7 @@ from typing import Any
 import time
 LAMBDA = 1e-2
 import gc
+GRADIENT_SCALE = 4096
 
 default_block_configs = {
     "ff_hidden_width": 1024,
@@ -130,7 +131,8 @@ class Transformer:
             _,T,_ = current_grad.shape
             caches_attn, caches_ff, caches_rmsnorm1, caches_rmsnorm2 = caches
             mask1, mask2 = masks
-            moe_configs = block.ff.cf, block.ff.n_experts, block.ff.hidden_width, block.ff.router, LAMBDA
+            scaled_lambda = LAMBDA * GRADIENT_SCALE
+            moe_configs = block.ff.cf, block.ff.n_experts, block.ff.hidden_width, block.ff.router, scaled_lambda
             W = block.W
             W = min(W, T-1)
             P = nx.array(0.1, dtype=self.dtype)
@@ -140,15 +142,15 @@ class Transformer:
                                                                 caches_attn=caches_attn, caches_ff=caches_ff, caches_rmsnorm1=caches_rmsnorm1, caches_rmsnorm2=caches_rmsnorm2, 
                                                                 attn_params=attn_params, gamma1=block.rmsnorm1.gamma, gamma2=block.rmsnorm2.gamma, ff_params=ff_params, moe_configs=moe_configs)
             
-            block.ff.dWout = dWout
-            block.ff.dWcombined = dWcombined
-            block.ff.d_router = d_router
+            block.ff.dWout = dWout 
+            block.ff.dWcombined = dWcombined 
+            block.ff.d_router = d_router 
             
-            block.attention.dWqkv=dWqkv
-            block.attention.dWo = dWo
+            block.attention.dWqkv=dWqkv 
+            block.attention.dWo = dWo 
 
-            block.rmsnorm1.d_gamma = d_gamma1
-            block.rmsnorm2.d_gamma = d_gamma2
+            block.rmsnorm1.d_gamma = d_gamma1 
+            block.rmsnorm2.d_gamma = d_gamma2 
             current_grad = dx
         
         return current_grad
@@ -182,13 +184,16 @@ class Transformer:
 
             batch_gradient = cross_entropy_gradient(batch_scores, next_tokens)
             batch_gradient /= (batch_gradient.shape[0] * batch_gradient.shape[1])
+            scaled_batch_gradient = batch_gradient * GRADIENT_SCALE
 
-            batch_gradient = batch_gradient.astype(self.dtype)
+            batch_gradient = scaled_batch_gradient.astype(self.dtype)
             block_gradient =  batch_gradient @ self.embedding.lookup_table #dtype
             
             d_table = batch_gradient.reshape(-1, self.vocab_size).T @ last_output.reshape(-1, self.embed_dim) 
+            d_table = d_table.astype(nx.float32) / GRADIENT_SCALE
             
             current_grad = self.backward(block_gradient, self.embedding.lookup_table, last_output, all_masks, all_caches)
+            current_grad = current_grad.astype(nx.float32) / GRADIENT_SCALE
 
             if not nx.isfinite(current_grad).all().item():
                 backward_max = max(current_grad)
@@ -203,16 +208,22 @@ class Transformer:
             total_embedding_gradient = embedding_gradient + d_table
 
             all_network_params = []
-            
             for i,block in enumerate(self.blocks):
+                block.attention.dWqkv = block.attention.dWqkv.astype(nx.float32) / GRADIENT_SCALE
+                block.attention.dWo = block.attention.dWo.astype(nx.float32) / GRADIENT_SCALE
+                block.ff.dWcombined = block.ff.dWcombined.astype(nx.float32) / GRADIENT_SCALE
+                block.ff.dWout = block.ff.dWout.astype(nx.float32) / GRADIENT_SCALE
+                block.ff.d_router = block.ff.d_router.astype(nx.float32) / GRADIENT_SCALE
+                block.rmsnorm1.d_gamma = block.rmsnorm1.d_gamma.astype(nx.float32) / GRADIENT_SCALE
+                block.rmsnorm2.d_gamma = block.rmsnorm2.d_gamma.astype(nx.float32) / GRADIENT_SCALE
                 all_network_params.extend(
-                    [(f"Wqkv_{i}", block.attention.Wqkv.astype(nx.float32), block.attention.dWqkv.astype(nx.float32)),
-                    (f"Wo_{i}", block.attention.Wo.astype(nx.float32), block.attention.dWo.astype(nx.float32)),
-                    (f"ff_wcombined_{i}", block.ff.Wcombined.astype(nx.float32), block.ff.dWcombined.astype(nx.float32)),
-                    (f"ff_wout_{i}", block.ff.Wout.astype(nx.float32), block.ff.dWout.astype(nx.float32)),
-                    (f"ff_router_{i}", block.ff.router.astype(nx.float32), block.ff.d_router.astype(nx.float32)),
-                    (f"rmsnorm1_gamma_{i}", block.rmsnorm1.gamma.astype(nx.float32), block.rmsnorm1.d_gamma.astype(nx.float32)),
-                    (f"rmsnorm2_gamma_{i}", block.rmsnorm2.gamma.astype(nx.float32), block.rmsnorm2.d_gamma.astype(nx.float32))])
+                    [(f"Wqkv_{i}", block.attention.Wqkv.astype(nx.float32), block.attention.dWqkv),
+                    (f"Wo_{i}", block.attention.Wo.astype(nx.float32), block.attention.dWo),
+                    (f"ff_wcombined_{i}", block.ff.Wcombined.astype(nx.float32), block.ff.dWcombined),
+                    (f"ff_wout_{i}", block.ff.Wout.astype(nx.float32), block.ff.dWout),
+                    (f"ff_router_{i}", block.ff.router.astype(nx.float32), block.ff.d_router),
+                    (f"rmsnorm1_gamma_{i}", block.rmsnorm1.gamma.astype(nx.float32), block.rmsnorm1.d_gamma),
+                    (f"rmsnorm2_gamma_{i}", block.rmsnorm2.gamma.astype(nx.float32), block.rmsnorm2.d_gamma)])
             all_network_params.extend([("embedding",self.embedding.lookup_table.astype(nx.float32), total_embedding_gradient)])
             
             optimized = optimizer.step_many(all_network_params,dataloader.train_contexts, batch_size, total_epoch)
@@ -251,14 +262,21 @@ class Transformer:
         backward_times = []
         network_optimizer_times = []
         total_histograms = None
+        weighted_router_loss = nx.float_32(0.0)
         for contexts, next_tokens in dataloader.get_pairs(batch_size):  
             if batch_idx == pass_:
                 break            
             embedded = self.embedding.forward(contexts)  # shape (batch, context_size, embed_dim)
+            start = time.perf_counter()
             batch_scores, last_output, all_masks, all_caches, total_router_loss, histograms = self.forward(embedded)
             loss = cross_entropy(batch_scores, next_tokens) 
-            loss = nx.mean(loss) + LAMBDA * total_router_loss
+            nx.eval(loss)
+            end = time.perf_counter()
+            loss_times.append(end-start)
 
+            histogram_loss = LAMBDA * total_router_loss
+            loss = nx.mean(loss) + histogram_loss
+            weighted_router_loss += histogram_loss
             if not nx.isfinite(loss):
                 raise FloatingPointError("nan/inf")
 
@@ -267,22 +285,22 @@ class Transformer:
             else:
                 for i in range(len(self.blocks)):
                     total_histograms[i] += histograms[i]
-
-            start = time.perf_counter()
-            nx.eval(loss)
-            end = time.perf_counter()
-            loss_times.append(end-start)
-
+           
             batch_gradient = cross_entropy_gradient(batch_scores, next_tokens)
             batch_gradient /= (batch_gradient.shape[0] * batch_gradient.shape[1])
+            scaled_batch_gradient = batch_gradient * GRADIENT_SCALE
 
-            batch_gradient = batch_gradient.astype(self.dtype)
+            batch_gradient = scaled_batch_gradient.astype(self.dtype) #cast
             block_gradient =  batch_gradient @ self.embedding.lookup_table #dtype
 
-            d_table = batch_gradient.reshape(-1, self.vocab_size).T @ last_output.reshape(-1, self.embed_dim)
-            current_grad = self.backward(block_gradient, self.embedding.lookup_table, last_output, all_masks, all_caches)
+            d_table = batch_gradient.reshape(-1, self.vocab_size).T @ last_output.reshape(-1, self.embed_dim) #dtype
+            
+            d_table = d_table.astype(nx.float32) / GRADIENT_SCALE
 
             start = time.perf_counter()
+            current_grad = self.backward(block_gradient, self.embedding.lookup_table, last_output, all_masks, all_caches)
+            current_grad = current_grad.astype(nx.float32) / GRADIENT_SCALE
+
             nx.eval(current_grad)
             end = time.perf_counter()
             backward_times.append(end-start)
@@ -294,16 +312,24 @@ class Transformer:
 
             all_network_params = []
             for i,block in enumerate(self.blocks):
+                block.attention.dWqkv = block.attention.dWqkv.astype(nx.float32) / GRADIENT_SCALE
+                block.attention.dWo = block.attention.dWo.astype(nx.float32) / GRADIENT_SCALE
+                block.ff.dWcombined = block.ff.dWcombined.astype(nx.float32) / GRADIENT_SCALE
+                block.ff.dWout = block.ff.dWout.astype(nx.float32) / GRADIENT_SCALE
+                block.ff.d_router = block.ff.d_router.astype(nx.float32) / GRADIENT_SCALE
+                block.rmsnorm1.d_gamma = block.rmsnorm1.d_gamma.astype(nx.float32) / GRADIENT_SCALE
+                block.rmsnorm2.d_gamma = block.rmsnorm2.d_gamma.astype(nx.float32) / GRADIENT_SCALE
                 all_network_params.extend(
-                    [(f"Wqkv_{i}", block.attention.Wqkv.astype(nx.float32), block.attention.dWqkv.astype(nx.float32)),
-                    (f"Wo_{i}", block.attention.Wo.astype(nx.float32), block.attention.dWo.astype(nx.float32)),
-                    (f"ff_wcombined_{i}", block.ff.Wcombined.astype(nx.float32), block.ff.dWcombined.astype(nx.float32)),
-                    (f"ff_wout_{i}", block.ff.Wout.astype(nx.float32), block.ff.dWout.astype(nx.float32)),
-                    (f"ff_router_{i}", block.ff.router.astype(nx.float32), block.ff.d_router.astype(nx.float32)),
-                    (f"rmsnorm1_gamma_{i}", block.rmsnorm1.gamma.astype(nx.float32), block.rmsnorm1.d_gamma.astype(nx.float32)),
-                    (f"rmsnorm2_gamma_{i}", block.rmsnorm2.gamma.astype(nx.float32), block.rmsnorm2.d_gamma.astype(nx.float32))])
+                    [(f"Wqkv_{i}", block.attention.Wqkv.astype(nx.float32), block.attention.dWqkv),
+                    (f"Wo_{i}", block.attention.Wo.astype(nx.float32), block.attention.dWo),
+                    (f"ff_wcombined_{i}", block.ff.Wcombined.astype(nx.float32), block.ff.dWcombined),
+                    (f"ff_wout_{i}", block.ff.Wout.astype(nx.float32), block.ff.dWout),
+                    (f"ff_router_{i}", block.ff.router.astype(nx.float32), block.ff.d_router),
+                    (f"rmsnorm1_gamma_{i}", block.rmsnorm1.gamma.astype(nx.float32), block.rmsnorm1.d_gamma),
+                    (f"rmsnorm2_gamma_{i}", block.rmsnorm2.gamma.astype(nx.float32), block.rmsnorm2.d_gamma)])
             all_network_params.extend([("embedding",self.embedding.lookup_table.astype(nx.float32), total_embedding_gradient)])
             
+            start = time.perf_counter()
             optimized = optimizer.step_many(all_network_params,dataloader.train_contexts, batch_size, total_epoch)
             for i,block in enumerate(self.blocks):
                 block.attention.Wqkv = optimized[f"Wqkv_{i}"].astype(self.dtype)
@@ -326,7 +352,6 @@ class Transformer:
                 to_eval.append(block.rmsnorm2.gamma)
             to_eval.append(self.embedding.lookup_table)
 
-            start = time.perf_counter()
             nx.eval(*to_eval)
             end = time.perf_counter()
             network_optimizer_times.append(end-start)
@@ -335,18 +360,15 @@ class Transformer:
             count += next_tokens.size
             batch_idx += 1
 
-            # print("active mem gb", nx.get_active_memory() / 1_000_000_000)
-            # print("cache mem gb",nx.get_cache_memory() / 1_000_000_000)
             del (embedded,batch_scores,last_output,all_masks,all_caches,total_router_loss,loss,batch_gradient,block_gradient,d_table,current_grad,
                     embedding_gradient,total_embedding_gradient,all_network_params,optimized,)
-            # print("after del active mem gb", nx.get_active_memory() / 1_000_000_000)
-            # print("after del cache mem gb",nx.get_cache_memory() / 1_000_000_000)
             
         final_loss = total_loss / count
         if total_histograms != None:
             for i in range(len(total_histograms)):
                 total_histograms[i] /= batch_idx
-        return nx.float_32(final_loss), loss_times, backward_times, network_optimizer_times, total_histograms
+        weighted_router_loss /= batch_idx
+        return nx.float_32(final_loss), loss_times, backward_times, network_optimizer_times, total_histograms, weighted_router_loss
     
     def validate(self, dataloader:DataLoader, batch_size:int, train_split=.9):
         total_loss = nx.float_32(0.0)

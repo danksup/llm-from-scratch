@@ -33,14 +33,14 @@ class AdamW:
         self.lr = self.min_lr + 0.5 * (self.max_lr - self.min_lr) * (1 + nx.cos(nx.pi * progress))
 
         self.state["t"] += 1
-    
+
         group = {}
         for name,param,gradient in name_param_gradient:
             shape = param.shape
             if shape not in group:
                 group[shape] = []
             group[shape].append((name,param,gradient))
-
+        
         optimized = {}
         for shape, thing in group.items():
             names = [i[0] for i in thing]
@@ -48,17 +48,23 @@ class AdamW:
             gradients = nx.stack([i[2] for i in thing])
             if shape not in self.state:
                 self.state[shape] = {
+                    "names": names.copy() ,
+                    "master": nx.copy(params),
                     "m": nx.zeros_like(params, nx.float32),
                     "v": nx.zeros_like(params,  nx.float32),
-                    # "t": nx.float_32(.0)
-
                 }
+            else:
+                params = self.state[shape]["master"]
+                assert self.state[shape]["names"] == names
             state_shape = self.state[shape]    
             m_v_t = (state_shape["m"], state_shape["v"], self.state["t"])
-            new_params, m,v,t = self.__step(m_v_t,params,gradients,self.lr,  self.epsilon, self.beta1, self.beta2, self.weight_decay)
-            self.state[shape] = {"m":m, "v":v}
+            new_params, m,v,_ = self.__step(m_v_t,params,gradients,self.lr,  self.epsilon, self.beta1, self.beta2, self.weight_decay)
+            self.state[shape] = {"master":new_params,"m":m, "v":v}
+            name_list = []
             for idx, name in enumerate(names):
                 optimized[name] = new_params[idx]
+                name_list.append(name)
+            self.state[shape]["names"] = name_list
         return optimized
     
     @nx.compile
@@ -81,6 +87,8 @@ class AdamW:
         for key, value in self.state.items():
             shape_copy = {}
             if key != "t":
+                shape_copy["names"] = value["names"]
+                shape_copy["master"] = value["master"].tolist()
                 shape_copy["m"] = value["m"].tolist()
                 shape_copy["v"] = value["v"].tolist()
                 state_copy[key] = shape_copy
@@ -93,6 +101,8 @@ class AdamW:
         for key, value in thing.items():
             shape_copy = {}
             if key != "t":
+                shape_copy["names"] = value["names"]
+                shape_copy["master"] = nx.array(value["master"], dtype=nx.float32)
                 shape_copy["m"] = nx.array(value["m"], dtype=nx.float32)
                 shape_copy["v"] = nx.array(value["v"], dtype=nx.float32)
                 adam.state[key] = shape_copy

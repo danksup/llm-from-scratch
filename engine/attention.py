@@ -265,8 +265,8 @@ class AttentionLayer:
         dtype = nx.str_to_dtype[thing["dtype"]]
 
         attention = cls(embed_dim,n_heads, n_kv_heads, W, dtype)
-        attention.Wqkv = nx.array(Wqkv, dtype=nx.float16)
-        attention.Wo = nx.array(Wo, dtype=nx.float16)
+        attention.Wqkv = nx.array(Wqkv, dtype=dtype)
+        attention.Wo = nx.array(Wo, dtype=dtype)
 
         return attention
         

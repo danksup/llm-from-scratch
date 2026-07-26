@@ -4,7 +4,7 @@ PATH = "artifacts/sessions/session_38974464_params_20_epochs.ram2n"
 
 session = Session.load(PATH)
 tokenizer = session.tokenizer
-embedding = session.embedding
+embedding = session.transformer.embedding
 
 # all_4_or_more = []
 # for i in tokenizer.vocab:

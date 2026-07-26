@@ -1,4 +1,4 @@
-from engine.backend import nx
+import engine.backend as nx
 from typing import Any
 
 def PE(context_size:int, embed_dim:int) -> Any:

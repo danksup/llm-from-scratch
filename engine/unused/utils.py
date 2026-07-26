@@ -1,4 +1,4 @@
-from engine.backend import nx
+import engine.backend as nx
 
 def dot(u,v) -> float:
     """

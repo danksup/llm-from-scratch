@@ -87,13 +87,16 @@ class Session:
         print(t_mess)     
         for i in range(epoch):
             start_per = time.perf_counter()
-            bench_loss, loss_times, backward_times, network_optimizer_times, total_histograms = self.transformer.benchmark(dataloader, self.optimizer, batch_size=self.configs["batch_size"], pass_=_pass)
+            bench_loss, loss_times, backward_times, network_optimizer_times, total_histograms, histogram_loss = self.transformer.benchmark(dataloader, self.optimizer, batch_size=self.configs["batch_size"], pass_=_pass)
             end_per = time.perf_counter()
             print("loss ",bench_loss)
+            print("weighted router loss ",histogram_loss)
             print(f"loss time mean: {np.mean(loss_times)} | max times: {np.max(loss_times)} | min times: {np.min(loss_times)}")
             print(f"backward time mean: {np.mean(backward_times)} | max times: {np.max(backward_times)} | min times: {np.min(backward_times)}")
             print(f"netowk optimizer time mean: {np.mean(network_optimizer_times)} | max times: {np.max(network_optimizer_times)} | min times: {np.min(network_optimizer_times)}")
             print(f"benchmarking {i}. time: {end_per - start_per:.3f}s")
+            print("active mem gb", nx.get_active_memory() / 1_000_000_000)
+            print("cache mem gb",nx.get_cache_memory() / 1_000_000_000)
 
             if total_histograms:
                 for idx, histogram in enumerate(total_histograms):

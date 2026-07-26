@@ -2,13 +2,13 @@ import os
 backend = os.environ["BACKEND"] = "auto"
 import random
 EPOCHS = 1
-EMBED_DIM = 64
-CONTEXT_SIZE = 64
+EMBED_DIM = 128
+CONTEXT_SIZE = 128
 BATCH_SIZE = 128
 BASE_WIDTH = 1024#4 * EMBED_DIM 
-N_HEADS = EMBED_DIM // 16
-N_KV_HEADS = N_HEADS // 4
-WINDOWS = CONTEXT_SIZE // 4
+N_HEADS = EMBED_DIM // 8
+N_KV_HEADS = N_HEADS // 2
+WINDOWS = CONTEXT_SIZE // 8
 N_EXPERTS = 24
 CF = 1.25
 VAL = .9
@@ -35,14 +35,14 @@ import engine.backend as nx
 from helper.singleton import init_corpus
 
 session_configs = {
-    "epochs":1,
+    "epochs":4,
     "context_size": CONTEXT_SIZE,
     "batch_size": BATCH_SIZE,
     "optimizer":"adamw",
     "train_split":.9,
     "train_split":VAL,
     "optimizer_args":{
-        "min_lr":1e-6,
+        "min_lr":1e-5,
         "max_lr":1e-3,
         "beta":0.9,
         "beta2":0.999,
@@ -56,9 +56,9 @@ model_configs = {
     "n_blocks":4,
     "embed_dim":EMBED_DIM,
     "dtype": nx.float16,
-    "block_configs":{"ff_hidden_width": BASE_WIDTH,"ff_n_experts":N_EXPERTS,"ff_topk":TOP_K,"ff_cf":CF,"attn_n_heads":N_HEADS,"attn_n_kv_heads":N_KV_HEADS,"attn_windows":CONTEXT_SIZE//2},
+    "block_configs":{"ff_hidden_width": BASE_WIDTH,"ff_n_experts":N_EXPERTS,"ff_topk":TOP_K,"ff_cf":CF,"attn_n_heads":N_HEADS,"attn_n_kv_heads":N_KV_HEADS,"attn_windows":WINDOWS},
     "block_overrides":{
-        0:{}, 2:{}
+        0:{}
     }
 }
 

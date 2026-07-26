@@ -90,26 +90,35 @@ z = np.lib.stride_tricks.as_strided(b, shape=shape, strides= np_stride)
 d = mx.random.uniform(-0.1, 0.1, (4096,4096), dtype=mx.float32)
 i = np.float16
 
-import time
+# import time
 
-a = time.perf_counter()
-mx.eval(d)
-b = time.perf_counter()
-print(b-a)
+# a = time.perf_counter()
+# mx.eval(d)
+# b = time.perf_counter()
+# print(b-a)
 
-a = time.perf_counter()
-d = d.astype(mx.float32)
-mx.eval(d)
-b = time.perf_counter()
-print(b-a)
+# a = time.perf_counter()
+# d = d.astype(mx.float32)
+# mx.eval(d)
+# b = time.perf_counter()
+# print(b-a)
 
-a = time.perf_counter()
-d = d.astype(mx.float16)
-mx.eval(d)
-b = time.perf_counter()
-print(b-a)
+# a = time.perf_counter()
+# d = d.astype(mx.float16)
+# mx.eval(d)
+# b = time.perf_counter()
+# print(b-a)
 
 
 
+
+a = {
+    "b": {
+        "d":3
+    }
+}
+
+for key,val in a.items():
+    print(a["b"])
 
 

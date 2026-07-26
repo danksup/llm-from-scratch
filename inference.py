@@ -4,7 +4,7 @@ session = Session.load("artifacts/sessions/session_19446272_params_1_epochs.ram2
 session.configs["epochs"] = 20
 tokenizer = session.tokenizer
 context_size = session.configs["context_size"]
-context = "Great Britain established?"
+context = "A"
 print(f"input: {context}")
 context = tokenizer.encode(context)
 context = context.reshape(-1, context.shape[0])

@@ -156,6 +156,10 @@ class AttentionLayer:
         
         return output_projected, cached_k, cached_v
     
+    @staticmethod
+    def compute_mask(T):        
+        return nx.triu(nx.ones((T, T), dtype=nx.bool_), k=1)
+    
     def to_dict(self) -> dict:
         return {
             "embed_dim":self.embed_dim,
@@ -180,4 +184,5 @@ class AttentionLayer:
         attention.Wo = nx.array(Wo, dtype=dtype)
 
         return attention
+    
         

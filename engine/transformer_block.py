@@ -1,5 +1,5 @@
 from engine.moe import MoE
-from engine.attention_swa import AttentionLayerSWA
+from engine.attention.attention_swa import AttentionLayerSWA
 from engine.rmsnorm import RMSNorm
 from engine.dropout import Dropout
 from engine.rope import precompute_freqs
@@ -30,8 +30,8 @@ class TransformerBlock:
         self.rmsnorm1 = RMSNorm(embed_dim)
         self.rmsnorm2 = RMSNorm(embed_dim)
 
-    @nx.compile
     @staticmethod
+    @nx.compile
     def _forward(x, causal_mask:Any, embed_dim:int, n_heads:int, n_kv_heads, n_rep, head_dim:int, W, n_experts, cf, top_k:int,freqs:Any, Wqkv:Any, Wo:Any, Wcombined:Any,router, hidden_width:int, Wout:Any, epsilon:float, gamma1:Any, gamma2:Any, p:float, is_training:bool) -> tuple[Any, Any, Any, Any, Any]:
         '''
         flow:
@@ -70,8 +70,8 @@ class TransformerBlock:
         caches = (caches_attn, caches_ff, caches_rmsnorm1, caches_rmsnorm2)
         return ff_out, masks, caches, router_loss, normalized_histogram
 
-    @nx.compile
     @staticmethod
+    @nx.compile
     def _backward(gradient:Any, mask1:Any, mask2:Any, p, caches_attn:tuple[Any,...], caches_ff:tuple[Any,...], caches_rmsnorm1:tuple[Any,...], caches_rmsnorm2:tuple[Any,...], attn_params:tuple[Any,...], gamma1:Any, gamma2:Any, ff_params:tuple, moe_configs) -> tuple[Any, Any, Any, Any, Any, Any, Any, Any]:
         d_ff_drop = Dropout._backward(gradient, mask2, 0.1) #grad dtype
         dx_ff,  dWcombined, dWout, d_router = MoE.backward(d_ff_drop, caches_ff, moe_configs, ff_params) #out:fp32

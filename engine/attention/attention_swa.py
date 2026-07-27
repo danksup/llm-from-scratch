@@ -240,6 +240,13 @@ class AttentionLayerSWA:
         
         return output_projected, cached_k, cached_v
     
+    @staticmethod
+    def compute_mask(W, T):
+        window_idx = nx.arange(W + 1).reshape((1, W + 1))
+        time_idx = nx.arange(T).reshape((T, 1))
+        padded_position = time_idx + window_idx
+        return padded_position < W
+    
     def to_dict(self) -> dict:
         '''serialize into dict with weights turned into list'''
         return {

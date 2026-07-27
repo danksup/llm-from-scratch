@@ -1,7 +1,7 @@
 import os
 backend = os.environ["BACKEND"] = "auto"
 import random
-EPOCHS = 10
+EPOCHS = 5
 EMBED_DIM = 128
 CONTEXT_SIZE = 256
 BATCH_SIZE = 128
@@ -13,7 +13,7 @@ CF = 1.25
 VAL = .9
 TOP_K = 1
 LOADER_STRIDE = CONTEXT_SIZE // 2
-WINDOWS = CONTEXT_SIZE // 8
+WINDOWS = CONTEXT_SIZE // 4
 
 #not hooked yet to session
 PATIENCE = 20
@@ -40,16 +40,17 @@ session_configs = {
     "context_size": CONTEXT_SIZE,
     "batch_size": BATCH_SIZE,
     "dataloader_strides":LOADER_STRIDE,
-    "optimizer":"adamw",
+    "optimizer":"sgd",
     "train_split":.9,
     "train_split":VAL,
     "optimizer_args":{
         "min_lr":1e-4,
         "max_lr":1e-2,
-        "beta":0.9,
-        "beta2":0.999,
-        "epsilon":1e-8,
-        "weight_decay":0.01
+        # "beta1":0.9,
+        # "beta2":0.999,
+        # "epsilon":1e-8,
+        # "weight_decay":0.01,
+        "use_master": False
     },
     "using":backend
 }

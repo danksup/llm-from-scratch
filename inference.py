@@ -9,7 +9,7 @@ print(f"input: {context}")
 context = tokenizer.encode(context)
 context = context.reshape(-1, context.shape[0])
 
-TEMPERATURE = 0.6
+TEMPERATURE = 0.55
 TOP_K = 20
 TOP_P = .8
 N = 200

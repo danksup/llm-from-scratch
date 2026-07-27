@@ -2,7 +2,9 @@ from engine.transformer import Transformer
 from engine.tokenizer import Tokenizer
 from engine.dataloader import DataLoader
 from engine.activations import softmax
-from engine.adamw import AdamW
+from engine.optimizer.adamw import AdamW
+from engine.optimizer.adam import Adam
+from engine.optimizer.sgd import SGD
 import engine.backend as nx
 from typing import Any,Union
 import time
@@ -11,26 +13,43 @@ import numpy as np
 import gc
 
 DEFAULT_CONFIGS = {
-            "epochs": 100,
-            "context_size": 64,
-            "batch_size": 32,
-            "optimizer":"adamw",
-            "optimizer_args":{
-                "min_lr":0.05,
-                "max_lr":0.05,
-                "beta":0.9,
-                "beta2":0.999,
-                "epsilon":1e-8,
-                "weight_decay":0.01
-            },
-            "train_split":.9,
-        }
+    "epochs": 100,
+    "context_size": 64,
+    "batch_size": 32,
+    "optimizer":"adamw",
+    "train_split":.9,
+}
 
 OPTIMIZERS = {
-    # "sgd": SGD,
+    "sgd": SGD,
     # "momentum": Momentum,
     "adamw": AdamW,
-    "adam": AdamW,
+    "adam": Adam,
+}
+
+DEFAULT_OPTIMIZER_ARGS = {
+    "sgd": {
+        "min_lr":0.05,
+        "max_lr":0.05,
+        "use_master":True
+        },
+    "adam": {
+        "min_lr":0.05,
+        "max_lr":0.05,
+        "beta1":0.9,
+        "beta2":0.999,
+        "epsilon":1e-8,
+        "use_master":True
+        },
+    "adamw":{
+        "min_lr":0.05,
+        "max_lr":0.05,
+        "beta1":0.9,
+        "beta2":0.999,
+        "epsilon":1e-8,
+        "weight_decay":0.01,
+        "use_master":True
+        },
 }
 
 class Session:
@@ -42,12 +61,12 @@ class Session:
             configs = {}
 
         self.configs = DEFAULT_CONFIGS | configs
-        self.configs["optimizer_args"] = DEFAULT_CONFIGS["optimizer_args"] | configs.get("optimizer_args", {})
+        self.configs["optimizer_args"] = DEFAULT_OPTIMIZER_ARGS[self.configs["optimizer"]] | configs.get("optimizer_args", {})
 
         if isinstance(init_optimizer, bool) and init_optimizer: 
             optimizer_class = OPTIMIZERS[self.configs["optimizer"]]
             self.optimizer = optimizer_class(**self.configs["optimizer_args"])
-        elif isinstance(init_optimizer, AdamW):
+        elif isinstance(init_optimizer, (AdamW, Adam, SGD)):
             self.optimizer = init_optimizer
 
     @classmethod
@@ -126,6 +145,7 @@ class Session:
             for i in range(self.configs["epochs"]):
                 epoch = i
                 start = time.perf_counter()
+                assert self.optimizer, "optimizer doesnt exist"
                 error, total_histograms, batch_count = self.transformer.train(dataloader, self.optimizer, self.configs["epochs"], batch_size=self.configs["batch_size"])
                 val_loss = self.validation(dataloader)
                 end = time.perf_counter()   

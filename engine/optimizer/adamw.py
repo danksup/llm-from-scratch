@@ -2,7 +2,7 @@ import engine.backend as nx
 from typing import Any
 
 class AdamW:
-    def __init__(self,min_lr=1e-4, max_lr=1e-3, beta:float=0.9, beta2:float=0.999, epsilon:float=1e-8, weight_decay=0.01) -> None:
+    def __init__(self,min_lr=1e-4, max_lr=1e-3, beta1:float=0.9, beta2:float=0.999, epsilon:float=1e-8, weight_decay=0.01, use_master:bool=True) -> None:
         """
         m: first moment 
             m = β_{1} * m + (1 - β_{1}) * gradient    \n
@@ -20,10 +20,11 @@ class AdamW:
         self.lr = nx.float_32(min_lr)
         self.min_lr = min_lr
         self.max_lr = max_lr
-        self.beta1 = nx.float_32(beta)
+        self.beta1 = nx.float_32(beta1)
         self.beta2 = nx.float_32(beta2)
         self.epsilon = nx.float_32(epsilon)
         self.weight_decay = nx.float_32(weight_decay)
+        self.use_master = use_master
     
     def step_many(self, name_param_gradient:list[Any], train_contexts, batch_size, total_epoch) -> dict[Any,Any]:
         #cosine decay: lr = min_lr + 0.5 * (max_lr - min_lr) * (1 + cos(pi * current_step / total_steps))
@@ -49,17 +50,22 @@ class AdamW:
             if shape not in self.state:
                 self.state[shape] = {
                     "names": names.copy() ,
-                    "master": nx.copy(params),
                     "m": nx.zeros_like(params, nx.float32),
                     "v": nx.zeros_like(params,  nx.float32),
                 }
+                if self.use_master:
+                    self.state[shape]["master"] = nx.copy(params),
             else:
-                params = self.state[shape]["master"]
-                assert self.state[shape]["names"] == names
+                if self.use_master:
+                    params = self.state[shape]["master"]
+                    assert self.state[shape]["names"] == names
             state_shape = self.state[shape]    
             m_v_t = (state_shape["m"], state_shape["v"], self.state["t"])
             new_params, m,v,_ = self.__step(m_v_t,params,gradients,self.lr,  self.epsilon, self.beta1, self.beta2, self.weight_decay)
-            self.state[shape] = {"master":new_params,"m":m, "v":v}
+            self.state[shape] = {"m":m, "v":v}
+            if self.use_master:
+                self.state[shape]["master"] = new_params
+
             name_list = []
             for idx, name in enumerate(names):
                 optimized[name] = new_params[idx]
@@ -67,8 +73,8 @@ class AdamW:
             self.state[shape]["names"] = name_list
         return optimized
     
-    @nx.compile
     @staticmethod
+    @nx.compile
     def __step(m_v_t, params:Any, grads:Any, lr:Any, epsilon:float, beta1:float, beta2:float, weight_decay:float) -> tuple[Any,...]: 
         m,v,t = m_v_t       
         norm = nx.sqrt(nx.sum(grads**2, axis=tuple(range(1, grads.ndim)), keepdims=True, dtype=nx.float32), dtype=nx.float32)
@@ -82,29 +88,50 @@ class AdamW:
         return params, m, v, t
     
     def to_dict(self) -> dict[Any, Any]:
-        state_copy = {}
-        state_copy["t"] = self.state["t"].item()
+        adamw = {}
+        adamw["t"] = self.state["t"].item()
         for key, value in self.state.items():
             shape_copy = {}
             if key != "t":
                 shape_copy["names"] = value["names"]
-                shape_copy["master"] = value["master"].tolist()
+                if self.use_master:
+                    shape_copy["master"] = value["master"].tolist()
                 shape_copy["m"] = value["m"].tolist()
                 shape_copy["v"] = value["v"].tolist()
-                state_copy[key] = shape_copy
-        return state_copy
+                adamw[key] = shape_copy
+
+        adamw_configs = {
+            "min_lr": self.min_lr,
+            "max_lr": self.max_lr,
+            "beta1": self.beta1,
+            "beta2": self.beta2,
+            "epsilon": self.epsilon,
+            "weight_decay":self.weight_decay,
+            "use_master":self.use_master
+        }
+        adamw["adamw_configs"] = adamw_configs
+        return adamw
 
     @classmethod
     def from_dict(cls, thing:dict[Any, Any]) -> "AdamW":
-        adam = cls()
-        adam.state["t"] = nx.array(thing["t"], dtype=nx.int32)
+        configs = thing["adamw_configs"]
+        min_lr = configs["min_lr"]
+        max_lr = configs["max_lr"]
+        beta1 = configs["beta1"]
+        beta2 = configs["beta2"]
+        epsilon = configs["epsilon"]
+        weight_decay = configs["weight_decay"]
+        use_master = configs["use_master"]
+        adamw = cls(min_lr, max_lr, beta1, beta2, epsilon, weight_decay, use_master)
+        adamw.state["t"] = nx.array(thing["t"], dtype=nx.int32)
         for key, value in thing.items():
             shape_copy = {}
-            if key != "t":
+            if key != "t" and key != "adamw_configs":
                 shape_copy["names"] = value["names"]
-                shape_copy["master"] = nx.array(value["master"], dtype=nx.float32)
+                if adamw.use_master:
+                    shape_copy["master"] = nx.array(value["master"], dtype=nx.float32)
                 shape_copy["m"] = nx.array(value["m"], dtype=nx.float32)
                 shape_copy["v"] = nx.array(value["v"], dtype=nx.float32)
-                adam.state[key] = shape_copy
-        return adam
+                adamw.state[key] = shape_copy
+        return adamw
 

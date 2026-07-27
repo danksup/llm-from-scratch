@@ -1,7 +1,7 @@
 from engine.losses import cross_entropy_gradient, cross_entropy
 from engine.embedding import Embedding
 from engine.dataloader import DataLoader
-from engine.adamw import  AdamW
+from engine.optimizer.adamw import  AdamW
 from engine.transformer_block import TransformerBlock
 import engine.backend as nx
 from typing import Any
@@ -95,12 +95,9 @@ class Transformer:
             W = block.W
             W = min(W, T-1)
             P = nx.array(0.1, dtype=self.dtype)
-            if block.causal_mask is None or block.causal_mask.shape != (T, ):
-                block.causal_mask = nx.triu(nx.ones((T, T), dtype=nx.bool_), k=1)
-                window_idx = nx.arange(W + 1).reshape((1, W + 1))
-                time_idx = nx.arange(T).reshape((T, 1))
-                padded_position = time_idx + window_idx
-                block.causal_mask = padded_position < W
+            if block.causal_mask is None or block.causal_mask.shape != (T, W + 1):
+                causal_mask = block.attention.compute_mask(W, T)
+                block.causal_mask = causal_mask
             ff_out ,masks, caches, router_loss, normalized_histogram = block._forward(output, block.causal_mask, self.embed_dim, block.n_heads, block.n_kv_heads, block.n_rep, block.head_dim, W, block.n_experts, block.cf, block.ff.top_k,
                                                    block.freqs, Wqkv, Wo, Wcombined, router, block.hidden_width, Wout, epsilon, gamma1, gamma2, P, is_training)
 

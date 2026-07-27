@@ -39,6 +39,8 @@ ba =[
   ]
 ]
 a = mx.array(ba)
+print(len(a))
+print(a.size)
 B,n_kv_heads,T,_ = a.shape
 w = 2
 n = a.shape[-1]

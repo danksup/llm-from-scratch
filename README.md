@@ -47,7 +47,8 @@ logs:
   - MoE load balancing
 - MoE top k jul 15 2026
 - sliding windows attention jul 17 2026
-- jul 18 - jul 25: just optimizing
+- jul 18 - jul 25: optimizing, fixed mix precision
+- reverts back to non sliding attention jul 26 
 
 ## Ongoing:
 - optimizing attention (backward mainly)

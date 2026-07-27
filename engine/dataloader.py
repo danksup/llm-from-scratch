@@ -1,8 +1,9 @@
 from engine.tokenizer import Tokenizer
 import engine.backend as nx
+from typing import Any
 
 class DataLoader:
-    def __init__(self,data:str, tokenizer:Tokenizer, context_size:int=16, train_split=0.9) -> None:
+    def __init__(self,data:str, tokenizer:Tokenizer, context_size:int=16, train_split=0.9, stride=8) -> None:
         '''
         Args:
             data: corpus
@@ -13,8 +14,10 @@ class DataLoader:
         self.train_split = train_split
         self.tokens = tokenizer.encode(data)
         self.context_size = context_size
+        assert stride <= context_size, "cant have more strides"
+        self.stride = stride
 
-        windows = nx.sliding_window_view(self.tokens, self.context_size + 1)
+        windows = self.dataloader_windows_view(self.tokens, self.context_size + 1, stride)
         self.contexts = windows[:,:-1]
         self.targets = windows[:,1:]
         indices = nx.permutation(len(self.contexts))
@@ -42,3 +45,11 @@ class DataLoader:
         """
         for i in range(0, len(self.validate_targets), batch_size):
             yield(self.validate_contexts[i:i+batch_size], self.validate_targets[i:i+batch_size])
+
+    @staticmethod
+    def dataloader_windows_view( x:Any, window_shape:int,  stride=1) -> nx.ArrayLike:
+        n = len(x)
+        num_windows = ((n - window_shape) // stride) + 1
+        shape = (num_windows,window_shape)
+        strides = (stride,1)
+        return nx.as_strided(x, shape, strides)

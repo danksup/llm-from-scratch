@@ -17,7 +17,6 @@ class Embedding:
 
     def forward(self, token_list:Any):
         ''' loopup and convert to the vector for each token id'''
-        
         return self.lookup_table[token_list]
     
     def to_dict(self) -> dict[str, Any]:

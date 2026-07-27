@@ -1,10 +1,10 @@
 from engine.sessions import Session
 
-session = Session.load("artifacts/sessions/session_19446272_params_1_epochs.ram2n")
+session = Session.load("artifacts/sessions/session_39007232_params_10_epochs.ram2n")
 session.configs["epochs"] = 20
 tokenizer = session.tokenizer
 context_size = session.configs["context_size"]
-context = "A"
+context = "cookies and pies"
 print(f"input: {context}")
 context = tokenizer.encode(context)
 context = context.reshape(-1, context.shape[0])

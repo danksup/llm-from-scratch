@@ -1,9 +1,8 @@
 from engine.transformer import Transformer
 from engine.tokenizer import Tokenizer
-from engine.embedding import Embedding
 from engine.dataloader import DataLoader
 from engine.activations import softmax
-from engine.optimizer import AdamW
+from engine.adamw import AdamW
 import engine.backend as nx
 from typing import Any,Union
 import time
@@ -127,7 +126,7 @@ class Session:
             for i in range(self.configs["epochs"]):
                 epoch = i
                 start = time.perf_counter()
-                error,total_histograms = self.transformer.train(dataloader, self.optimizer, self.configs["epochs"], batch_size=self.configs["batch_size"])
+                error, total_histograms, batch_count = self.transformer.train(dataloader, self.optimizer, self.configs["epochs"], batch_size=self.configs["batch_size"])
                 val_loss = self.validation(dataloader)
                 end = time.perf_counter()   
                 time_ = end-start
@@ -159,11 +158,11 @@ class Session:
 
                 if display_message and( i % display_every == 0 or i == self.configs["epochs"] - 1):
                     print(f"epoch {epoch} | avg loss: {error} | val: {val_loss} | best val loss: {best_val_loss} | lr: {self.optimizer.lr} | time: {time_}")
-                    if total_histograms:
-                        for idx, histogram in enumerate(total_histograms):
-                            hmin = nx.min(histogram).item()
-                            hmax = nx.max(histogram).item()
-                            print(f"block{idx}: ideal: {1/histogram.shape[0]} | spread: {hmax-hmin} | min: {hmin} | max: {hmax}")
+                    # if total_histograms:
+                    #     for idx, histogram in enumerate(total_histograms):
+                    #         hmin = nx.min(histogram).item()
+                    #         hmax = nx.max(histogram).item()
+                    #         print(f"block{idx}: ideal: {1/histogram.shape[0]} | spread: {hmax-hmin} | min: {hmin} | max: {hmax}")
 
             if checkpoint is not None:
                 checkpoint.save("checkpoint_save")

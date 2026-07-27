@@ -206,25 +206,13 @@ def permutation(x:Any, axis=0) -> ArrayLike:
             return rng.permutation(x, axis=axis)
     return _nx.random.permutation(x, axis=axis)
 
-def sliding_window_view( x:Any, window_shape:int, axis=None) -> ArrayLike:
-    """
-    for mlx this is hardcoded to match dataloader
-    """
-    if backend == "NumPy":
-        return _nx.lib.stride_tricks.sliding_window_view(x, window_shape, axis=axis)
-    x = _nx.array(x)   
-    n = len(x)
-    shape = (n - window_shape + 1,window_shape)
-    strides = (1,1)
-    return _nx.as_strided(x,shape, strides)
-
-def as_strided(x, shape, strides, offset=0):
+def as_strided(x, shape, strides):
     if backend == 'NumPy':
         x = _nx.asarray(x)
         itemsize = x.dtype.itemsize
         np_stride = tuple(s * itemsize for s in strides)
         return _nx.lib.stride_tricks.as_strided(x, shape=shape, strides=np_stride)
-    return _nx.as_strided(x,shape, strides, offset=offset)
+    return _nx.as_strided(x,shape, strides)
 
 def mean(x:ArrayLike, *,axis=None, keepdims:bool=False,dtype=None) -> ArrayLike:
     if dtype is not None and dtype != x.dtype:

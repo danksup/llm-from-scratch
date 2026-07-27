@@ -1,13 +1,12 @@
 from engine.losses import cross_entropy_gradient, cross_entropy
 from engine.embedding import Embedding
 from engine.dataloader import DataLoader
-from engine.optimizer import  AdamW
+from engine.adamw import  AdamW
 from engine.transformer_block import TransformerBlock
 import engine.backend as nx
 from typing import Any
 import time
 LAMBDA = 1e-2
-import gc
 GRADIENT_SCALE = 4096
 
 default_block_configs = {
@@ -17,7 +16,7 @@ default_block_configs = {
     "ff_cf":1.25,
     "attn_n_heads":16,
     "attn_n_kv_heads":4,
-    "attn_windows":64
+    "attn_windows":32
 }
 
 class Transformer:
@@ -52,7 +51,7 @@ class Transformer:
                 topk = overrided["ff_topk"]
                 W = overrided["attn_windows"]
 
-                transformer_block = TransformerBlock(D, H, n_heads, n_kv_heads, E, CF, topk, W, self.dtype)
+                transformer_block = TransformerBlock(D, H, n_heads, n_kv_heads, E, CF, topk,W, self.dtype)
                 self.blocks.append(transformer_block) 
         else:
             self.blocks = blocks
@@ -96,13 +95,13 @@ class Transformer:
             W = block.W
             W = min(W, T-1)
             P = nx.array(0.1, dtype=self.dtype)
-            if block.causal_mask is None or block.causal_mask.shape != (T,W+1):
-                # block.causal_mask = nx.triu(nx.ones((T, T), dtype=nx.bool_), k=1)
+            if block.causal_mask is None or block.causal_mask.shape != (T, ):
+                block.causal_mask = nx.triu(nx.ones((T, T), dtype=nx.bool_), k=1)
                 window_idx = nx.arange(W + 1).reshape((1, W + 1))
                 time_idx = nx.arange(T).reshape((T, 1))
                 padded_position = time_idx + window_idx
                 block.causal_mask = padded_position < W
-            ff_out ,masks, caches, router_loss, normalized_histogram = block._forward(output, block.causal_mask, self.embed_dim, block.n_heads, block.n_kv_heads, block.n_rep, W,block.head_dim, block.n_experts, block.cf, block.ff.top_k,
+            ff_out ,masks, caches, router_loss, normalized_histogram = block._forward(output, block.causal_mask, self.embed_dim, block.n_heads, block.n_kv_heads, block.n_rep, block.head_dim, W, block.n_experts, block.cf, block.ff.top_k,
                                                    block.freqs, Wqkv, Wo, Wcombined, router, block.hidden_width, Wout, epsilon, gamma1, gamma2, P, is_training)
 
             total_router_loss += router_loss
@@ -133,11 +132,12 @@ class Transformer:
             mask1, mask2 = masks
             scaled_lambda = LAMBDA * GRADIENT_SCALE
             moe_configs = block.ff.cf, block.ff.n_experts, block.ff.hidden_width, block.ff.router, scaled_lambda
+            P = nx.array(0.1, dtype=self.dtype)
             W = block.W
             W = min(W, T-1)
-            P = nx.array(0.1, dtype=self.dtype)
-            attn_params = (block.n_heads, block.head_dim, block.embed_dim, block.n_kv_heads, block.n_rep,W, block.attention.Wo, block.freqs, block.attention.Wqkv)
+            attn_params = (block.n_heads, block.head_dim, block.embed_dim, block.n_kv_heads, block.n_rep, block.W, block.attention.Wo, block.freqs, block.attention.Wqkv)
             ff_params = (block.ff.Wout, block.ff.Wcombined)
+
             dx, dWout, dWcombined, d_router, dWqkv, dWo, d_gamma1, d_gamma2 = block._backward(current_grad, mask1=mask1, mask2=mask2, p=P,
                                                                 caches_attn=caches_attn, caches_ff=caches_ff, caches_rmsnorm1=caches_rmsnorm1, caches_rmsnorm2=caches_rmsnorm2, 
                                                                 attn_params=attn_params, gamma1=block.rmsnorm1.gamma, gamma2=block.rmsnorm2.gamma, ff_params=ff_params, moe_configs=moe_configs)
@@ -250,7 +250,7 @@ class Transformer:
         if total_histograms != None:
             for i in range(len(total_histograms)):
                 total_histograms[i] /= batch_counter
-        return nx.float_32(final_loss), total_histograms
+        return nx.float_32(final_loss), total_histograms, batch_counter
     
     def benchmark(self, dataloader:DataLoader, optimizer:AdamW, batch_size:int=32, pass_ =1):
         total_loss = nx.float_32(0.0)
@@ -445,6 +445,6 @@ class Transformer:
             n_kv_heads = block.n_kv_heads
             topk = block.ff.top_k
             W = block.W
-            configs += f"block {i}: n_heads: {n_heads} | n_kv_heads: {n_kv_heads} | attn_windows: {W} | n_experts: {Ne} | hidden_width: {H} | topk: {topk}\n"
+            configs += f"block {i}: n_heads: {n_heads} | n_kv_heads: {n_kv_heads} | windows: {W} | n_experts: {Ne} | hidden_width: {H} | topk: {topk}\n"
 
         return configs

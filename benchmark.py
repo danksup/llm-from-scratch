@@ -8,11 +8,12 @@ BATCH_SIZE = 64
 BASE_WIDTH = 1024#4 * EMBED_DIM 
 N_HEADS = EMBED_DIM // 8
 N_KV_HEADS = N_HEADS // 2
-WINDOWS = CONTEXT_SIZE // 8
 N_EXPERTS = 32
 CF = 1.25
 VAL = .9
 TOP_K = 2
+LOADER_STRIDE = CONTEXT_SIZE // 2
+WINDOWS = CONTEXT_SIZE // 8
 
 from pathlib import Path
 import time
@@ -49,7 +50,7 @@ model_configs = {
     "n_blocks":4,
     "embed_dim":EMBED_DIM,
     "dtype": nx.float16,
-    "block_configs":{"ff_hidden_width": BASE_WIDTH,"ff_n_experts":N_EXPERTS,"ff_topk":TOP_K,"ff_cf":CF,"attn_n_heads":N_HEADS,"attn_n_kv_heads":N_KV_HEADS,"attn_windows":WINDOWS},
+    "block_configs":{"ff_hidden_width": BASE_WIDTH,"ff_n_experts":N_EXPERTS,"ff_topk":TOP_K,"ff_cf":CF,"attn_n_heads":N_HEADS,"attn_n_kv_heads":N_KV_HEADS, "attn_windows":WINDOWS},
     "block_overrides":{
         1:{}, 2:{}
     }
@@ -80,7 +81,7 @@ start = time.perf_counter()
 session_configs["block_size"] = len(transformer.blocks)
 
 print("loading dataloader", end="\r")
-dataloader = DataLoader(corpus, tokenizer1, session_configs["context_size"])
+dataloader = DataLoader(corpus, tokenizer1, session_configs["context_size"], LOADER_STRIDE)
 
 corpus_len = len(corpus)
 token_size = dataloader.tokens.size

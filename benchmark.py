@@ -32,27 +32,32 @@ import engine.backend as nx
 session_configs = {
     "context_size": CONTEXT_SIZE,
     "batch_size": BATCH_SIZE,
+    "dataloader_strides":LOADER_STRIDE,
     "optimizer":"adamw",
     "train_split":.9,
     "train_split":VAL,
     "optimizer_args":{
-        "min_lr":1e-5,
-        "max_lr":1e-3,
-        "beta":0.9,
+        "lr": 1e-2,
+        "beta1":0.9,
         "beta2":0.999,
         "epsilon":1e-8,
-        "weight_decay":0.01
+        "weight_decay":0.01,
+        "use_master": False,
+        "scheduler": None,
+        "min_lr": None,
     },
-    "using":backend
+    "using":backend,
+    "save":True
 }
 
 model_configs = {
     "n_blocks":4,
     "embed_dim":EMBED_DIM,
     "dtype": nx.float16,
-    "block_configs":{"ff_hidden_width": BASE_WIDTH,"ff_n_experts":N_EXPERTS,"ff_topk":TOP_K,"ff_cf":CF,"attn_n_heads":N_HEADS,"attn_n_kv_heads":N_KV_HEADS, "attn_windows":WINDOWS},
+    "gradient_scale":4096,
+    "block_configs":{"ff_hidden_width": BASE_WIDTH,"ff_n_experts":N_EXPERTS,"ff_topk":2,"ff_cf":CF,"attn_n_heads":N_HEADS,"attn_n_kv_heads":N_KV_HEADS, "attn_windows":WINDOWS},
     "block_overrides":{
-        1:{}, 2:{}
+        0: {"attn_windows":CONTEXT_SIZE},2:{"ff_n_experts": N_EXPERTS//2},3:{"ff_n_experts": N_EXPERTS//3}
     }
 }
 

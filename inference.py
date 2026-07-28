@@ -1,15 +1,15 @@
 from engine.sessions import Session
 
-session = Session.load("artifacts/sessions/session_39007232_params_10_epochs.ram2n")
+session = Session.load("artifacts/sessions/session_lol.ram2n")
 session.configs["epochs"] = 20
 tokenizer = session.tokenizer
 context_size = session.configs["context_size"]
-context = "cookies and pies"
+context = ""
 print(f"input: {context}")
 context = tokenizer.encode(context)
 context = context.reshape(-1, context.shape[0])
 
-TEMPERATURE = 0.55
+TEMPERATURE = 0.8
 TOP_K = 20
 TOP_P = .8
 N = 200

@@ -7,7 +7,6 @@ import engine.backend as nx
 from typing import Any
 import time
 LAMBDA = 1e-2
-GRADIENT_SCALE = 4096
 
 default_block_configs = {
     "ff_hidden_width": 1024,
@@ -29,6 +28,7 @@ class Transformer:
         self.embed_dim = configs.get("embed_dim", 128)
         self.dtype = configs.get("dtype", nx.float32)
         self.embedding = Embedding(self.vocab_size, self.embed_dim, self.dtype)
+        self.gradient_scale = configs.get("gradient_scale", 4096)
         block_configs =  default_block_configs | configs.get("block_configs", {})
 
         if blocks is None:
@@ -37,7 +37,10 @@ class Transformer:
             if block_overrides:
                 for value in block_overrides.values():
                     if "dtype" in value:
-                        raise ValueError('no dtype')
+                        raise ValueError('individual block config cant have dtype.')
+                    for config in value:
+                        if config not in default_block_configs:
+                            raise ValueError(f"{config} is invalid. valid override: {", ".join(default_block_configs.keys())}")
 
             for i in range(n_blocks):
                 override = block_overrides.get(i, {})
@@ -51,7 +54,7 @@ class Transformer:
                 topk = overrided["ff_topk"]
                 W = overrided["attn_windows"]
 
-                transformer_block = TransformerBlock(D, H, n_heads, n_kv_heads, E, CF, topk,W, self.dtype)
+                transformer_block = TransformerBlock(D, H, n_heads, n_kv_heads, E, CF, topk, W, self.dtype)
                 self.blocks.append(transformer_block) 
         else:
             self.blocks = blocks
@@ -127,12 +130,12 @@ class Transformer:
             _,T,_ = current_grad.shape
             caches_attn, caches_ff, caches_rmsnorm1, caches_rmsnorm2 = caches
             mask1, mask2 = masks
-            scaled_lambda = LAMBDA * GRADIENT_SCALE
+            scaled_lambda = LAMBDA * self.gradient_scale
             moe_configs = block.ff.cf, block.ff.n_experts, block.ff.hidden_width, block.ff.router, scaled_lambda
             P = nx.array(0.1, dtype=self.dtype)
             W = block.W
             W = min(W, T-1)
-            attn_params = (block.n_heads, block.head_dim, block.embed_dim, block.n_kv_heads, block.n_rep, block.W, block.attention.Wo, block.freqs, block.attention.Wqkv)
+            attn_params = (block.n_heads, block.head_dim, block.embed_dim, block.n_kv_heads, block.n_rep, W, block.attention.Wo, block.freqs, block.attention.Wqkv)
             ff_params = (block.ff.Wout, block.ff.Wcombined)
 
             dx, dWout, dWcombined, d_router, dWqkv, dWo, d_gamma1, d_gamma2 = block._backward(current_grad, mask1=mask1, mask2=mask2, p=P,
@@ -177,27 +180,27 @@ class Transformer:
             if not nx.isfinite(loss):
                 forward_nan = nx.isnan(loss)
                 forward_inf = nx.isinf(loss)
-                raise FloatingPointError(f"[FORWARD] backward inf of value {loss.item()} at {batch_counter}. isnan: {forward_nan} | isinf: {forward_inf}")
+                raise FloatingPointError(f"[FORWARD] non finite loss at step {batch_counter}. isnan: {forward_nan} | isinf: {forward_inf}")
 
             batch_gradient = cross_entropy_gradient(batch_scores, next_tokens)
             batch_gradient /= (batch_gradient.shape[0] * batch_gradient.shape[1])
-            scaled_batch_gradient = batch_gradient * GRADIENT_SCALE
+            scaled_batch_gradient = batch_gradient * self.gradient_scale
 
             batch_gradient = scaled_batch_gradient.astype(self.dtype)
             block_gradient =  batch_gradient @ self.embedding.lookup_table #dtype
             
             d_table = batch_gradient.reshape(-1, self.vocab_size).T @ last_output.reshape(-1, self.embed_dim) 
-            d_table = d_table.astype(nx.float32) / GRADIENT_SCALE
+            d_table = d_table.astype(nx.float32) / self.gradient_scale
             
             current_grad = self.backward(block_gradient, self.embedding.lookup_table, last_output, all_masks, all_caches)
-            current_grad = current_grad.astype(nx.float32) / GRADIENT_SCALE
+            current_grad = current_grad.astype(nx.float32) / self.gradient_scale
 
             if not nx.isfinite(current_grad).all().item():
-                backward_max = max(current_grad)
-                backward_min = min(current_grad)
-                backward_nan = nx.isnan(current_grad)
-                backward_inf = nx.isinf(current_grad)
-                raise FloatingPointError(f"[BACKWARD] backward inf at {batch_counter}. isnan: {backward_nan} | isinf: {backward_inf}.\nmin value: {backward_min}\nmax value: {backward_max}")
+                backward_max = nx.max(current_grad)
+                backward_min = nx.min(current_grad)
+                backward_nan = nx.isnan(current_grad).any()
+                backward_inf = nx.isinf(current_grad).any()
+                raise FloatingPointError(f"[BACKWARD] non-finite gradient at step {batch_counter}. isnan: {backward_nan} | isinf: {backward_inf}.\nmin value: {backward_min}\nmax value: {backward_max}")
 
             embedding_gradient = nx.zeros_like(self.embedding.lookup_table, dtype=nx.float32)
             embedding_gradient = nx.add_at(embedding_gradient, contexts, current_grad)
@@ -206,13 +209,13 @@ class Transformer:
 
             all_network_params = []
             for i,block in enumerate(self.blocks):
-                block.attention.dWqkv = block.attention.dWqkv.astype(nx.float32) / GRADIENT_SCALE
-                block.attention.dWo = block.attention.dWo.astype(nx.float32) / GRADIENT_SCALE
-                block.ff.dWcombined = block.ff.dWcombined.astype(nx.float32) / GRADIENT_SCALE
-                block.ff.dWout = block.ff.dWout.astype(nx.float32) / GRADIENT_SCALE
-                block.ff.d_router = block.ff.d_router.astype(nx.float32) / GRADIENT_SCALE
-                block.rmsnorm1.d_gamma = block.rmsnorm1.d_gamma.astype(nx.float32) / GRADIENT_SCALE
-                block.rmsnorm2.d_gamma = block.rmsnorm2.d_gamma.astype(nx.float32) / GRADIENT_SCALE
+                block.attention.dWqkv = block.attention.dWqkv.astype(nx.float32) / self.gradient_scale
+                block.attention.dWo = block.attention.dWo.astype(nx.float32) / self.gradient_scale
+                block.ff.dWcombined = block.ff.dWcombined.astype(nx.float32) / self.gradient_scale
+                block.ff.dWout = block.ff.dWout.astype(nx.float32) / self.gradient_scale
+                block.ff.d_router = block.ff.d_router.astype(nx.float32) / self.gradient_scale
+                block.rmsnorm1.d_gamma = block.rmsnorm1.d_gamma.astype(nx.float32) / self.gradient_scale
+                block.rmsnorm2.d_gamma = block.rmsnorm2.d_gamma.astype(nx.float32) / self.gradient_scale
                 all_network_params.extend(
                     [(f"Wqkv_{i}", block.attention.Wqkv.astype(nx.float32), block.attention.dWqkv),
                     (f"Wo_{i}", block.attention.Wo.astype(nx.float32), block.attention.dWo),
@@ -285,18 +288,18 @@ class Transformer:
            
             batch_gradient = cross_entropy_gradient(batch_scores, next_tokens)
             batch_gradient /= (batch_gradient.shape[0] * batch_gradient.shape[1])
-            scaled_batch_gradient = batch_gradient * GRADIENT_SCALE
+            scaled_batch_gradient = batch_gradient * self.gradient_scale
 
             batch_gradient = scaled_batch_gradient.astype(self.dtype) #cast
             block_gradient =  batch_gradient @ self.embedding.lookup_table #dtype
 
             d_table = batch_gradient.reshape(-1, self.vocab_size).T @ last_output.reshape(-1, self.embed_dim) #dtype
             
-            d_table = d_table.astype(nx.float32) / GRADIENT_SCALE
+            d_table = d_table.astype(nx.float32) / self.gradient_scale
 
             start = time.perf_counter()
             current_grad = self.backward(block_gradient, self.embedding.lookup_table, last_output, all_masks, all_caches)
-            current_grad = current_grad.astype(nx.float32) / GRADIENT_SCALE
+            current_grad = current_grad.astype(nx.float32) / self.gradient_scale
 
             nx.eval(current_grad)
             end = time.perf_counter()
@@ -309,13 +312,13 @@ class Transformer:
 
             all_network_params = []
             for i,block in enumerate(self.blocks):
-                block.attention.dWqkv = block.attention.dWqkv.astype(nx.float32) / GRADIENT_SCALE
-                block.attention.dWo = block.attention.dWo.astype(nx.float32) / GRADIENT_SCALE
-                block.ff.dWcombined = block.ff.dWcombined.astype(nx.float32) / GRADIENT_SCALE
-                block.ff.dWout = block.ff.dWout.astype(nx.float32) / GRADIENT_SCALE
-                block.ff.d_router = block.ff.d_router.astype(nx.float32) / GRADIENT_SCALE
-                block.rmsnorm1.d_gamma = block.rmsnorm1.d_gamma.astype(nx.float32) / GRADIENT_SCALE
-                block.rmsnorm2.d_gamma = block.rmsnorm2.d_gamma.astype(nx.float32) / GRADIENT_SCALE
+                block.attention.dWqkv = block.attention.dWqkv.astype(nx.float32) / self.gradient_scale
+                block.attention.dWo = block.attention.dWo.astype(nx.float32) / self.gradient_scale
+                block.ff.dWcombined = block.ff.dWcombined.astype(nx.float32) / self.gradient_scale
+                block.ff.dWout = block.ff.dWout.astype(nx.float32) / self.gradient_scale
+                block.ff.d_router = block.ff.d_router.astype(nx.float32) / self.gradient_scale
+                block.rmsnorm1.d_gamma = block.rmsnorm1.d_gamma.astype(nx.float32) / self.gradient_scale
+                block.rmsnorm2.d_gamma = block.rmsnorm2.d_gamma.astype(nx.float32) / self.gradient_scale
                 all_network_params.extend(
                     [(f"Wqkv_{i}", block.attention.Wqkv.astype(nx.float32), block.attention.dWqkv),
                     (f"Wo_{i}", block.attention.Wo.astype(nx.float32), block.attention.dWo),
@@ -432,6 +435,7 @@ class Transformer:
         configs = ""
         configs += f"vocab_size: {str(self.vocab_size)}" + "\n"
         configs += f"embed_dim: {str(self.embed_dim)}" + "\n"
+        configs += f"gradient_scale: {str(self.gradient_scale)}" + "\n"
         configs += "precision: float32" if self.dtype == nx.float32 else f"precision: mixed precision ({self.dtype})" 
         configs += "\n"
 

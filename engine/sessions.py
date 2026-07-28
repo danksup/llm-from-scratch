@@ -30,25 +30,29 @@ OPTIMIZERS = {
 DEFAULT_OPTIMIZER_ARGS = {
     "sgd": {
         "min_lr":0.05,
-        "max_lr":0.05,
-        "use_master":True
+        "scheduler":None,
+        "use_master":True,
+        "scheduler":None,
+        "min_lr":0.05,
         },
     "adam": {
-        "min_lr":0.05,
-        "max_lr":0.05,
+        "lr":0.05,
         "beta1":0.9,
         "beta2":0.999,
         "epsilon":1e-8,
-        "use_master":True
+        "use_master":True,
+        "scheduler":None,
+        "min_lr":None,
         },
     "adamw":{
-        "min_lr":0.05,
-        "max_lr":0.05,
+        "lr":0.03,
         "beta1":0.9,
         "beta2":0.999,
         "epsilon":1e-8,
         "weight_decay":0.01,
-        "use_master":True
+        "use_master":True,
+        "scheduler":None,
+        "min_lr":None,
         },
 }
 
@@ -61,13 +65,24 @@ class Session:
             configs = {}
 
         self.configs = DEFAULT_CONFIGS | configs
-        self.configs["optimizer_args"] = DEFAULT_OPTIMIZER_ARGS[self.configs["optimizer"]] | configs.get("optimizer_args", {})
+        config_optimizer = self.configs["optimizer"].lower()
+        assert config_optimizer in OPTIMIZERS, f"invalid optimizers \"{config_optimizer}\". choose between {", ".join(OPTIMIZERS.keys())}"
+        self.configs["optimizer_args"] = DEFAULT_OPTIMIZER_ARGS[config_optimizer] | configs.get("optimizer_args", {})
 
         if isinstance(init_optimizer, bool) and init_optimizer: 
             optimizer_class = OPTIMIZERS[self.configs["optimizer"]]
+            if self.configs["optimizer_args"]["scheduler"] and not self.configs["optimizer_args"]["min_lr"]:
+                self.configs["optimizer_args"]["min_lr"] = self.configs["optimizer_args"]["lr"] / 1e2
             self.optimizer = optimizer_class(**self.configs["optimizer_args"])
         elif isinstance(init_optimizer, (AdamW, Adam, SGD)):
             self.optimizer = init_optimizer
+    
+    def __str__(self) -> str:
+        t_mess = f"param: {self.count_params()} \n"
+        for key,val in self.configs.items():
+            t_mess += f"{key}: {val}\n"
+        t_mess += self.transformer.get_configs_str()
+        return t_mess
 
     @classmethod
     def build_from_files(cls):
@@ -130,11 +145,8 @@ class Session:
         train using set configs
         """
         if display_message:
-            t_mess = f"[TRAINING]param: {self.count_params()} "
-            for key,val in self.configs.items():
-                t_mess += f"{key}: {val}\n"
-            t_mess += self.transformer.get_configs_str()
-            print(t_mess)        
+            print("[training]")
+            print(self)       
         epoch = 0
         checkpoint = None
         try:
@@ -177,13 +189,15 @@ class Session:
                 display_every = max(1, self.configs["epochs"] // 10)
 
                 if display_message and( i % display_every == 0 or i == self.configs["epochs"] - 1):
-                    print(f"epoch {epoch} | avg loss: {error} | val: {val_loss} | best val loss: {best_val_loss} | lr: {self.optimizer.lr} | time: {time_}")
+                    print(f"epoch {epoch} | avg loss: {error} | val: {val_loss} | best val loss: {best_val_loss} | lr: {self.optimizer.lr:.6f} | time: {time_}")
                     # if total_histograms:
                     #     for idx, histogram in enumerate(total_histograms):
                     #         hmin = nx.min(histogram).item()
                     #         hmax = nx.max(histogram).item()
                     #         print(f"block{idx}: ideal: {1/histogram.shape[0]} | spread: {hmax-hmin} | min: {hmin} | max: {hmax}")
 
+            if self.configs["save"]:
+                self.save("lol")
             if checkpoint is not None:
                 checkpoint.save("checkpoint_save")
         except ValueError as e:

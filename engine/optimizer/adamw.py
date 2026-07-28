@@ -1,8 +1,9 @@
 import engine.backend as nx
-from typing import Any
+import engine.scheduler as scheduler
+from typing import Any, Callable
 
 class AdamW:
-    def __init__(self,min_lr=1e-4, max_lr=1e-3, beta1:float=0.9, beta2:float=0.999, epsilon:float=1e-8, weight_decay=0.01, use_master:bool=True) -> None:
+    def __init__(self, lr=1e-3, beta1:float=0.9, beta2:float=0.999, epsilon:float=1e-8, weight_decay:float=0.01, use_master:bool=True, scheduler:None|Callable=None, min_lr:None | float= None) -> None:
         """
         m: first moment 
             m = β_{1} * m + (1 - β_{1}) * gradient    \n
@@ -17,21 +18,27 @@ class AdamW:
         # self.memory = {}
         self.state = {}
         self.state["t"] = nx.array(0, dtype=nx.int32)
-        self.lr = nx.float_32(min_lr)
+        self.init_lr = nx.float_32(lr)
+        self.lr = nx.float_32(lr)
         self.min_lr = min_lr
-        self.max_lr = max_lr
+        if scheduler:
+            if  min_lr and min_lr > lr:
+                raise ValueError("min lr cant be bigger than init lr")
         self.beta1 = nx.float_32(beta1)
         self.beta2 = nx.float_32(beta2)
         self.epsilon = nx.float_32(epsilon)
         self.weight_decay = nx.float_32(weight_decay)
         self.use_master = use_master
+        self.schduler = scheduler
     
     def step_many(self, name_param_gradient:list[Any], train_contexts, batch_size, total_epoch) -> dict[Any,Any]:
         #cosine decay: lr = min_lr + 0.5 * (max_lr - min_lr) * (1 + cos(pi * current_step / total_steps))
-        current_step = self.state["t"]
-        total_step = ((len(train_contexts)) // batch_size) * total_epoch
-        progress = min(1, current_step / total_step) 
-        self.lr = self.min_lr + 0.5 * (self.max_lr - self.min_lr) * (1 + nx.cos(nx.pi * progress))
+
+        if self.schduler:
+            current_step = self.state["t"]
+            total_step = ((len(train_contexts)) // batch_size) * total_epoch
+            progress = min(1, current_step / total_step) 
+            self.lr = self.schduler(self.init_lr, self.min_lr, progress)
 
         self.state["t"] += 1
 
@@ -101,28 +108,32 @@ class AdamW:
                 adamw[key] = shape_copy
 
         adamw_configs = {
-            "min_lr": self.min_lr,
-            "max_lr": self.max_lr,
+            "lr": self.init_lr,
             "beta1": self.beta1,
             "beta2": self.beta2,
             "epsilon": self.epsilon,
             "weight_decay":self.weight_decay,
-            "use_master":self.use_master
+            "use_master":self.use_master,
+            "scheduler":self.schduler,
+            "min_lr": None
         }
+        if self.schduler:
+            adamw_configs["min_lr"] = self.min_lr
         adamw["adamw_configs"] = adamw_configs
         return adamw
 
     @classmethod
     def from_dict(cls, thing:dict[Any, Any]) -> "AdamW":
         configs = thing["adamw_configs"]
-        min_lr = configs["min_lr"]
-        max_lr = configs["max_lr"]
+        lr = configs["lr"]
         beta1 = configs["beta1"]
         beta2 = configs["beta2"]
         epsilon = configs["epsilon"]
         weight_decay = configs["weight_decay"]
         use_master = configs["use_master"]
-        adamw = cls(min_lr, max_lr, beta1, beta2, epsilon, weight_decay, use_master)
+        scheduler = configs["scheduler"]
+        min_lr = configs["min_lr"]
+        adamw = cls(lr=lr, beta1=beta1, beta2=beta2, epsilon=epsilon, weight_decay=weight_decay, use_master=use_master, scheduler=scheduler, min_lr=min_lr)
         adamw.state["t"] = nx.array(thing["t"], dtype=nx.int32)
         for key, value in thing.items():
             shape_copy = {}

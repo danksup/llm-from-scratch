@@ -2,17 +2,17 @@ import os
 backend = os.environ["BACKEND"] = "auto"
 import random
 EPOCHS = 5
-EMBED_DIM = 128
-CONTEXT_SIZE = 256
+EMBED_DIM = 64
+CONTEXT_SIZE = 64
 BATCH_SIZE = 128
-BASE_WIDTH = 1024#4 * EMBED_DIM 
+BASE_WIDTH = 1800#4 * EMBED_DIM 
 N_HEADS = EMBED_DIM // 8
 N_KV_HEADS = N_HEADS // 2
 N_EXPERTS = 24
 CF = 1.25
 VAL = .9
 TOP_K = 1
-LOADER_STRIDE = CONTEXT_SIZE // 2
+LOADER_STRIDE = CONTEXT_SIZE
 WINDOWS = CONTEXT_SIZE // 4
 
 #not hooked yet to session
@@ -31,6 +31,7 @@ from engine.transformer import Transformer
 from engine.tokenizer import Tokenizer
 from engine.dataloader import DataLoader
 from engine.sessions import Session
+from engine.scheduler.cosine_decay import cosine_decay
 import engine.backend as nx
 
 from helper.singleton import init_corpus
@@ -40,28 +41,31 @@ session_configs = {
     "context_size": CONTEXT_SIZE,
     "batch_size": BATCH_SIZE,
     "dataloader_strides":LOADER_STRIDE,
-    "optimizer":"sgd",
+    "optimizer":"adamw",
     "train_split":.9,
     "train_split":VAL,
     "optimizer_args":{
-        "min_lr":1e-4,
-        "max_lr":1e-2,
-        # "beta1":0.9,
-        # "beta2":0.999,
-        # "epsilon":1e-8,
-        # "weight_decay":0.01,
-        "use_master": False
+        "lr": 1e-2,
+        "beta1":0.9,
+        "beta2":0.999,
+        "epsilon":1e-8,
+        "weight_decay":0.01,
+        "use_master": False,
+        "scheduler": None,
+        "min_lr": None,
     },
-    "using":backend
+    "using":backend,
+    "save":False
 }
 
 model_configs = {
     "n_blocks":4,
     "embed_dim":EMBED_DIM,
-    "dtype": nx.float16,
-    "block_configs":{"ff_hidden_width": BASE_WIDTH,"ff_n_experts":N_EXPERTS,"ff_topk":TOP_K,"ff_cf":CF,"attn_n_heads":N_HEADS,"attn_n_kv_heads":N_KV_HEADS, "attn_windows":WINDOWS},
+    "dtype": nx.float32,
+    "gradient_scale":4096,
+    "block_configs":{"ff_hidden_width": BASE_WIDTH,"ff_n_experts":N_EXPERTS,"ff_topk":2,"ff_cf":CF,"attn_n_heads":N_HEADS,"attn_n_kv_heads":N_KV_HEADS, "attn_windows":WINDOWS},
     "block_overrides":{
-        0:{}
+        0: {"attn_windows":CONTEXT_SIZE//2},2:{"ff_n_experts": N_EXPERTS//2},3:{"ff_n_experts": N_EXPERTS//3},3:{"ff_n_experts": N_EXPERTS//4}
     }
 }
 
@@ -87,12 +91,9 @@ max_pass = token_size // (CONTEXT_SIZE * LOADER_STRIDE)
 session_configs["max step"] = f"{max_pass} ({LOADER_STRIDE} strides)"
 
 session1 = Session(transformer, tokenizer1, True, session_configs)
-
 a = random.randint(1,9999999999999)
 a = str(a)
 start = time.perf_counter()
 session1.train(dataloader, display_message=True)
 end = time.perf_counter()
 print(f"training finished. time: {end - start:.3f}s")
-
-session1.save(f"{session1.count_params()}_params_{EPOCHS}_epochs")

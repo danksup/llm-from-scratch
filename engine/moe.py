@@ -14,13 +14,15 @@ class MoE:
         self.top_k = top_k
         self.dtype = dtype
 
-        init = nx.sqrt(6 / (embed_dim + n_experts), dtype=nx.float32) 
+        init = nx.sqrt(6 / (n_experts + embed_dim), dtype=nx.float32) 
         self.router = nx.uniform(-init,init,(self.embed_dim, self.n_experts), dtype=init.dtype)
         self.d_router = None
 
-        scale = nx.sqrt(6 / (embed_dim+hidden_width), dtype=dtype)
-        self.Wcombined = nx.uniform(-scale,scale, (n_experts, hidden_width * 2, embed_dim),dtype=dtype)
-        self.Wout = nx.uniform(-scale,scale, (n_experts, hidden_width, embed_dim), dtype=dtype)
+        combined_init = nx.sqrt(6 / (2*hidden_width + embed_dim), dtype=dtype)
+        self.Wcombined = nx.uniform(-combined_init,combined_init, (n_experts, hidden_width * 2, embed_dim),dtype=dtype)
+
+        out_init = nx.sqrt(6 / (embed_dim + hidden_width), dtype=dtype)
+        self.Wout = nx.uniform(-out_init,out_init, (n_experts, hidden_width, embed_dim), dtype=dtype)
 
         self.dWcombined = None
         self.dWout = None

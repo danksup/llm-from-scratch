@@ -18,11 +18,18 @@ class AttentionLayer:
         self.head_dim = embed_dim // n_heads
         self.dtype = dtype
 
-        scale = 1 / nx.sqrt(self.head_dim, dtype=dtype)
+        
         self.n_rep = self.n_heads // self.n_kv_heads 
 
-        self.Wqkv = nx.uniform(-scale, scale, (embed_dim + 2 * n_kv_heads * self.head_dim, embed_dim), dtype=dtype) 
+        fan_in = embed_dim
+        fan_out = embed_dim + 2 * n_kv_heads * self.head_dim
+        scale = nx.sqrt(6 / (fan_in + fan_out), dtype=dtype)
+        self.Wqkv = nx.uniform(-scale, scale, (embed_dim + 2 * n_kv_heads * self.head_dim, embed_dim), dtype=dtype)
+         
+        fan_out = embed_dim
+        scale = nx.sqrt(6 / (fan_in + fan_out))
         self.Wo = nx.uniform(-scale,scale, (embed_dim,embed_dim), dtype=dtype) #projection
+
         self.dWqkv = None
         self.dWo = None
 

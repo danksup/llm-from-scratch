@@ -2,8 +2,8 @@ import os
 backend = os.environ["BACKEND"] = "auto"
 import random
 EPOCHS = 5
-EMBED_DIM = 128
-CONTEXT_SIZE = 64
+EMBED_DIM = 256
+CONTEXT_SIZE = 256
 BATCH_SIZE = 128
 BASE_WIDTH = 2048#4 * EMBED_DIM 
 N_HEADS = EMBED_DIM // 8
@@ -12,7 +12,7 @@ N_EXPERTS = 24
 CF = 1.25
 VAL = .9
 TOP_K = 1
-LOADER_STRIDE = CONTEXT_SIZE
+LOADER_STRIDE = CONTEXT_SIZE // 4
 WINDOWS = CONTEXT_SIZE // 4
 
 #not hooked yet to session
@@ -41,22 +41,17 @@ session_configs = {
     "context_size": CONTEXT_SIZE,
     "batch_size": BATCH_SIZE,
     "dataloader_strides":LOADER_STRIDE,
-    "optimizer":"sgd",
+    "optimizer":"adamw",
     "train_split":.9,
     "train_split":VAL,
     "optimizer_args":{
         "lr": 1e-2,
-        "momentum":-1,
-        # "beta1":0.9,
-        # "beta2":0.999,
-        # "epsilon":1e-8,
-        "weight_decay":0.0,
         "use_master": False,
         "scheduler": None,
-        "min_lr": 1e-4,
+        "min_lr": None,
     },
     "using":backend,
-    "save":False
+    "save":True
 }
 
 model_configs = {
@@ -66,7 +61,7 @@ model_configs = {
     "gradient_scale":4096,
     "block_configs":{"ff_hidden_width": BASE_WIDTH,"ff_n_experts":N_EXPERTS,"ff_topk":2,"ff_cf":CF,"attn_n_heads":N_HEADS,"attn_n_kv_heads":N_KV_HEADS, "attn_windows":WINDOWS},
     "block_overrides":{
-        0: {"attn_windows":CONTEXT_SIZE//2},2:{"ff_n_experts": N_EXPERTS//2},3:{"ff_n_experts": N_EXPERTS//3}, 4:{"ff_n_experts": N_EXPERTS//4}
+        0: {"attn_windows":CONTEXT_SIZE},2:{"ff_n_experts": N_EXPERTS//2},3:{"ff_n_experts": N_EXPERTS//3}, 4:{"ff_n_experts": N_EXPERTS//4}
     }
 }
 

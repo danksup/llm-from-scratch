@@ -4,6 +4,11 @@ from typing import Any, Callable
 
 class AdamW:
     def __init__(self, lr=1e-3, beta1:float=0.9, beta2:float=0.999, epsilon:float=1e-8, weight_decay:float=0.01, use_master:bool=True, scheduler:None|Callable=None, min_lr:None | float= None) -> None:
+        assert lr > 0, "lr must be non-negative"
+        assert beta1 >= 0 and beta1 < 1, "allowed beta1 range: [0,1)"
+        assert beta2 >= 0 and beta2 < 1, "allowed beta2 range: [0,1)"
+        assert weight_decay >= 0, "weight_decay must be non-negative"
+
         self.state = {}
         self.state["t"] = nx.array(0, dtype=nx.int32)
         self.init_lr = nx.float_32(lr)
@@ -14,6 +19,7 @@ class AdamW:
                 raise ValueError("min lr cant be bigger than init lr")
         self.beta1 = nx.float_32(beta1)
         self.beta2 = nx.float_32(beta2)
+       
         self.epsilon = nx.float_32(epsilon)
         self.weight_decay = nx.float_32(weight_decay)
         self.use_master = use_master

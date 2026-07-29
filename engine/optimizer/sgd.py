@@ -3,6 +3,11 @@ from typing import Any, Callable
 
 class SGD:
     def __init__(self, lr=1e-4, momentum:float=0.0,weight_decay:float=.0,dampening:float=.0, use_master:bool=True, scheduler:None|Callable=None, min_lr:None | float= None) -> None:
+        assert lr > 0, "lr must be non-negative"
+        assert momentum >= 0 and momentum < 1, "allowed momentum range: [0, 1)"
+        assert weight_decay >= 0, "weight_decay must be non-negative"
+        assert dampening >= 0, "dampening must be non-negative"
+
         self.lr = nx.float_32(lr)
         self.init_lr = lr
         self.min_lr = min_lr

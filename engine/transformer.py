@@ -277,8 +277,11 @@ class Transformer:
             histogram_loss = LAMBDA * total_router_loss
             loss = nx.mean(loss) + histogram_loss
             weighted_router_loss += histogram_loss
+
             if not nx.isfinite(loss):
-                raise FloatingPointError("nan/inf")
+                forward_nan = nx.isnan(loss)
+                forward_inf = nx.isinf(loss)
+                raise FloatingPointError(f"[FORWARD] non finite loss at step {batch_idx}. isnan: {forward_nan} | isinf: {forward_inf}")
 
             if total_histograms is None:
                 total_histograms = histograms
@@ -300,6 +303,13 @@ class Transformer:
             start = time.perf_counter()
             current_grad = self.backward(block_gradient, self.embedding.lookup_table, last_output, all_masks, all_caches)
             current_grad = current_grad.astype(nx.float32) / self.gradient_scale
+
+            if not nx.isfinite(current_grad).all().item():
+                backward_max = nx.max(current_grad)
+                backward_min = nx.min(current_grad)
+                backward_nan = nx.isnan(current_grad).any()
+                backward_inf = nx.isinf(current_grad).any()
+                raise FloatingPointError(f"[BACKWARD] non-finite gradient at step {batch_idx}. isnan: {backward_nan} | isinf: {backward_inf}.\nmin value: {backward_min}\nmax value: {backward_max}")
 
             nx.eval(current_grad)
             end = time.perf_counter()

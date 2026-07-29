@@ -22,35 +22,36 @@ DEFAULT_CONFIGS = {
 
 OPTIMIZERS = {
     "sgd": SGD,
-    # "momentum": Momentum,
     "adamw": AdamW,
     "adam": Adam,
 }
 
 DEFAULT_OPTIMIZER_ARGS = {
     "sgd": {
-        "min_lr":0.05,
+        "lr":1e-2,
+        "momentum":.9,
+        "weight_decay":1e-4,
+        "dampening":0.0,
+        "use_master":False,
         "scheduler":None,
-        "use_master":True,
-        "scheduler":None,
-        "min_lr":0.05,
+        "min_lr":None,
         },
     "adam": {
-        "lr":0.05,
+        "lr":1e-3,
         "beta1":0.9,
         "beta2":0.999,
         "epsilon":1e-8,
-        "use_master":True,
+        "use_master":False,
         "scheduler":None,
         "min_lr":None,
         },
     "adamw":{
-        "lr":0.03,
+        "lr":1e-3,
         "beta1":0.9,
         "beta2":0.999,
         "epsilon":1e-8,
-        "weight_decay":0.01,
-        "use_master":True,
+        "weight_decay":1e-2,
+        "use_master":False,
         "scheduler":None,
         "min_lr":None,
         },
@@ -73,6 +74,8 @@ class Session:
             optimizer_class = OPTIMIZERS[self.configs["optimizer"]]
             if self.configs["optimizer_args"]["scheduler"] and not self.configs["optimizer_args"]["min_lr"]:
                 self.configs["optimizer_args"]["min_lr"] = self.configs["optimizer_args"]["lr"] / 1e2
+            if not self.configs["optimizer_args"]["scheduler"]:
+                self.configs["optimizer_args"].pop("min_lr")
             self.optimizer = optimizer_class(**self.configs["optimizer_args"])
         elif isinstance(init_optimizer, (AdamW, Adam, SGD)):
             self.optimizer = init_optimizer
@@ -137,7 +140,7 @@ class Session:
                     hmax = nx.max(histogram).item()
                     print(f"block{idx}: ideal: {1/histogram.shape[0]} | spread: {hmax-hmin} | min: {hmin} | max: {hmax}")
 
-    def train(self,dataloader:DataLoader,patience:int=10, display_message:bool=True):
+    def train(self,dataloader:DataLoader,patience:int=10, display_message:bool=True, savefile_name:str=""):
         """
         Args:
             patience: max bad epochs
@@ -168,7 +171,8 @@ class Session:
                 regression = improvement < 0
 
                 if val_loss < best_val_loss:
-                    checkpoint = self.create_checkpoint(self)  
+                    if self.configs["save"]:
+                        checkpoint = self.create_checkpoint(self)  
                     best_val_loss = val_loss
 
                 if small_improvement or regression:
@@ -197,9 +201,12 @@ class Session:
                     #         print(f"block{idx}: ideal: {1/histogram.shape[0]} | spread: {hmax-hmin} | min: {hmin} | max: {hmax}")
 
             if self.configs["save"]:
-                self.save("lol")
-            if checkpoint is not None:
-                checkpoint.save("checkpoint_save")
+                filename = f"{self.count_params()}_param_{epoch+1}_epochs"
+                if savefile_name == "":
+                    savefile_name = filename
+                self.save(savefile_name)
+                if checkpoint is not None:
+                    checkpoint.save(f"checkpoint_save_{savefile_name}")
         except ValueError as e:
             print(f"epoch {epoch}: {e}")
             if checkpoint is not None:

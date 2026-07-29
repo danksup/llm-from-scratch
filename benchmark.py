@@ -33,21 +33,20 @@ session_configs = {
     "context_size": CONTEXT_SIZE,
     "batch_size": BATCH_SIZE,
     "dataloader_strides":LOADER_STRIDE,
-    "optimizer":"adamw",
+    "optimizer":"sgd",
     "train_split":.9,
     "train_split":VAL,
     "optimizer_args":{
-        "lr": 1e-2,
-        "beta1":0.9,
-        "beta2":0.999,
-        "epsilon":1e-8,
-        "weight_decay":0.01,
-        "use_master": False,
+        "lr": 0.05,
+        # "beta1":0.9,
+        # "beta2":0.999,
+        # "epsilon":1e-8,
+        # "weight_decay":0.01,
+        "use_master": True,
         "scheduler": None,
         "min_lr": None,
     },
     "using":backend,
-    "save":True
 }
 
 model_configs = {

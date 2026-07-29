@@ -4,18 +4,6 @@ from typing import Any, Callable
 
 class AdamW:
     def __init__(self, lr=1e-3, beta1:float=0.9, beta2:float=0.999, epsilon:float=1e-8, weight_decay:float=0.01, use_master:bool=True, scheduler:None|Callable=None, min_lr:None | float= None) -> None:
-        """
-        m: first moment 
-            m = β_{1} * m + (1 - β_{1}) * gradient    \n
-        v: second moment 
-            v = β_{2} * v + (1 - β_{2}) * gradient^2  \n
-        bias correction:
-            m̂ = m / (1 - β_{1}ᵗ)   \n
-            v̂ = m / (1 - β_{2}ᵗ)   \n
-        parameter update:
-            w = w - lr * m̂ / (sqrt(v̂) + ε)
-        """
-        # self.memory = {}
         self.state = {}
         self.state["t"] = nx.array(0, dtype=nx.int32)
         self.init_lr = nx.float_32(lr)
@@ -32,7 +20,6 @@ class AdamW:
         self.schduler = scheduler
     
     def step_many(self, name_param_gradient:list[Any], train_contexts, batch_size, total_epoch) -> dict[Any,Any]:
-        #cosine decay: lr = min_lr + 0.5 * (max_lr - min_lr) * (1 + cos(pi * current_step / total_steps))
 
         if self.schduler:
             current_step = self.state["t"]
@@ -90,7 +77,7 @@ class AdamW:
         v = beta2 * v + (1.0 - beta2) * (grads**2)
         m_hat = m / (1.0 - beta1 ** t)
         v_hat = v / (1.0 - beta2 ** t)
-        params = params - lr * weight_decay * params
+        params = params * (1 - lr * weight_decay)
         params = params - lr * m_hat / (nx.sqrt(v_hat) + epsilon)
         return params, m, v, t
     
@@ -115,10 +102,8 @@ class AdamW:
             "weight_decay":self.weight_decay,
             "use_master":self.use_master,
             "scheduler":self.schduler,
-            "min_lr": None
+            "min_lr": self.min_lr
         }
-        if self.schduler:
-            adamw_configs["min_lr"] = self.min_lr
         adamw["adamw_configs"] = adamw_configs
         return adamw
 
@@ -145,4 +130,3 @@ class AdamW:
                 shape_copy["v"] = nx.array(value["v"], dtype=nx.float32)
                 adamw.state[key] = shape_copy
         return adamw
-

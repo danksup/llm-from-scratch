@@ -1,6 +1,7 @@
 from engine.tokenizer import Tokenizer
 import engine.backend as nx
 from typing import Any
+import math
 
 class DataLoader:
     def __init__(self,data:str, tokenizer:Tokenizer, context_size:int=16, train_split=0.9, stride=8) -> None:
@@ -11,6 +12,7 @@ class DataLoader:
             context_size: how much context is taken into computation at a time
             train_split: split contexts between training and validation
         '''
+        self.data_count = len(data)
         self.train_split = train_split
         self.tokens = tokenizer.encode(data)
         self.context_size = context_size
@@ -53,3 +55,15 @@ class DataLoader:
         shape = (num_windows,window_shape)
         strides = (stride,1)
         return nx.as_strided(x, shape, strides)
+    
+    def get_token_size(self):
+        return self.tokens.size
+
+    def get_pass_count(self, batch_size):
+        return math.ceil(((((self.tokens.size - (self.context_size + 1)) / self.stride) + 1) * self.train_split) / batch_size)
+    
+    def get_compression_rate(self):
+        corpus_len = self.data_count
+        token_size = self.tokens.size
+        ratio = ((corpus_len - token_size ) / corpus_len) * 100
+        return ratio

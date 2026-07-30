@@ -1,4 +1,14 @@
 import engine.backend as nx
+from typing import Any
 
-def cosine_decay(start, end, rate):
-    return end + 0.5 * (start - end) * (1 + nx.cos(nx.pi * rate))
+class CosineDecay:
+    def __init__(self, start, end) -> None:
+        self.start = start
+        self.end = end
+
+    def __repr__(self) -> str:
+        return "CosineDecay"
+
+    def __call__(self, progress) -> Any:
+        return self.end + 0.5 * (self.start - self.end) * (1 + nx.cos(nx.pi * progress))
+

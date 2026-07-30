@@ -9,7 +9,7 @@ class Adam:
         self.lr = self.__adamw.lr
         self.epsilon = self.__adamw.epsilon
         self.use_master = self.__adamw.use_master
-        self.schduler = self.__adamw.schduler
+        self.schduler = self.__adamw.scheduler
         self.min_lr = self.__adamw.min_lr
 
     def step_many(self, name_param_gradient:list[Any], train_contexts, batch_size, total_epoch) -> dict[Any,Any]:
@@ -29,7 +29,7 @@ class Adam:
         beta2 = adamw.beta2
         epsilon = adamw.epsilon
         use_master = adamw.use_master
-        scheduler = adamw.schduler
+        scheduler = adamw.scheduler
         min_lr = adamw.min_lr
         adam = cls(lr=lr, beta1=beta1, beta2=beta2, epsilon=epsilon, use_master=use_master, scheduler=scheduler, min_lr=min_lr)
 

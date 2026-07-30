@@ -16,9 +16,14 @@ class SGD:
         self.momentum = nx.float_32(momentum)
         self.weight_decay = nx.float_32(weight_decay)
         self.dampening = nx.float_32(dampening)
+        self.scheduler = scheduler
         if scheduler:
-            if  min_lr and min_lr > lr:
-                raise ValueError("min lr cant be bigger than init lr")
+            self.schedule = scheduler(self.init_lr, min_lr)
+            if min_lr is not None:
+                if min_lr > lr:
+                    raise ValueError("min lr cant be bigger than init lr")
+                if isinstance(min_lr, float):
+                    self.min_lr = nx.float_32(min_lr)
         if use_master:
             self.masters = {}
         self.scheduler = scheduler
@@ -28,10 +33,10 @@ class SGD:
     
     def step_many(self, name_param_gradient:list[Any], train_contexts, batch_size, total_epoch):
         if self.scheduler:
-            current_step = self.t
+            current_step = self.state["t"]
             total_step = ((len(train_contexts)) // batch_size) * total_epoch
             progress = min(1, current_step / total_step) 
-            self.lr = self.scheduler(self.init_lr, self.min_lr, progress)
+            self.lr = self.schedule(progress)
 
         self.t += 1
 
@@ -96,13 +101,16 @@ class SGD:
         sgd = {
             "t":self.t.item(),
             "lr": self.init_lr,
-            "momentum":self.momentum,
+            "momentum":self.momentum.item(),
             "min_lr": self.min_lr,
-            "weight_decay":self.weight_decay,
-            "dampening":self.dampening,
+            "weight_decay":self.weight_decay.item(),
+            "dampening":self.dampening.item(),
             "scheduler":self.scheduler,
             "use_master":self.use_master
         }
+        if self.min_lr is not None and hasattr(self.min_lr, "dtype"):
+            sgd["min_lr"] = self.min_lr.item() #type:ignore
+
         if self.use_master:
             master_copy = {}
             for key, val in self.masters.items():

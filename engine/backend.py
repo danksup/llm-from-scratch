@@ -5,11 +5,7 @@
 
 from typing import Any, Union,Literal
 import os
-import mlx.core as mx
-import numpy as np
-ArrayLike = Union[mx.array, np.ndarray]
 backend = os.environ.get("BACKEND", "auto").lower()
-rng = np.random.default_rng()
 
 if backend == "auto":
     try:
@@ -18,13 +14,16 @@ if backend == "auto":
     except ImportError:
         import numpy as _nx
         backend = "NumPy"
+        rng = _nx.random.default_rng()
 elif backend == "mlx":
     import mlx.core as _nx
     backend = "MLX"
 else:
     import numpy as _nx
     backend = "NumPy"
+    rng = _nx.random.default_rng()
 
+ArrayLike = Any
 e = _nx.e
 inf = _nx.inf
 nan = _nx.nan
@@ -88,19 +87,35 @@ def add_at(a:Any, idx:Any, values:Any) -> Any:
     return a
 
 def unique(a:ArrayLike, return_counts:bool=False ) -> Any:
-    unique_array =  np.unique(a, return_counts=return_counts)
+    """
+    note: always flatten
+    """
     if backend == "MLX":
+        flatten:list = _nx.sort(a.reshape(-1)).tolist() #type:ignore
+        unique_arr = []
+        counts = []
+        
+        for i in flatten:
+            if not unique_arr or i != unique_arr[-1]:
+                unique_arr.append(i)
+                counts.append(1)
+            else:
+                counts[-1] += 1
+        
+        unique_arr = _nx.array(unique_arr, dtype=a.dtype)
+        counts = _nx.array(counts, dtype=int32)
         if return_counts:
-            return(_nx.array(unique_array[0]), _nx.array(unique_array[1]))
-        return mx.array(unique_array)
+            return (unique_arr,counts)
+        return unique_arr
+    unique_array =  _nx.unique(a, return_counts=return_counts)
     return unique_array
 
 def zeros_like( a:ArrayLike, dtype=None) -> ArrayLike:
-    if dtype is None:
-        dtype = _nx.float32
+    if dtype is not None and dtype != a.dtype:
+        a = a.astype(dtype)
     if backend == "MLX":
-        a = _nx.array(a, dtype=dtype)
-    return _nx.zeros_like(a)
+        return _nx.zeros_like(a)
+    return _nx.zeros_like(a, dtype=dtype)
 
 def zeros(size:Any, dtype=None) -> ArrayLike:
     if dtype is None:
@@ -108,11 +123,13 @@ def zeros(size:Any, dtype=None) -> ArrayLike:
     return _nx.zeros(size, dtype=dtype)
 
 def ones_like( a:ArrayLike, dtype=None) -> ArrayLike:
-    if dtype is None:
-        dtype = _nx.float32
+    if dtype is not None and dtype != a.dtype:
+        a = a.astype(dtype)
+    if backend == "MLX":
+        return _nx.ones_like(a)
     return _nx.ones_like(a, dtype=dtype)
 
-def ones( size:Any, dtype=None) -> ArrayLike:
+def ones(size:Any, dtype=None) -> ArrayLike:
     if dtype is None:
         dtype = _nx.float32
     return _nx.ones(size, dtype=dtype)
@@ -135,12 +152,10 @@ def exp(x:ArrayLike, dtype=None) -> ArrayLike:
     return _nx.exp(x)
 
 def clip( a:Any, a_min:Any, a_max:Any, dtype:Any=None) -> ArrayLike:
-    if dtype is None: 
-        dtype = a.dtype
+    if dtype is not None and dtype != a.dtype:
+        a = a.astype(dtype)
     if backend == "MLX":
-        a_min = _nx.array(a_min, dtype=dtype)
-        a_max = _nx.array(a_max, dtype=dtype)
-        return _nx.clip(a,a_min, a_max)
+        return _nx.clip(a, a_min, a_max)
     return _nx.clip(a,a_min, a_max,dtype=dtype)
 
 def log(x:ArrayLike, *,axis=None, keepdims:bool=False,dtype=None) -> ArrayLike:
@@ -319,7 +334,6 @@ def compile( fn=None):
 def clear_cache():
     if backend == "MLX":
         _nx.clear_cache()
-    pass
 
 def repeat(a, repeats:int, axis:int=None):
     return _nx.repeat(a,repeats, axis=axis)
@@ -342,7 +356,7 @@ def pad(a:ArrayLike, pad_width:int| tuple[int]| tuple[int,int]|list[tuple[int,in
     return _nx.pad(a, pad_width=pad_width, mode=mode, constant_values=constant_value)
 
 def split(a:ArrayLike,indices_or_sections, axis=None)-> list[ArrayLike]:
-    return _nx.split(a, indices_or_sections, axis=None) #type:ignore
+    return _nx.split(a, indices_or_sections, axis=axis) #type:ignore
 
 def ceil(a):
     return _nx.ceil(a)

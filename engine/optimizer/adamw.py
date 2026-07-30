@@ -1,10 +1,9 @@
 import engine.backend as nx
-import engine.scheduler as scheduler
 from typing import Any, Callable
 
 class AdamW:
     def __init__(self, lr=1e-3, beta1:float=0.9, beta2:float=0.999, epsilon:float=1e-8, weight_decay:float=0.01, use_master:bool=True, scheduler:None|Callable=None, min_lr:None | float= None) -> None:
-        assert lr > 0, "lr must be non-negative"
+        assert lr >= 0, "lr must be non-negative"
         assert beta1 >= 0 and beta1 < 1, "allowed beta1 range: [0,1)"
         assert beta2 >= 0 and beta2 < 1, "allowed beta2 range: [0,1)"
         assert weight_decay >= 0, "weight_decay must be non-negative"
@@ -14,24 +13,28 @@ class AdamW:
         self.init_lr = nx.float_32(lr)
         self.lr = nx.float_32(lr)
         self.min_lr = min_lr
+        self.scheduler = scheduler
         if scheduler:
-            if  min_lr and min_lr > lr:
-                raise ValueError("min lr cant be bigger than init lr")
+            self.schedule = scheduler(self.init_lr, min_lr)
+            if min_lr is not None:
+                if min_lr > lr:
+                    raise ValueError("min lr cant be bigger than init lr")
+                if isinstance(min_lr, float):
+                    self.min_lr = nx.float_32(min_lr)
         self.beta1 = nx.float_32(beta1)
         self.beta2 = nx.float_32(beta2)
        
         self.epsilon = nx.float_32(epsilon)
         self.weight_decay = nx.float_32(weight_decay)
         self.use_master = use_master
-        self.schduler = scheduler
     
     def step_many(self, name_param_gradient:list[Any], train_contexts, batch_size, total_epoch) -> dict[Any,Any]:
 
-        if self.schduler:
+        if self.scheduler:
             current_step = self.state["t"]
             total_step = ((len(train_contexts)) // batch_size) * total_epoch
             progress = min(1, current_step / total_step) 
-            self.lr = self.schduler(self.init_lr, self.min_lr, progress)
+            self.lr = self.schedule(progress)
 
         self.state["t"] += 1
 
@@ -101,15 +104,18 @@ class AdamW:
                 adamw[key] = shape_copy
 
         adamw_configs = {
-            "lr": self.init_lr,
-            "beta1": self.beta1,
-            "beta2": self.beta2,
-            "epsilon": self.epsilon,
-            "weight_decay":self.weight_decay,
+            "lr": self.init_lr.item(),
+            "beta1": self.beta1.item(),
+            "beta2": self.beta2.item(),
+            "epsilon": self.epsilon.item(),
+            "weight_decay":self.weight_decay.item(),
             "use_master":self.use_master,
-            "scheduler":self.schduler,
+            "scheduler":self.scheduler,
             "min_lr": self.min_lr
         }
+        if self.min_lr is not None and hasattr(self.min_lr, "dtype"):
+            adamw_configs["min_lr"] = self.min_lr.item() #type:ignore
+
         adamw["adamw_configs"] = adamw_configs
         return adamw
 

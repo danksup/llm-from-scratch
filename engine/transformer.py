@@ -29,6 +29,7 @@ class Transformer:
         self.dtype = configs.get("dtype", nx.float32)
         self.embedding = Embedding(self.vocab_size, self.embed_dim, self.dtype)
         self.gradient_scale = configs.get("gradient_scale", 4096)
+        assert self.gradient_scale > 0, "gradient scale cant be less than 1"
         block_configs =  default_block_configs | configs.get("block_configs", {})
 
         if blocks is None:

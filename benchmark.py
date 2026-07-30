@@ -2,18 +2,18 @@ import os
 backend = os.environ["BACKEND"] = "auto"
 import random
 # import mlx.core as mx
-EMBED_DIM = 128
+EMBED_DIM = 256
 CONTEXT_SIZE = 256
-BATCH_SIZE = 64
-BASE_WIDTH = 1024#4 * EMBED_DIM 
-N_HEADS = EMBED_DIM // 8
-N_KV_HEADS = N_HEADS // 2
-N_EXPERTS = 32
+BATCH_SIZE = 128
+BASE_WIDTH = 2048#4 * EMBED_DIM 
+N_HEADS = 32
+N_KV_HEADS = N_HEADS // 4
+N_EXPERTS = 24
 CF = 1.25
 VAL = .9
 TOP_K = 2
 LOADER_STRIDE = CONTEXT_SIZE // 2
-WINDOWS = CONTEXT_SIZE // 8
+WINDOWS = CONTEXT_SIZE // 4
 
 from pathlib import Path
 import time
@@ -33,30 +33,26 @@ session_configs = {
     "context_size": CONTEXT_SIZE,
     "batch_size": BATCH_SIZE,
     "dataloader_strides":LOADER_STRIDE,
-    "optimizer":"sgd",
-    "train_split":.9,
+    "optimizer":"adamw",
     "train_split":VAL,
     "optimizer_args":{
-        "lr": 0.05,
-        # "beta1":0.9,
-        # "beta2":0.999,
-        # "epsilon":1e-8,
-        # "weight_decay":0.01,
-        "use_master": True,
+        "lr": 5e-3,
+        "use_master": False,
         "scheduler": None,
         "min_lr": None,
     },
     "using":backend,
+    "save":True
 }
 
 model_configs = {
-    "n_blocks":4,
+    "n_blocks":5,
     "embed_dim":EMBED_DIM,
     "dtype": nx.float16,
-    "gradient_scale":4096,
-    "block_configs":{"ff_hidden_width": BASE_WIDTH,"ff_n_experts":N_EXPERTS,"ff_topk":2,"ff_cf":CF,"attn_n_heads":N_HEADS,"attn_n_kv_heads":N_KV_HEADS, "attn_windows":WINDOWS},
+    "gradient_scale":1024,
+    "block_configs":{"ff_hidden_width": BASE_WIDTH,"ff_n_experts":N_EXPERTS,"ff_topk":TOP_K,"ff_cf":CF,"attn_n_heads":N_HEADS,"attn_n_kv_heads":N_KV_HEADS, "attn_windows":WINDOWS},
     "block_overrides":{
-        0: {"attn_windows":CONTEXT_SIZE},2:{"ff_n_experts": N_EXPERTS//2},3:{"ff_n_experts": N_EXPERTS//3}
+        0: {"attn_windows":CONTEXT_SIZE}, 2:{"ff_n_experts": N_EXPERTS//2},3:{"ff_n_experts": N_EXPERTS//2}, 4:{"ff_n_experts": N_EXPERTS//4}
     }
 }
 
@@ -97,7 +93,7 @@ session1 = Session(transformer, tokenizer1, True, session_configs)
 # profiler.enable()
 start = time.perf_counter()
 # mx.metal.start_capture("transformer.gputrace")
-session1.benchmark(dataloader, 10, 10)
+session1.benchmark(dataloader, 38, 10)
 end = time.perf_counter()
 # mx.metal.stop_capture()
 print(f"benchmarking finished. time: {end - start:.3f}s")

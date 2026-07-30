@@ -33,8 +33,8 @@ from engine.transformer import Transformer
 from engine.tokenizer import Tokenizer
 from engine.dataloader import DataLoader
 from engine.sessions import Session
-from engine.scheduler.cosine_decay import CosineDecay
-from engine.scheduler.linear_schedule import LinearSchedule
+from engine.optimizer.scheduler.cosine_decay import CosineDecay
+from engine.optimizer.scheduler.linear_schedule import LinearSchedule
 import engine.backend as nx
 
 from helper.singleton import init_corpus
@@ -49,7 +49,7 @@ session_configs = {
     "optimizer_args":{
         "lr": 5e-3,
         "use_master": False,
-        "scheduler": CosineDecay,
+        "scheduler": "cosine_decay",
         "min_lr": 5e-4,
     },
     "using":backend,
@@ -60,7 +60,7 @@ model_configs = {
     "n_blocks":5,
     "embed_dim":EMBED_DIM,
     "dtype": nx.float16,
-    "gradient_scale":1024,
+    "gradient_scale":2048,
     "block_configs":{"ff_hidden_width": BASE_WIDTH,"ff_n_experts":N_EXPERTS,"ff_topk":TOP_K,"ff_cf":CF,"attn_n_heads":N_HEADS,"attn_n_kv_heads":N_KV_HEADS, "attn_windows":WINDOWS},
     "block_overrides":{
         0: {"attn_windows":CONTEXT_SIZE}, 2:{"ff_n_experts": N_EXPERTS//2},3:{"ff_n_experts": N_EXPERTS//2}, 4:{"ff_n_experts": N_EXPERTS//4}

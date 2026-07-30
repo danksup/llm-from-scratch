@@ -2,15 +2,17 @@ from engine.transformer import Transformer
 from engine.tokenizer import Tokenizer
 from engine.dataloader import DataLoader
 from engine.activations import softmax
-from engine.optimizer.adamw import AdamW
-from engine.optimizer.adam import Adam
-from engine.optimizer.sgd import SGD
+import engine.optimizer as optim
+import engine.optimizer.scheduler as scheduler
 import engine.backend as nx
 from typing import Any,Union
 import time
 import pickle
 import numpy as np
-import gc
+import copy
+
+optimizers = Union[optim.Adam, optim.AdamW, optim.SGD]
+OPTIMIZER_TYPES = (optim.Adam,optim.AdamW,optim.SGD,)
 
 DEFAULT_CONFIGS = {
     "epochs": 100,
@@ -21,9 +23,14 @@ DEFAULT_CONFIGS = {
 }
 
 OPTIMIZERS = {
-    "sgd": SGD,
-    "adamw": AdamW,
-    "adam": Adam,
+    "sgd": optim.SGD,
+    "adamw": optim.AdamW,
+    "adam": optim.Adam
+}
+
+SCHEDULER = {
+    "cosine_decay": scheduler.CosineDecay,
+    "linear_schedule":scheduler.LinearSchedule
 }
 
 DEFAULT_OPTIMIZER_ARGS = {
@@ -58,7 +65,7 @@ DEFAULT_OPTIMIZER_ARGS = {
 }
 
 class Session:
-    def __init__(self, transformer:Transformer, tokenizer:Tokenizer, init_optimizer:bool | AdamW = True, configs:dict | None = None):
+    def __init__(self, transformer:Transformer, tokenizer:Tokenizer, init_optimizer:bool | optimizers = True, configs:dict | None = None):
         self.transformer = transformer
         self.tokenizer = tokenizer
 
@@ -67,22 +74,31 @@ class Session:
 
         self.configs = DEFAULT_CONFIGS | configs
         config_optimizer = self.configs["optimizer"].lower()
-        assert config_optimizer in OPTIMIZERS, f"invalid optimizers \"{config_optimizer}\". choose between {", ".join(OPTIMIZERS.keys())}"
+        assert config_optimizer in OPTIMIZERS, f"invalid optimizer \"{config_optimizer}\". valid optimizers: {", ".join(OPTIMIZERS.keys())}"
         self.configs["optimizer_args"] = DEFAULT_OPTIMIZER_ARGS[config_optimizer] | configs.get("optimizer_args", {})
+        self.configs_str = copy.deepcopy(self.configs)
 
         if isinstance(init_optimizer, bool) and init_optimizer: 
             optimizer_class = OPTIMIZERS[self.configs["optimizer"]]
-            if self.configs["optimizer_args"]["scheduler"] and not self.configs["optimizer_args"]["min_lr"]:
-                self.configs["optimizer_args"]["min_lr"] = self.configs["optimizer_args"]["lr"] / 1e2
-            if not self.configs["optimizer_args"]["scheduler"]:
+            schedule = self.configs["optimizer_args"]["scheduler"]
+            if schedule is not None:
+                if isinstance(schedule, str):
+                    if schedule not in SCHEDULER:
+                        raise ValueError(f"invalid scheduler. valid schedulers: {", ".join(SCHEDULER.keys())}")
+                    self.configs["optimizer_args"]["scheduler"] = SCHEDULER[schedule]
+                
+                if self.configs["optimizer_args"]["min_lr"] is None:
+                    self.configs["optimizer_args"]["min_lr"] = self.configs["optimizer_args"]["lr"] / 1e2
+                    self.configs_str["optimizer_args"]["min_lr"] = self.configs["optimizer_args"]["lr"] / 1e2
+            else: 
                 self.configs["optimizer_args"].pop("min_lr")
             self.optimizer = optimizer_class(**self.configs["optimizer_args"])
-        elif isinstance(init_optimizer, (AdamW, Adam, SGD)):
+        elif isinstance(init_optimizer, OPTIMIZER_TYPES):
             self.optimizer = init_optimizer
-    
+
     def __str__(self) -> str:
         t_mess = f"param: {self.count_params()} \n"
-        for key,val in self.configs.items():
+        for key,val in self.configs_str.items():
             t_mess += f"{key}: {val}\n"
         t_mess += self.transformer.get_configs_str()
         return t_mess
@@ -123,7 +139,7 @@ class Session:
         print(t_mess)     
         for i in range(epoch):
             start_per = time.perf_counter()
-            bench_loss, loss_times, backward_times, network_optimizer_times, total_histograms, histogram_loss = self.transformer.benchmark(dataloader, self.optimizer, batch_size=self.configs["batch_size"], pass_=_pass)
+            bench_loss, loss_times, backward_times, network_optimizer_times, total_histograms, histogram_loss = self.transformer.benchmark(dataloader, self.optimizer, batch_size=self.configs["batch_size"], pass_=_pass) #type:ignore
             end_per = time.perf_counter()
             print("loss ",bench_loss)
             print("weighted router loss ",histogram_loss)
@@ -149,7 +165,7 @@ class Session:
         """
         if display_message:
             print("[training]")
-            print(self)       
+            print(self)   
         epoch = 0
         checkpoint = None
         try:
@@ -161,7 +177,7 @@ class Session:
                 epoch = i
                 start = time.perf_counter()
                 assert self.optimizer, "optimizer doesnt exist"
-                error, total_histograms, batch_count = self.transformer.train(dataloader, self.optimizer, self.configs["epochs"], batch_size=self.configs["batch_size"])
+                error, total_histograms, batch_count = self.transformer.train(dataloader, self.optimizer, self.configs["epochs"], batch_size=self.configs["batch_size"]) #type:ignore
                 val_loss = self.validation(dataloader)
                 end = time.perf_counter()   
                 time_ = end-start

@@ -48,7 +48,8 @@ logs:
 - MoE top k jul 15 2026
 - sliding windows attention jul 17 2026
 - jul 18 - jul 25: optimizing, fixed mix precision
-- reverts back to non sliding attention jul 26 
+- ~~reverts back to non sliding attention jul 26~~
+- exposing more apis jul 27 - jul30
 
 ## Ongoing:
 - optimizing attention (backward mainly)

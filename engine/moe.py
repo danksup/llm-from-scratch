@@ -3,10 +3,11 @@ from engine.activations import softmax, softmax_derivative
 from engine.activations import swish,swish_derivative
 import time
 import math
-from typing import Any
+from typing import Any, Callable
+import engine.initializers as initializer
 
 class MoE:
-    def __init__(self, capacity_factor, top_k, n_experts, embed_dim, hidden_width, dtype:Any=nx.float16) -> None:
+    def __init__(self, capacity_factor, top_k, n_experts, embed_dim, hidden_width, dtype:Any=nx.float16, initializer:Callable=initializer.glorot_uniform) -> None:
         self.hidden_width = hidden_width 
         self.embed_dim = embed_dim #D
         self.n_experts = n_experts #E
@@ -14,15 +15,15 @@ class MoE:
         self.top_k = top_k
         self.dtype = dtype
 
-        init = nx.sqrt(6 / (n_experts + embed_dim), dtype=nx.float32) 
-        self.router = nx.uniform(-init,init,(self.embed_dim, self.n_experts), dtype=init.dtype)
+        router_shape = embed_dim, n_experts
+        self.router = initializer(router_shape, dtype= nx.float32)
         self.d_router = None
 
-        combined_init = nx.sqrt(6 / (2*hidden_width + embed_dim), dtype=dtype)
-        self.Wcombined = nx.uniform(-combined_init,combined_init, (n_experts, hidden_width * 2, embed_dim),dtype=dtype)
+        wcombined_shape =  (n_experts, embed_dim, hidden_width * 2)
+        self.Wcombined = initializer(wcombined_shape, dtype=dtype)
 
-        out_init = nx.sqrt(6 / (embed_dim + hidden_width), dtype=dtype)
-        self.Wout = nx.uniform(-out_init,out_init, (n_experts, hidden_width, embed_dim), dtype=dtype)
+        wout_shape =  (n_experts, hidden_width, embed_dim)
+        self.Wout = initializer(wout_shape, dtype = dtype)
 
         self.dWcombined = None
         self.dWout = None
@@ -79,7 +80,7 @@ class MoE:
         # end = time.perf_counter()
         # print(f"gate {end-start}")
 
-        projected = expert_input @ Wcombined.transpose(0,2,1) #(E, capacity, 2H)
+        projected = expert_input @ Wcombined #(E, capacity, 2H)
         gate_half = projected[..., :H]
         value_half = projected[..., H:]
         s = swish(gate_half, x.dtype)
@@ -144,13 +145,13 @@ class MoE:
 
         # start = time.perf_counter()
         #expertinput = (E, C, D)
-        dWcombined = d_projected.transpose(0, 2, 1) @ expert_input #(E, 2H, D) fp16
+        dWcombined = expert_input.transpose(0, 2, 1) @ d_projected #(E,D,2H) fp16
         # nx.eval(dWcombined)
         # end = time.perf_counter()
         # print("dWcombined", end-start)
 
         # start = time.perf_counter()
-        d_expert_input = d_projected @ Wcombined #(E, C, D) fp16
+        d_expert_input = d_projected @ Wcombined.transpose(0,2,1) #(E, C, D) fp16
         # nx.eval(d_expert_input)
         # end = time.perf_counter()
         # print("d_expert_input", end-start)

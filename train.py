@@ -1,10 +1,8 @@
 import os
-import math
-import random
 
 backend = os.environ["BACKEND"] = "auto"
-EPOCHS = 50
-EMBED_DIM = 256
+EPOCHS = 2
+EMBED_DIM = 128
 CONTEXT_SIZE = 256
 BATCH_SIZE = 128
 BASE_WIDTH = 512#4 * EMBED_DIM 
@@ -33,8 +31,6 @@ from engine.transformer import Transformer
 from engine.tokenizer import Tokenizer
 from engine.dataloader import DataLoader
 from engine.sessions import Session
-from engine.optimizer.scheduler.cosine_decay import CosineDecay
-from engine.optimizer.scheduler.linear_schedule import LinearSchedule
 import engine.backend as nx
 
 from helper.singleton import init_corpus
@@ -47,13 +43,13 @@ session_configs = {
     "optimizer":"adamw",
     "train_split":VAL,
     "optimizer_args":{
-        "lr": 5e-3,
+        "lr": 1e-3,
         "use_master": False,
-        "scheduler": "cosine_decay",
-        "min_lr": 5e-4,
+        "scheduler": None,
+        "min_lr": None,
     },
     "using":backend,
-    "save":True
+    "save":False
 }
 
 model_configs = {
@@ -61,7 +57,17 @@ model_configs = {
     "embed_dim":EMBED_DIM,
     "dtype": nx.float16,
     "gradient_scale":2048,
-    "block_configs":{"ff_hidden_width": BASE_WIDTH,"ff_n_experts":N_EXPERTS,"ff_topk":TOP_K,"ff_cf":CF,"attn_n_heads":N_HEADS,"attn_n_kv_heads":N_KV_HEADS, "attn_windows":WINDOWS},
+    "block_configs":{
+        "ff_hidden_width": BASE_WIDTH,
+        "ff_n_experts":N_EXPERTS,
+        "ff_topk":TOP_K,
+        "ff_cf":CF,
+        "ff_init":"glorot_uniform",
+        "attn_n_heads":N_HEADS,
+        "attn_n_kv_heads":N_KV_HEADS,
+        "attn_windows":WINDOWS,
+        "attn_init":"glorot_uniform",
+        },
     "block_overrides":{
         0: {"attn_windows":CONTEXT_SIZE}, 2:{"ff_n_experts": N_EXPERTS//2},3:{"ff_n_experts": N_EXPERTS//2}, 4:{"ff_n_experts": N_EXPERTS//4}
     }
@@ -90,8 +96,6 @@ session_configs["max step"] = f"{max_pass} ({LOADER_STRIDE} strides)"
 
 session1 = Session(transformer, tokenizer1, True, session_configs)
 
-a = random.randint(1,9999999999999)
-a = str(a)
 start = time.perf_counter()
 session1.train(dataloader, display_message=True)
 end = time.perf_counter()

@@ -1,11 +1,12 @@
 import engine.backend as nx
 from engine.activations import softmax, softmax_derivative
 from engine.rope import rope_forward, rope_inverse
-from typing import Any
+from typing import Any, Callable
+import engine.initializers as initializer
 import time
 
 class AttentionLayerSWA:
-    def __init__(self,embed_dim:int, n_heads:int, n_kv_heads:int=-1, W=8, dtype:Any=nx.float16) -> None:
+    def __init__(self,embed_dim:int, n_heads:int, n_kv_heads:int=-1, W=8, dtype:Any=nx.float16, initializer:Callable=initializer.glorot_uniform) -> None:
         self.n_kv_heads = n_kv_heads
 
         if n_kv_heads < 0:
@@ -22,14 +23,11 @@ class AttentionLayerSWA:
 
         self.n_rep = self.n_heads // self.n_kv_heads 
 
-        fan_in = embed_dim
-        fan_out = embed_dim + 2 * n_kv_heads * self.head_dim
-        scale = nx.sqrt(6 / (fan_in + fan_out), dtype=dtype)
-        self.Wqkv = nx.uniform(-scale, scale, (embed_dim + 2 * n_kv_heads * self.head_dim, embed_dim), dtype=dtype) 
+        wqkv_shape = embed_dim + 2 * n_kv_heads * self.head_dim, embed_dim
+        self.Wqkv = initializer(wqkv_shape, dtype=dtype)
 
-        fan_out = embed_dim
-        scale = nx.sqrt(6 / (fan_in + fan_out))
-        self.Wo = nx.uniform(-scale,scale, (embed_dim,embed_dim), dtype=dtype) #projection
+        wo_shape = embed_dim,embed_dim
+        self.Wo = initializer(wo_shape, dtype=dtype)
         
         self.dWqkv = None
         self.dWo = None

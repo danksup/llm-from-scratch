@@ -409,3 +409,15 @@ def isfinite(a):
 def isinf(a):
     return _nx.isinf(a)
 
+def normal(loc=0.0, scale=1.0, size=None,*,dtype=None) -> Any:
+    if dtype is None:
+        dtype = _nx.float32
+
+    if backend == "NumPy":
+        if size is None:
+            return dtype(rng.normal(loc=loc, scale=scale,))
+        else:
+            return rng.normal(loc=loc, scale=scale, size=size).astype(dtype)
+    if size is None:
+        size = ()
+    return _nx.random.normal(loc=loc, scale=scale, shape=size, dtype=dtype)

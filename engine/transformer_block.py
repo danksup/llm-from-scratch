@@ -3,12 +3,13 @@ from engine.attention.attention_swa import AttentionLayerSWA
 from engine.rmsnorm import RMSNorm
 from engine.dropout import Dropout
 from engine.rope import precompute_freqs
+import engine.initializers as init
 import engine.backend as nx
 from typing import Any
 import time
 
 class TransformerBlock:
-    def __init__(self,embed_dim,ff_dim, n_heads, n_kv_heads, n_experts=1, cf=1.25, top_k =2, W=8, dtype=nx.float16) -> None:
+    def __init__(self,embed_dim,ff_dim, n_heads, n_kv_heads, n_experts=1, cf=1.25, top_k =2, W=8, dtype=nx.float16, attn_init=init.glorot_uniform, moe_init=init.glorot_uniform) -> None:
         self.causal_mask = None
         self.embed_dim = embed_dim
         self.hidden_width = ff_dim
@@ -25,8 +26,8 @@ class TransformerBlock:
         assert self.head_dim % 2 == 0, "head dim !% 2"
         self.freqs = precompute_freqs(self.head_dim, 16384)
 
-        self.attention = AttentionLayerSWA(embed_dim, n_heads, n_kv_heads, dtype=dtype)
-        self.ff = MoE(cf, top_k, n_experts, embed_dim, self.hidden_width, dtype=dtype)
+        self.attention = AttentionLayerSWA(embed_dim, n_heads, n_kv_heads, dtype=dtype, initializer=attn_init)
+        self.ff = MoE(cf, top_k, n_experts, embed_dim, self.hidden_width, dtype=dtype, initializer=moe_init)
         self.rmsnorm1 = RMSNorm(embed_dim)
         self.rmsnorm2 = RMSNorm(embed_dim)
 

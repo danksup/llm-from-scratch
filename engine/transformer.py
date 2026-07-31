@@ -3,6 +3,7 @@ from engine.embedding import Embedding
 from engine.dataloader import DataLoader
 from engine.optimizer.adamw import  AdamW
 from engine.transformer_block import TransformerBlock
+import engine.initializers as init
 import engine.backend as nx
 from typing import Any
 import time
@@ -13,9 +14,16 @@ default_block_configs = {
     "ff_n_experts":24,
     "ff_topk":2,
     "ff_cf":1.25,
+    "ff_init":"glorot_uniform",
     "attn_n_heads":16,
     "attn_n_kv_heads":4,
-    "attn_windows":32
+    "attn_windows":32,
+    "attn_init":"glorot_uniform",
+}
+
+INITIALIZERS = {
+    "glorot_normal": init.glorot_normal,
+    "glorot_uniform": init.glorot_uniform
 }
 
 class Transformer:
@@ -30,7 +38,8 @@ class Transformer:
         self.embedding = Embedding(self.vocab_size, self.embed_dim, self.dtype)
         self.gradient_scale = configs.get("gradient_scale", 4096)
         assert self.gradient_scale > 0, "gradient scale cant be less than 1"
-        block_configs =  default_block_configs | configs.get("block_configs", {})
+        self.block_configs =  default_block_configs | configs.get("block_configs", {})
+        self.individual_block_configs = []
 
         if blocks is None:
             n_blocks =  configs.get("n_blocks",4)
@@ -45,7 +54,8 @@ class Transformer:
 
             for i in range(n_blocks):
                 override = block_overrides.get(i, {})
-                overrided = block_configs | override
+                overrided = self.block_configs | override
+                self.individual_block_configs.append(overrided)
                 D = self.embed_dim
                 H = overrided["ff_hidden_width"]
                 n_heads = overrided["attn_n_heads"]
@@ -54,8 +64,10 @@ class Transformer:
                 CF = overrided["ff_cf"]
                 topk = overrided["ff_topk"]
                 W = overrided["attn_windows"]
+                attn_init = INITIALIZERS[overrided["attn_init"]]
+                ff_init = INITIALIZERS[overrided["ff_init"]]
 
-                transformer_block = TransformerBlock(D, H, n_heads, n_kv_heads, E, CF, topk, W, self.dtype)
+                transformer_block = TransformerBlock(D, H, n_heads, n_kv_heads, E, CF, topk, W, self.dtype, attn_init, ff_init)
                 self.blocks.append(transformer_block) 
         else:
             self.blocks = blocks
@@ -65,7 +77,10 @@ class Transformer:
             for i, block in enumerate(self.blocks):
                 if block.embed_dim != self.embed_dim:
                     raise ValueError(f"block {i} embed dimension of {block.embed_dim} does not match the transformer's embed dimension of {self.embed_dim}")
-            
+    
+    def __repr__(self) -> str:
+        return self.get_configs_str()
+
     @classmethod
     def build(cls, input_size:int, output_size:int, hidden_layer_size:int=1, base_width:int=512) -> "Transformer":
         '''
@@ -447,16 +462,17 @@ class Transformer:
         configs += f"vocab_size: {str(self.vocab_size)}" + "\n"
         configs += f"embed_dim: {str(self.embed_dim)}" + "\n"
         configs += f"gradient_scale: {str(self.gradient_scale)}" + "\n"
-        configs += "precision: float32" if self.dtype == nx.float32 else f"precision: mixed precision ({self.dtype})" 
-        configs += "\n"
+        configs += "precision: float32" if self.dtype == nx.float32 else f"precision: mixed precision ({self.dtype})\n" 
+        configs += f"block configs: {self.block_configs}\n"
+        configs += "individual block configs (only difference is shown): \n"
 
-        for i,block in enumerate(self.blocks):
-            H = block.hidden_width
-            n_heads = block.n_heads
-            Ne = block.n_experts
-            n_kv_heads = block.n_kv_heads
-            topk = block.ff.top_k
-            W = block.W
-            configs += f"block {i}: n_heads: {n_heads} | n_kv_heads: {n_kv_heads} | windows: {W} | n_experts: {Ne} | hidden_width: {H} | topk: {topk}\n"
-
+        for i, block in  enumerate(self.individual_block_configs):
+            if block == self.block_configs:
+                continue
+            ind_con = f"block {i}: "
+            for key, val in block.items():
+                if self.block_configs[key] != val:
+                    ind_con += f"{key}: {val} | "
+            ind_con += "\n"
+            configs += ind_con
         return configs

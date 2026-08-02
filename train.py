@@ -1,7 +1,7 @@
 import os
 
 backend = os.environ["BACKEND"] = "auto"
-EPOCHS = 2
+EPOCHS = 1
 EMBED_DIM = 128
 CONTEXT_SIZE = 256
 BATCH_SIZE = 128
@@ -63,13 +63,14 @@ model_configs = {
         "ff_topk":TOP_K,
         "ff_cf":CF,
         "ff_init":"glorot_uniform",
+        "attn_type":"swa",
         "attn_n_heads":N_HEADS,
         "attn_n_kv_heads":N_KV_HEADS,
         "attn_windows":WINDOWS,
         "attn_init":"glorot_uniform",
         },
     "block_overrides":{
-        0: {"attn_windows":CONTEXT_SIZE}, 2:{"ff_n_experts": N_EXPERTS//2},3:{"ff_n_experts": N_EXPERTS//2}, 4:{"ff_n_experts": N_EXPERTS//4}
+        0: {"attn_type":"full"}, 2:{"ff_n_experts": N_EXPERTS//2},3:{"ff_n_experts": N_EXPERTS//2}, 4:{"ff_n_experts": N_EXPERTS//4}
     }
 }
 

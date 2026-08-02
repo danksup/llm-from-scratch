@@ -1,39 +1,58 @@
 from engine.moe import MoE
-from engine.attention.attention_swa import AttentionLayerSWA
+import engine.attention as attn
 from engine.rmsnorm import RMSNorm
 from engine.dropout import Dropout
-from engine.rope import precompute_freqs
 import engine.initializers as init
 import engine.backend as nx
-from typing import Any
+from typing import Any, Union
+Attention = Union[attn.AttentionFull, attn.AttentionSWA]
 import time
 
+ATTN_TYPE = {
+    "swa": attn.AttentionSWA,
+    "full": attn.AttentionFull,
+}
+
 class TransformerBlock:
-    def __init__(self,embed_dim,ff_dim, n_heads, n_kv_heads, n_experts=1, cf=1.25, top_k =2, W=8, dtype=nx.float16, attn_init=init.glorot_uniform, moe_init=init.glorot_uniform) -> None:
+    def __init__(self ,embed_dim, attention:Attention, ff_dim, n_experts=1, cf=1.25, top_k =2, dtype=nx.float16, attn_init=init.glorot_uniform, moe_init=init.glorot_uniform) -> None:
         self.causal_mask = None
         self.embed_dim = embed_dim
         self.hidden_width = ff_dim
-        self.n_heads = n_heads
-        self.n_kv_heads = n_kv_heads
-        self.n_rep = self.n_heads // self.n_kv_heads 
-        self.W = W
-        assert embed_dim % n_heads == 0
-        self.head_dim = embed_dim // n_heads
         self.n_experts = n_experts
         self.cf = cf
         self.dtype = dtype
 
-        assert self.head_dim % 2 == 0, "head dim !% 2"
-        self.freqs = precompute_freqs(self.head_dim, 16384)
-
-        self.attention = AttentionLayerSWA(embed_dim, n_heads, n_kv_heads, dtype=dtype, initializer=attn_init)
+        self.attention = attention
+        self.attention_type = attention.self_type()
         self.ff = MoE(cf, top_k, n_experts, embed_dim, self.hidden_width, dtype=dtype, initializer=moe_init)
         self.rmsnorm1 = RMSNorm(embed_dim)
         self.rmsnorm2 = RMSNorm(embed_dim)
+    
+    def __repr__(self) -> str:
+        param_count = self.param_count()
+        this = {
+            "param_count":param_count,
+            "embed_dim":self.embed_dim,
+            "hidden_width":self.hidden_width,
+            "n_experts":self.n_experts,
+        }
+        # this_str = f""
+        return str(this)
+    
+    def param_count(self) -> int:
+        total = 0
+        total += self.ff.Wcombined.size
+        total += self.ff.Wout.size
+        total += self.ff.router.size
+        total += self.attention.Wqkv.size
+        total += self.attention.Wo.size
+        total += self.rmsnorm1.gamma.size
+        total += self.rmsnorm2.gamma.size
+        return total
 
     @staticmethod
     @nx.compile
-    def _forward(x, causal_mask:Any, embed_dim:int, n_heads:int, n_kv_heads, n_rep, head_dim:int, W, n_experts, cf, top_k:int,freqs:Any, Wqkv:Any, Wo:Any, Wcombined:Any,router, hidden_width:int, Wout:Any, epsilon:float, gamma1:Any, gamma2:Any, p:float, is_training:bool) -> tuple[Any, Any, Any, Any, Any]:
+    def _forward(x, causal_mask:Any, attention:str, attn_configs:tuple[Any,...], attn_params:tuple[Any,...], n_experts, cf, top_k:int, Wcombined:Any,router, hidden_width:int, Wout:Any, epsilon:float, gamma1:Any, gamma2:Any, p:float, is_training:bool) -> tuple[Any, Any, Any, Any, Any]:
         '''
         flow:
             input = x shape(B,T,D) -> rmsnorm(x) = rmsnorm_out -> attention(rmsnorm_out) + residual = attn_out
@@ -45,7 +64,7 @@ class TransformerBlock:
 
         rmsnorm1_out = rmsnorm1_out.astype(x.dtype) 
 
-        attn_out, caches_attn = AttentionLayerSWA._forward(rmsnorm1_out,causal_mask, embed_dim, n_kv_heads,n_heads, n_rep, head_dim, W, freqs, Wqkv, Wo,)
+        attn_out, caches_attn = ATTN_TYPE[attention]._forward(rmsnorm1_out, causal_mask, attn_configs, attn_params)
         # print("attn forward", attn_out.dtype)
 
         drop_attn_out, mask1 = Dropout._forward(attn_out, p,is_training)
@@ -73,7 +92,7 @@ class TransformerBlock:
 
     @staticmethod
     @nx.compile
-    def _backward(gradient:Any, mask1:Any, mask2:Any, p, caches_attn:tuple[Any,...], caches_ff:tuple[Any,...], caches_rmsnorm1:tuple[Any,...], caches_rmsnorm2:tuple[Any,...], attn_params:tuple[Any,...], gamma1:Any, gamma2:Any, ff_params:tuple, moe_configs) -> tuple[Any, Any, Any, Any, Any, Any, Any, Any]:
+    def _backward(gradient:Any, mask1:Any, mask2:Any, attention:str, p, caches_attn:tuple[Any,...], caches_ff:tuple[Any,...], caches_rmsnorm1:tuple[Any,...], caches_rmsnorm2:tuple[Any,...], attn_configs:tuple[Any,...], attn_params:tuple[Any,...], gamma1:Any, gamma2:Any, ff_params:tuple, moe_configs) -> tuple[Any, Any, Any, Any, Any, Any, Any, Any]:
         d_ff_drop = Dropout._backward(gradient, mask2, 0.1) #grad dtype
         dx_ff,  dWcombined, dWout, d_router = MoE.backward(d_ff_drop, caches_ff, moe_configs, ff_params) #out:fp32
         d_rmsn2,d_gamma2 = RMSNorm._backward(dx_ff, caches_rmsnorm2 ,gamma2)
@@ -82,7 +101,7 @@ class TransformerBlock:
         d_attn_out = d_attn_out.astype(gradient.dtype)
         d_attn_drop = Dropout._backward(d_attn_out, mask1, p)
         # print("d_attn_drop", d_attn_drop.dtype)
-        d_attn, dWqkv, dWo = AttentionLayerSWA._backward(d_attn_drop, caches_attn, attn_params)
+        d_attn, dWqkv, dWo = ATTN_TYPE[attention]._backward(d_attn_drop, caches_attn, attn_configs, attn_params)
         # print("d_attn", d_attn.dtype)
 
         d_attn = d_attn.astype(nx.float32) #type:ignore
@@ -96,7 +115,7 @@ class TransformerBlock:
         rmsnorm1_out, _ = RMSNorm._forward(x, self.rmsnorm1.gamma, self.rmsnorm1.epsilon)
         x = x.astype(x.dtype)
 
-        attn_out, cached_k, cached_v = self.attention.inference_forward(rmsnorm1_out,max_cache_len, self.freqs, cached_k, cached_v, position)
+        attn_out, cached_k, cached_v = self.attention.inference_forward(rmsnorm1_out,max_cache_len, self.attention.freqs, cached_k, cached_v, position)
         attn_out = attn_out + x
 
         rmsnorm2_out, _ = RMSNorm._forward(attn_out, self.rmsnorm2.gamma, self.rmsnorm2.epsilon)
@@ -111,10 +130,8 @@ class TransformerBlock:
             "block_configs": {
                 "cf":self.cf,
                 "n_experts" :self.n_experts,
-                "n_heads": self.n_heads,
                 "hidden_width":self.hidden_width,
                 "embed_dim":self.embed_dim,
-                "n_kv_heads": self.n_kv_heads,
                 "dtype": nx.dtype_to_srt[self.dtype]
             },
             "attention":self.attention.to_dict(),
@@ -127,7 +144,7 @@ class TransformerBlock:
     def from_dict(cls,thing:dict) -> "TransformerBlock":
         configs = thing["block_configs"]
         transformer_block = cls(configs["embed_dim"], configs["hidden_width"], configs["n_heads"], configs["n_kv_heads"], configs["n_experts"],configs["cf"], dtype = nx.str_to_dtype[configs["dtype"]])
-        transformer_block.attention = AttentionLayerSWA.from_dict(thing["attention"])
+        # transformer_block.attention = transformer_block.attention.from_dict(thing["attention"])
         transformer_block.ff = MoE.from_dict(thing["ff"])
         transformer_block.rmsnorm1 = RMSNorm.from_dict(thing["rmsnorm1"])
         transformer_block.rmsnorm2 = RMSNorm.from_dict(thing["rmsnorm2"])

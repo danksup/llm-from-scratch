@@ -3,9 +3,10 @@ from engine.activations import softmax, softmax_derivative
 from engine.rope import rope_forward, rope_inverse
 from typing import Any, Callable
 import engine.initializers as initializer
+from engine.rope import precompute_freqs
 
-class AttentionLayer:
-    def __init__(self,embed_dim:int, n_heads:int, n_kv_heads:int=-1, W=8, dtype:Any=nx.float16,  initializer:Callable=initializer.glorot_uniform) -> None:
+class AttentionFull:
+    def __init__(self,embed_dim:int, n_heads:int, n_kv_heads:int=-1,  dtype:Any=nx.float16,  initializer:Callable=initializer.glorot_uniform) -> None:
         self.n_kv_heads = n_kv_heads
 
         if n_kv_heads < 0:
@@ -21,6 +22,10 @@ class AttentionLayer:
         
         self.n_rep = self.n_heads // self.n_kv_heads 
 
+        self.freqs = precompute_freqs(self.head_dim, 16384)
+
+        self.configs = self.embed_dim, self.n_kv_heads, self.n_heads, self.n_rep, self.head_dim, self.freqs
+
         wqkv_shape = embed_dim + 2 * n_kv_heads * self.head_dim, embed_dim
         self.Wqkv = initializer(wqkv_shape, dtype=dtype)
 
@@ -30,11 +35,29 @@ class AttentionLayer:
         self.dWqkv = None
         self.dWo = None
 
+
     @staticmethod
-    def _forward(x:nx.ArrayLike, causal_mask:nx.ArrayLike, embed_dim:int, n_kv_heads:int, n_heads:int, n_rep:int, head_dim:int, freqs:Any, Wqkv:nx.ArrayLike, Wo:nx.ArrayLike) -> tuple[nx.ArrayLike, tuple[nx.ArrayLike,...]]:
+    def self_type() -> str:
+        return "full"
+
+    @classmethod
+    def multihead(cls, D, n_heads, dtype, initializer):
+        mha = cls(D, n_heads=n_heads, n_kv_heads=n_heads, dtype=dtype, initializer=initializer)
+        return mha
+
+    @classmethod
+    def multiquery(cls, D, n_heads, dtype, initializer):
+        mqa = cls(D, n_heads=n_heads, n_kv_heads=1, dtype=dtype, initializer=initializer)
+        return mqa
+
+    @staticmethod
+    def _forward(x:nx.ArrayLike, causal_mask:nx.ArrayLike,  attn_configs:tuple[Any,...], attn_params: tuple[Any,...]) -> tuple[nx.ArrayLike, tuple[nx.ArrayLike,...]]:
         #fp_16_x shape = (B,T,D)
         #Wqkv.T (D, D + 2 * n_kv_heads * H)
         #combined (B, T, D + 2 * n_kv_heads * H)
+        embed_dim, n_kv_heads, n_heads, n_rep, head_dim, freqs = attn_configs
+        Wqkv, Wo = attn_params
+
         combined =  x @ Wqkv.T  # dtype
 
         Q = combined[..., :embed_dim] #(B, T, D)
@@ -68,9 +91,10 @@ class AttentionLayer:
         return output_projected, cache
     
     @staticmethod
-    def _backward(gradient:nx.ArrayLike, caches:tuple[Any,...], attn_params: tuple[Any,...]) -> tuple[nx.ArrayLike,...]:
+    def _backward(gradient:nx.ArrayLike, caches:tuple[Any,...], attn_configs:tuple[Any,...], attn_params: tuple[Any,...]) -> tuple[nx.ArrayLike,...]:
         x, Q, K, V, weights, output_concat = caches
-        n_heads, head_dim, embed_dim, n_kv_heads, n_rep, Wo, freqs, Wqkv = attn_params
+        embed_dim, n_kv_heads, n_heads, n_rep, head_dim, freqs = attn_configs
+        Wqkv, Wo = attn_params
 
         B, T, _ = x.shape
         d_output_concat = gradient @ Wo.T #B,T,D
@@ -175,7 +199,7 @@ class AttentionLayer:
         }
     
     @classmethod
-    def from_dict(cls,thing) -> "AttentionLayer":
+    def from_dict(cls,thing) -> "AttentionFull":
         embed_dim = thing["embed_dim"]
         n_kv_heads = thing["n_kv_heads"]
         n_heads = thing["n_heads"]

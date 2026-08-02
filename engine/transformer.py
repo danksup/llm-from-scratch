@@ -3,11 +3,13 @@ from engine.embedding import Embedding
 from engine.dataloader import DataLoader
 from engine.optimizer.adamw import  AdamW
 from engine.transformer_block import TransformerBlock
+import engine.attention as attn
 import engine.initializers as init
 import engine.backend as nx
 from typing import Any
 import time
 LAMBDA = 1e-2
+import copy
 
 default_block_configs = {
     "ff_hidden_width": 1024,
@@ -15,10 +17,21 @@ default_block_configs = {
     "ff_topk":2,
     "ff_cf":1.25,
     "ff_init":"glorot_uniform",
+    "attn_type":"swa",
+    "attn_variant":"gqa",
     "attn_n_heads":16,
-    "attn_n_kv_heads":4,
-    "attn_windows":32,
     "attn_init":"glorot_uniform",
+}
+
+ATTN_TYPE = {
+    "swa": {"attn": attn.AttentionSWA, "attn_windows":32},
+    "full": {"attn":attn.AttentionFull,},
+}
+
+ATTN_VARIANT = {
+    "gqa": {"attn_n_kv_heads":default_block_configs["attn_n_heads"]//2},
+    "mqa":{},
+    "mha":{}
 }
 
 INITIALIZERS = {
@@ -48,26 +61,58 @@ class Transformer:
                 for value in block_overrides.values():
                     if "dtype" in value:
                         raise ValueError('individual block config cant have dtype.')
-                    for config in value:
-                        if config not in default_block_configs:
-                            raise ValueError(f"{config} is invalid. valid override: {", ".join(default_block_configs.keys())}")
-
+                   
             for i in range(n_blocks):
                 override = block_overrides.get(i, {})
-                overrided = self.block_configs | override
+                this = self.block_configs
+                overrided = this | override
+                check = default_block_configs | ATTN_TYPE[this["attn_type"]] | ATTN_VARIANT[this["attn_variant"]] | ATTN_TYPE[overrided["attn_type"]] | ATTN_VARIANT[overrided["attn_variant"]]
+                for config in overrided:
+                    if config not in check:
+                        raise ValueError(f"[block {i}] {config} is invalid. valid override: {", ".join(check.keys())}")
                 self.individual_block_configs.append(overrided)
                 D = self.embed_dim
                 H = overrided["ff_hidden_width"]
-                n_heads = overrided["attn_n_heads"]
-                n_kv_heads = overrided["attn_n_kv_heads"]
+                attn_type_str = overrided["attn_type"]
+                assert attn_type_str in ATTN_TYPE, f"[block {i}] invalid type of \"{attn_type_str}\" for attn_type. valid attn_type: {", ".join(ATTN_TYPE.keys())}"
+                attn_type = ATTN_TYPE[attn_type_str]["attn"]
+                attn_variant = overrided["attn_variant"]
+                assert attn_variant in ATTN_VARIANT, f"[block {i}] invalid variant of \"{attn_variant}\" for attn_variant. valid attn_variant: {", ".join(ATTN_VARIANT.keys())}"
+                attn_init = INITIALIZERS[overrided["attn_init"]]
                 E = overrided["ff_n_experts"]
                 CF = overrided["ff_cf"]
                 topk = overrided["ff_topk"]
-                W = overrided["attn_windows"]
-                attn_init = INITIALIZERS[overrided["attn_init"]]
                 ff_init = INITIALIZERS[overrided["ff_init"]]
 
-                transformer_block = TransformerBlock(D, H, n_heads, n_kv_heads, E, CF, topk, W, self.dtype, attn_init, ff_init)
+                W = overrided.get("attn_windows", None)
+                if W and this["attn_type"] == "full":
+                    raise ValueError(f"[block {i}] attention type of {attn_type_str} doesn't accept \"attn_windows\"")
+                n_heads = overrided["attn_n_heads"]
+                attn = None
+                match (attn_type_str, attn_variant):
+                    case ("swa", "gqa"):
+                        n_kv_heads = overrided["attn_n_kv_heads"] 
+                        #def __init__(self,embed_dim:int, n_heads:int, n_kv_heads:int=-1, W=8, dtype:Any=nx.float16, initializer:Callable=initializer.glorot_uniform)
+                        attn = attn_type(embed_dim=D, n_heads=n_heads, n_kv_heads=n_kv_heads, W=W, dtype=self.dtype, initializer=attn_init)
+                    case ("swa", "mha"):
+                        attn = attn_type.multihead(D, n_heads, W, self.dtype, attn_init)
+                    case ("swa", "mqa"):
+                        attn = attn_type.multiquery(D, n_heads, W, self.dtype, attn_init)
+                    case ("swa", invalid):
+                        raise ValueError(f"[block {i}] invalid variant of \"{invalid}\". valid variants: {", ".join(ATTN_VARIANT)}")
+                    case ("full", "gqa"):
+                        n_kv_heads = overrided["attn_n_kv_heads"] 
+                        attn = attn_type(embed_dim=D, n_heads=n_heads, n_kv_heads=n_kv_heads,  dtype=self.dtype, initializer=attn_init)
+                    case ("full", "mha"):
+                        attn = attn_type.multihead(embed_dim=D, n_heads=n_heads,  dtype=self.dtype, initializer=attn_init)
+                    case ("full", "mqa"):
+                        attn = attn_type.multiquery(embed_dim=D, n_heads=n_heads,  dtype=self.dtype, initializer=attn_init)
+                    case ("full", invalid):
+                        raise ValueError(f"[block {i}] invalid variant of \"{invalid}\". valid variants: {", ".join(ATTN_VARIANT)}")
+                    case _:
+                        raise ValueError(f"[block {i}] invalid variant of \"{attn_variant}\". valid variants: {", ".join(ATTN_VARIANT)}")
+
+                transformer_block = TransformerBlock(D, attn, H, E, CF, topk, self.dtype, attn_init, ff_init)
                 self.blocks.append(transformer_block) 
         else:
             self.blocks = blocks
@@ -111,14 +156,21 @@ class Transformer:
             epsilon = block.rmsnorm1.epsilon
             gamma1 = block.rmsnorm1.gamma
             gamma2 = block.rmsnorm2.gamma
-            W = block.W
-            W = min(W, T-1)
+            
             P = nx.array(0.1, dtype=self.dtype)
-            if block.causal_mask is None or block.causal_mask.shape != (T, W + 1):
-                causal_mask = block.attention.compute_mask(W, T)
-                block.causal_mask = causal_mask
-            ff_out ,masks, caches, router_loss, normalized_histogram = block._forward(output, block.causal_mask, self.embed_dim, block.n_heads, block.n_kv_heads, block.n_rep, block.head_dim, W, block.n_experts, block.cf, block.ff.top_k,
-                                                   block.freqs, Wqkv, Wo, Wcombined, router, block.hidden_width, Wout, epsilon, gamma1, gamma2, P, is_training)
+            attn_str = block.attention.self_type()
+
+            if attn_str == "swa":
+                W = block.attention.W 
+                W = min(W, T-1)
+                if block.causal_mask is None or block.causal_mask.shape != (T, W + 1):
+                    block.causal_mask = block.attention.compute_mask(W, T)
+            elif attn_str == "full":
+                if block.causal_mask is None or block.causal_mask.shape != (T, T):
+                    block.causal_mask = block.attention.compute_mask(T)
+            attn_params = Wqkv, Wo
+            ff_out ,masks, caches, router_loss, normalized_histogram = block._forward(output, block.causal_mask, attn_str ,block.attention.configs, attn_params, block.n_experts, block.cf, block.ff.top_k,
+                                                                                        Wcombined, router, block.hidden_width, Wout, epsilon, gamma1, gamma2, P, is_training)
 
             total_router_loss += router_loss
             output = ff_out
@@ -149,14 +201,14 @@ class Transformer:
             scaled_lambda = LAMBDA * self.gradient_scale
             moe_configs = block.ff.cf, block.ff.n_experts, block.ff.hidden_width, block.ff.router, scaled_lambda
             P = nx.array(0.1, dtype=self.dtype)
-            W = block.W
-            W = min(W, T-1)
-            attn_params = (block.n_heads, block.head_dim, block.embed_dim, block.n_kv_heads, block.n_rep, W, block.attention.Wo, block.freqs, block.attention.Wqkv)
-            ff_params = (block.ff.Wout, block.ff.Wcombined)
 
-            dx, dWout, dWcombined, d_router, dWqkv, dWo, d_gamma1, d_gamma2 = block._backward(current_grad, mask1=mask1, mask2=mask2, p=P,
+            ff_params = (block.ff.Wout, block.ff.Wcombined)
+            attn_str = block.attention.self_type()
+            attn_configs = block.attention.configs
+            attn_params = block.attention.Wqkv, block.attention.Wo
+            dx, dWout, dWcombined, d_router, dWqkv, dWo, d_gamma1, d_gamma2 = block._backward(current_grad, mask1=mask1, mask2=mask2, p=P, attention=attn_str,
                                                                 caches_attn=caches_attn, caches_ff=caches_ff, caches_rmsnorm1=caches_rmsnorm1, caches_rmsnorm2=caches_rmsnorm2, 
-                                                                attn_params=attn_params, gamma1=block.rmsnorm1.gamma, gamma2=block.rmsnorm2.gamma, ff_params=ff_params, moe_configs=moe_configs)
+                                                                attn_configs = attn_configs, attn_params=attn_params, gamma1=block.rmsnorm1.gamma, gamma2=block.rmsnorm2.gamma, ff_params=ff_params, moe_configs=moe_configs)
             
             block.ff.dWout = dWout 
             block.ff.dWcombined = dWcombined 

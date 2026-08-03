@@ -51,6 +51,8 @@ class Transformer:
         self.embedding = Embedding(self.vocab_size, self.embed_dim, self.dtype)
         self.gradient_scale = configs.get("gradient_scale", 4096)
         assert self.gradient_scale > 0, "gradient scale cant be less than 1"
+        no_class_attn_type = copy.deepcopy(ATTN_TYPE)
+        no_class_attn_type[default_block_configs["attn_type"]].pop('attn')
         self.block_configs =  default_block_configs | configs.get("block_configs", {})
         self.individual_block_configs = []
 
@@ -66,16 +68,19 @@ class Transformer:
                 override = block_overrides.get(i, {})
                 this = self.block_configs
                 overrided = this | override
-                check = default_block_configs | ATTN_TYPE[this["attn_type"]] | ATTN_VARIANT[this["attn_variant"]] | ATTN_TYPE[overrided["attn_type"]] | ATTN_VARIANT[overrided["attn_variant"]]
+                overrided = overrided | ATTN_TYPE[overrided["attn_type"]] | ATTN_VARIANT[overrided["attn_variant"]] | this  | override 
+                overrided.pop('attn')
+                attn_type_str = overrided["attn_type"]
+                assert attn_type_str in ATTN_TYPE, f"[block {i}] invalid type of \"{attn_type_str}\" for attn_type. valid attn_type: {", ".join(ATTN_TYPE.keys())}"
+                attn_type = ATTN_TYPE[attn_type_str]["attn"]
+                check = this | ATTN_TYPE[this["attn_type"]] | ATTN_VARIANT[this["attn_variant"]] | ATTN_TYPE[overrided["attn_type"]] | ATTN_VARIANT[overrided["attn_variant"]]
                 for config in overrided:
                     if config not in check:
                         raise ValueError(f"[block {i}] {config} is invalid. valid override: {", ".join(check.keys())}")
                 self.individual_block_configs.append(overrided)
                 D = self.embed_dim
                 H = overrided["ff_hidden_width"]
-                attn_type_str = overrided["attn_type"]
-                assert attn_type_str in ATTN_TYPE, f"[block {i}] invalid type of \"{attn_type_str}\" for attn_type. valid attn_type: {", ".join(ATTN_TYPE.keys())}"
-                attn_type = ATTN_TYPE[attn_type_str]["attn"]
+                
                 attn_variant = overrided["attn_variant"]
                 assert attn_variant in ATTN_VARIANT, f"[block {i}] invalid variant of \"{attn_variant}\" for attn_variant. valid attn_variant: {", ".join(ATTN_VARIANT.keys())}"
                 attn_init = INITIALIZERS[overrided["attn_init"]]
@@ -84,11 +89,11 @@ class Transformer:
                 topk = overrided["ff_topk"]
                 ff_init = INITIALIZERS[overrided["ff_init"]]
 
-                W = overrided.get("attn_windows", None)
-                if W and this["attn_type"] == "full":
+                if "attn_windows" in override and override.get("attn_type", None) == "full":
                     raise ValueError(f"[block {i}] attention type of {attn_type_str} doesn't accept \"attn_windows\"")
                 n_heads = overrided["attn_n_heads"]
                 attn = None
+                W = overrided.get("attn_windows", None)
                 match (attn_type_str, attn_variant):
                     case ("swa", "gqa"):
                         n_kv_heads = overrided["attn_n_kv_heads"] 
@@ -146,38 +151,46 @@ class Transformer:
         total_router_loss = nx.array(0.0, dtype=nx.float32)
         histograms = [None for _ in range(len(self.blocks))]
         for idx, block in enumerate(self.blocks):
-            output = output.astype(self.dtype)
-            B,T,_ = output.shape
-            Wqkv = block.attention.Wqkv
-            Wo = block.attention.Wo
-            Wcombined = block.ff.Wcombined
-            Wout = block.ff.Wout
-            router = block.ff.router
-            epsilon = block.rmsnorm1.epsilon
-            gamma1 = block.rmsnorm1.gamma
-            gamma2 = block.rmsnorm2.gamma
-            
-            P = nx.array(0.1, dtype=self.dtype)
-            attn_str = block.attention.self_type()
+            try:
+                output = output.astype(self.dtype)
+                B,T,_ = output.shape
+                Wqkv = block.attention.Wqkv
+                Wo = block.attention.Wo
+                Wcombined = block.ff.Wcombined
+                Wout = block.ff.Wout
+                router = block.ff.router
+                epsilon = block.rmsnorm1.epsilon
+                gamma1 = block.rmsnorm1.gamma
+                gamma2 = block.rmsnorm2.gamma
+                
+                P = nx.array(0.1, dtype=self.dtype)
+                attn_str = block.attention.self_type()
 
-            if attn_str == "swa":
-                W = block.attention.W 
-                W = min(W, T-1)
-                if block.causal_mask is None or block.causal_mask.shape != (T, W + 1):
-                    block.causal_mask = block.attention.compute_mask(W, T)
-            elif attn_str == "full":
-                if block.causal_mask is None or block.causal_mask.shape != (T, T):
-                    block.causal_mask = block.attention.compute_mask(T)
-            attn_params = Wqkv, Wo
-            ff_out ,masks, caches, router_loss, normalized_histogram = block._forward(output, block.causal_mask, attn_str ,block.attention.configs, attn_params, block.n_experts, block.cf, block.ff.top_k,
-                                                                                        Wcombined, router, block.hidden_width, Wout, epsilon, gamma1, gamma2, P, is_training)
+                if attn_str == "swa":
+                    W = block.attention.W 
+                    assert W is not None, f"[block {idx}] W is None"
+                    W = min(W, T-1)
+                    if block.causal_mask is None or block.causal_mask.shape != (T, W + 1):
+                        block.causal_mask = block.attention.compute_mask(W, T)
+                elif attn_str == "full":
+                    if block.causal_mask is None or block.causal_mask.shape != (T, T):
+                        block.causal_mask = block.attention.compute_mask(T)
+                attn_params = Wqkv, Wo
+                ff_out ,masks, caches, router_loss, normalized_histogram = block._forward(output, block.causal_mask, attn_str ,block.attention.configs, attn_params, block.n_experts, block.cf, block.ff.top_k,
+                                                                                            Wcombined, router, block.hidden_width, Wout, epsilon, gamma1, gamma2, P, is_training)
 
-            total_router_loss += router_loss
-            output = ff_out
-            all_masks.append(masks)
-            all_caches.append(caches)
-            histograms[idx] = nx.zeros_like(normalized_histogram) #type:ignore
-            histograms[idx] += normalized_histogram
+                total_router_loss += router_loss
+                output = ff_out
+                all_masks.append(masks)
+                all_caches.append(caches)
+                histograms[idx] = nx.zeros_like(normalized_histogram) #type:ignore
+                histograms[idx] += normalized_histogram
+            except TypeError as e:
+                print(f"[block {idx}] TypeError")
+                raise TypeError(e)
+            except ValueError as e:
+                print(f"[block {idx}] ValueError")
+                raise ValueError(e)
 
         last_output = output.astype(self.dtype)
         scores = last_output @ self.embedding.lookup_table.T
@@ -523,7 +536,7 @@ class Transformer:
                 continue
             ind_con = f"block {i}: "
             for key, val in block.items():
-                if self.block_configs[key] != val:
+                if self.block_configs.get(key) != val:
                     ind_con += f"{key}: {val} | "
             ind_con += "\n"
             configs += ind_con

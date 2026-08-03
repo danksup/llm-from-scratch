@@ -1,12 +1,12 @@
 import os
 
 backend = os.environ["BACKEND"] = "auto"
-EPOCHS = 1
+EPOCHS = 10
 EMBED_DIM = 128
 CONTEXT_SIZE = 256
 BATCH_SIZE = 128
-BASE_WIDTH = 512#4 * EMBED_DIM 
-N_HEADS = 16
+BASE_WIDTH = 1024 #4 * EMBED_DIM 
+N_HEADS = 32
 N_KV_HEADS = N_HEADS // 4
 N_EXPERTS = 16
 CF = 1.25
@@ -49,14 +49,15 @@ session_configs = {
         "min_lr": None,
     },
     "using":backend,
-    "save":False
+    "save":True,
+    "create_checkpoint":False
 }
 
 model_configs = {
     "n_blocks":5,
     "embed_dim":EMBED_DIM,
     "dtype": nx.float16,
-    "gradient_scale":2048,
+    "gradient_scale":4096,
     "block_configs":{
         "ff_hidden_width": BASE_WIDTH,
         "ff_n_experts":N_EXPERTS,

@@ -1,7 +1,7 @@
 from helper.singleton import init_corpus
 from engine.sessions import Session
 from engine.dataloader import DataLoader
-PATH_TO_SESSION = "artifacts/sessions/session_38974464_params_20_epochs.ram2n"
+PATH_TO_SESSION = "artifacts/sessions/session_11484928_param_1_epochs.ram2n"
 
 corpus, _ = init_corpus("data")
 session = Session.load(PATH_TO_SESSION)

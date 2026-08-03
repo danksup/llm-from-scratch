@@ -134,7 +134,7 @@ class TransformerBlock:
                 "embed_dim":self.embed_dim,
                 "dtype": nx.dtype_to_srt[self.dtype]
             },
-            "attention":self.attention.to_dict(),
+            "attention":{"type":self.attention.self_type(), "param":self.attention.to_dict()},
             "ff":self.ff.to_dict(),
             "rmsnorm1":self.rmsnorm1.to_dict(),
             "rmsnorm2":self.rmsnorm2.to_dict(),
@@ -143,8 +143,10 @@ class TransformerBlock:
     @classmethod
     def from_dict(cls,thing:dict) -> "TransformerBlock":
         configs = thing["block_configs"]
-        transformer_block = cls(configs["embed_dim"], configs["hidden_width"], configs["n_heads"], configs["n_kv_heads"], configs["n_experts"],configs["cf"], dtype = nx.str_to_dtype[configs["dtype"]])
-        # transformer_block.attention = transformer_block.attention.from_dict(thing["attention"])
+        attn_cls = ATTN_TYPE[thing["attention"]["type"]]
+        attn_param = thing["attention"]["param"]
+        attention = attn_cls.from_dict(attn_param)
+        transformer_block = cls(configs["embed_dim"], attention, configs["hidden_width"], configs["n_experts"],configs["cf"], dtype = nx.str_to_dtype[configs["dtype"]])
         transformer_block.ff = MoE.from_dict(thing["ff"])
         transformer_block.rmsnorm1 = RMSNorm.from_dict(thing["rmsnorm1"])
         transformer_block.rmsnorm2 = RMSNorm.from_dict(thing["rmsnorm2"])

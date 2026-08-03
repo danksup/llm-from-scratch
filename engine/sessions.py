@@ -20,6 +20,9 @@ DEFAULT_CONFIGS = {
     "batch_size": 32,
     "optimizer":"adamw",
     "train_split":.9,
+    "dataloader_strides":64,
+    "save":True,
+    "create_checkpoint":False
 }
 
 OPTIMIZERS = {
@@ -187,7 +190,7 @@ class Session:
                 regression = improvement < 0
 
                 if val_loss < best_val_loss:
-                    if self.configs["save"]:
+                    if self.configs["save"] and self.configs["create_checkpoint"]:
                         checkpoint = self.create_checkpoint(self)  
                     best_val_loss = val_loss
 
@@ -221,7 +224,7 @@ class Session:
                 if savefile_name == "":
                     savefile_name = filename
                 self.save(savefile_name)
-                if checkpoint is not None:
+                if checkpoint is not None and self.configs["create_checkpoint"]:
                     checkpoint.save(f"checkpoint_save_{savefile_name}")
         except ValueError as e:
             print(f"epoch {epoch}: {e}")

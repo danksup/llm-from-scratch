@@ -1,7 +1,7 @@
 from engine.sessions import Session
 import time
 
-session = Session.load("artifacts/sessions/session_11484928_param_20_epochs.ram2n")
+session = Session.load("artifacts/sessions/session_11484928_param_10_epochs.ram2n")
 
 tokenizer = session.tokenizer
 context_size = session.configs["context_size"]

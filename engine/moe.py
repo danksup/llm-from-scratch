@@ -21,9 +21,11 @@ class MoE:
 
         wcombined_shape =  (n_experts, embed_dim, hidden_width * 2)
         self.Wcombined = initializer(wcombined_shape, dtype=dtype)
+        assert nx.isfinite(self.Wcombined).all(), f"non-finite detected when initializing moe.Wcombined."
 
         wout_shape =  (n_experts, hidden_width, embed_dim)
         self.Wout = initializer(wout_shape, dtype = dtype)
+        assert nx.isfinite(self.Wout).all(), f"non-finite detected when initializing moe.Wout."
 
         self.dWcombined = None
         self.dWout = None

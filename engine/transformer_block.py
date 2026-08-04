@@ -28,8 +28,8 @@ class TransformerBlock:
         self.rmsnorm1 = RMSNorm(embed_dim)
         self.rmsnorm2 = RMSNorm(embed_dim)
     
-    def __repr__(self) -> str:
-        param_count = self.param_count()
+    def __str__(self) -> str:
+        param_count = self.count_param()
         this = {
             "param_count":param_count,
             "embed_dim":self.embed_dim,
@@ -39,7 +39,7 @@ class TransformerBlock:
         # this_str = f""
         return str(this)
     
-    def param_count(self) -> int:
+    def count_param(self) -> int:
         total = 0
         total += self.ff.Wcombined.size
         total += self.ff.Wout.size

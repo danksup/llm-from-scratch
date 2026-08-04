@@ -28,9 +28,11 @@ class AttentionFull:
 
         wqkv_shape = embed_dim + 2 * n_kv_heads * self.head_dim, embed_dim
         self.Wqkv = initializer(wqkv_shape, dtype=dtype)
+        assert nx.isfinite(self.Wqkv).all(), f"non-finite detected when initializing attentipn.Wqkv."
 
         wo_shape = embed_dim,embed_dim
         self.Wo = initializer(wo_shape, dtype=dtype)
+        assert nx.isfinite(self.Wo).all(), f"non-finite detected when initializing attentipn.Wo."
 
         self.dWqkv = None
         self.dWo = None

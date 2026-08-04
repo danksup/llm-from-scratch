@@ -1,26 +1,4 @@
 import os
-
-backend = os.environ["BACKEND"] = "auto"
-EPOCHS = 10
-EMBED_DIM = 128
-CONTEXT_SIZE = 256
-BATCH_SIZE = 128
-BASE_WIDTH = 1024 #4 * EMBED_DIM 
-N_HEADS = 32
-N_KV_HEADS = N_HEADS // 4
-N_EXPERTS = 16
-CF = 1.25
-VAL = .9
-TOP_K = 2
-LOADER_STRIDE = CONTEXT_SIZE
-WINDOWS = CONTEXT_SIZE // 4
-
-#not hooked yet to session
-PATIENCE = 20
-TRESHOLD = 1e-2
-
-TOKENIZER_PATH = "artifacts/tokenizer/tokenizer8192_33414037len.tokenizer"
-
 from pathlib import Path
 import time
 
@@ -32,8 +10,29 @@ from engine.tokenizer import Tokenizer
 from engine.dataloader import DataLoader
 from engine.sessions import Session
 import engine.backend as nx
-
 from helper.singleton import init_corpus
+
+backend = os.environ["BACKEND"] = "auto"
+EPOCHS = 1
+EMBED_DIM = 256
+CONTEXT_SIZE = 256
+BATCH_SIZE = 64
+BASE_WIDTH = 768
+N_HEADS = 16
+N_KV_HEADS = max(1, N_HEADS // 4)
+N_EXPERTS = 12
+CF = 1.25
+VAL = .9
+TOP_K = 2
+LOADER_STRIDE = CONTEXT_SIZE
+WINDOWS = CONTEXT_SIZE // 4
+
+#not hooked yet to session
+PATIENCE = 20
+TRESHOLD = 1e-2
+
+TOKENIZER_PATH = "artifacts/tokenizer/tokenizer16384_33414037len.tokenizer"
+tokenizer1 = Tokenizer.load(TOKENIZER_PATH)
 
 session_configs = {
     "epochs":EPOCHS,
@@ -50,37 +49,41 @@ session_configs = {
     },
     "using":backend,
     "save":True,
-    "create_checkpoint":False
+    "create_checkpoint":False,
+    "inference_only": True
 }
 
 model_configs = {
-    "n_blocks":5,
+    "n_blocks":7,
     "embed_dim":EMBED_DIM,
     "dtype": nx.float16,
-    "gradient_scale":4096,
+    "gradient_scale":2048,
+    "vocab_size": len(tokenizer1.vocab),
     "block_configs":{
         "ff_hidden_width": BASE_WIDTH,
         "ff_n_experts":N_EXPERTS,
         "ff_topk":TOP_K,
         "ff_cf":CF,
         "ff_init":"glorot_uniform",
-        "attn_type":"swa",
+        "attn_type":"full",
         "attn_n_heads":N_HEADS,
         "attn_n_kv_heads":N_KV_HEADS,
-        "attn_windows":WINDOWS,
+        # "attn_windows":WINDOWS,
         "attn_init":"glorot_uniform",
         },
     "block_overrides":{
-        0: {"attn_type":"full"}, 2:{"ff_n_experts": N_EXPERTS//2},3:{"ff_n_experts": N_EXPERTS//2}, 4:{"ff_n_experts": N_EXPERTS//4}
+        # 0: {"attn_type":"full"}, 
+        2:{"ff_n_experts": max(1,N_EXPERTS//2)},
+        3:{"ff_n_experts": max(1,N_EXPERTS//2)}, 
+        4:{"ff_n_experts":  max(1,N_EXPERTS//2)},
+        5:{"ff_n_experts":  max(1,N_EXPERTS//2)},
+        6:{"ff_n_experts":  max(1,N_EXPERTS//4)},
     }
 }
 
 corpus, files = init_corpus("data")
 
-tokenizer1 = Tokenizer.load(TOKENIZER_PATH)
-
 session_configs["dataset"] = f"{len(files)} files"
-real_vocab_size = len(tokenizer1.vocab)
 
 transformer = Transformer(model_configs)
 

@@ -10,6 +10,7 @@ class Embedding:
         self.dtype = dtype
         init = 0.02
         self.lookup_table = nx.uniform(low=-init, high=init, size=(n, self.embed_dim), dtype=dtype)
+        assert nx.isfinite(self.lookup_table).all(), f"non-finite detected when initializing embedding."
     
     def __eq__(self, value: object) -> bool:
         if not isinstance(value, Embedding):

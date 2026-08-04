@@ -45,7 +45,8 @@ class Transformer:
         # def __init__(self,embed_dim,ff_dim, n_heads, n_kv_heads, n_experts=1, cf=1.25, top_k =2, W=8, dtype=nx.float16) 
         self.blocks = []
         configs =  {} if configs is None else configs
-        self.vocab_size = configs.get("vocab_size", 8192)
+        self.vocab_size = configs.get("vocab_size", None)
+        assert self.vocab_size is not None, "vocab size can't be None"
         self.embed_dim = configs.get("embed_dim", 128)
         self.dtype = configs.get("dtype", nx.float32)
         self.embedding = Embedding(self.vocab_size, self.embed_dim, self.dtype)
@@ -527,7 +528,7 @@ class Transformer:
         configs += f"vocab_size: {str(self.vocab_size)}" + "\n"
         configs += f"embed_dim: {str(self.embed_dim)}" + "\n"
         configs += f"gradient_scale: {str(self.gradient_scale)}" + "\n"
-        configs += "precision: float32" if self.dtype == nx.float32 else f"precision: mixed precision ({self.dtype})\n" 
+        configs += "precision: float32\n" if self.dtype == nx.float32 else f"precision: mixed precision ({self.dtype})\n" 
         configs += f"block configs: {self.block_configs}\n"
         configs += "individual block configs (only difference is shown): \n"
 

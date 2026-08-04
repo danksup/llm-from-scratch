@@ -97,7 +97,7 @@ class SGD:
         params = params - lr * v
         return params, v
     
-    def to_dict(self) -> dict[str,Any]:
+    def to_dict(self, config_only:bool=True) -> dict[str,Any]:
         sgd = {
             "t":self.t.item(),
             "lr": self.init_lr,
@@ -106,27 +106,33 @@ class SGD:
             "weight_decay":self.weight_decay.item(),
             "dampening":self.dampening.item(),
             "scheduler":self.scheduler,
-            "use_master":self.use_master
+            "use_master":self.use_master,
+            "config_only":config_only
         }
         if self.min_lr is not None and hasattr(self.min_lr, "dtype"):
             sgd["min_lr"] = self.min_lr.item() #type:ignore
 
-        if self.use_master:
-            master_copy = {}
-            for key, val in self.masters.items():
-                master_copy[key] = {
-                    "names": val["names"].copy(),
-                    "master":val["master"].tolist()
-                }
-            sgd["masters"] = master_copy
-        if self.momentum > 0.0:
-            state_copy = {}
-            for shape, val in self.state.items():
-                state_copy[shape] = {
-                    "v": val["v"].tolist()
-                }
-            sgd["state"] = state_copy
-
+        if not config_only:
+            if self.use_master:
+                master_copy = {}
+                for key, val in self.masters.items():
+                    master_copy[key] = {
+                        "names": val["names"].copy(),
+                        "master":val["master"].tolist()
+                    }
+                sgd["masters"] = master_copy
+            if self.momentum > 0.0:
+                state_copy = {}
+                for shape, val in self.state.items():
+                    state_copy[shape] = {
+                        "v": val["v"].tolist()
+                    }
+                sgd["state"] = state_copy
+        else:
+            if hasattr(self, "masters"):
+                del self.masters
+            if hasattr(self, "state"):
+                del self.state
         return sgd
     
     @classmethod
@@ -134,21 +140,22 @@ class SGD:
         sgd = cls(lr=thing["lr"], momentum=thing["momentum"], weight_decay=thing["weight_decay"], dampening=thing["dampening"], use_master=thing["use_master"], scheduler=thing["scheduler"], min_lr=thing["min_lr"])
         sgd.t = nx.array(thing["t"], nx.int32)
 
-        if sgd.use_master:
-            masters = {}
-            for key, val in thing["masters"].items():
-                masters[key] = {
-                    "names": val["names"],
-                    "master": nx.array(val["master"], nx.float32)
-                } 
-            sgd.masters = masters
-        
-        if sgd.momentum > 0:
-            state = {}
-            for shape, val in thing["state"].items():
-                state[shape] = {
-                    "v": nx.array(val["v"], nx.float32)
-                }
-            sgd.state = state
+        if not thing["config_only"]:
+            if sgd.use_master:
+                masters = {}
+                for key, val in thing["masters"].items():
+                    masters[key] = {
+                        "names": val["names"],
+                        "master": nx.array(val["master"], nx.float32)
+                    } 
+                sgd.masters = masters
+            
+            if sgd.momentum > 0:
+                state = {}
+                for shape, val in thing["state"].items():
+                    state[shape] = {
+                        "v": nx.array(val["v"], nx.float32)
+                    }
+                sgd.state = state
 
         return sgd

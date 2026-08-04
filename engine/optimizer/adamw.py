@@ -29,6 +29,7 @@ class AdamW:
         self.use_master = use_master
     
     def step_many(self, name_param_gradient:list[Any], train_contexts, batch_size, total_epoch) -> dict[Any,Any]:
+        assert hasattr(self, "state"), f"optimizer has no state. it may be configured as config_only or session inference_only is set as true."
 
         if self.scheduler:
             current_step = self.state["t"]
@@ -57,7 +58,7 @@ class AdamW:
                     "v": nx.zeros_like(params,  nx.float32),
                 }
                 if self.use_master:
-                    self.state[shape]["master"] = nx.copy(params),
+                    self.state[shape]["master"] = nx.copy(params)
             else:
                 if self.use_master:
                     params = self.state[shape]["master"]
@@ -90,20 +91,23 @@ class AdamW:
         params = params - lr * m_hat / (nx.sqrt(v_hat) + epsilon)
         return params, m, v, t
     
-    def to_dict(self) -> dict[Any, Any]:
+    def to_dict(self, config_only:bool=True) -> dict[Any, Any]:
         adamw = {}
-        adamw["t"] = self.state["t"].item()
-        for key, value in self.state.items():
-            shape_copy = {}
-            if key != "t":
-                shape_copy["names"] = value["names"]
-                if self.use_master:
-                    shape_copy["master"] = value["master"].tolist()
-                shape_copy["m"] = value["m"].tolist()
-                shape_copy["v"] = value["v"].tolist()
-                adamw[key] = shape_copy
+        
+        if not config_only:
+            adamw["t"] = self.state["t"].item()
+            for key, value in self.state.items():
+                shape_copy = {}
+                if key != "t":
+                    shape_copy["names"] = value["names"]
+                    if self.use_master:
+                        shape_copy["master"] = value["master"].tolist()
+                    shape_copy["m"] = value["m"].tolist()
+                    shape_copy["v"] = value["v"].tolist()
+                    adamw[key] = shape_copy
 
         adamw_configs = {
+            "config_only": config_only,
             "lr": self.init_lr.item(),
             "beta1": self.beta1.item(),
             "beta2": self.beta2.item(),
@@ -122,6 +126,7 @@ class AdamW:
     @classmethod
     def from_dict(cls, thing:dict[Any, Any]) -> "AdamW":
         configs = thing["adamw_configs"]
+        config_only = configs["config_only"]
         lr = configs["lr"]
         beta1 = configs["beta1"]
         beta2 = configs["beta2"]
@@ -131,14 +136,18 @@ class AdamW:
         scheduler = configs["scheduler"]
         min_lr = configs["min_lr"]
         adamw = cls(lr=lr, beta1=beta1, beta2=beta2, epsilon=epsilon, weight_decay=weight_decay, use_master=use_master, scheduler=scheduler, min_lr=min_lr)
-        adamw.state["t"] = nx.array(thing["t"], dtype=nx.int32)
-        for key, value in thing.items():
-            shape_copy = {}
-            if key != "t" and key != "adamw_configs":
-                shape_copy["names"] = value["names"]
-                if adamw.use_master:
-                    shape_copy["master"] = nx.array(value["master"], dtype=nx.float32)
-                shape_copy["m"] = nx.array(value["m"], dtype=nx.float32)
-                shape_copy["v"] = nx.array(value["v"], dtype=nx.float32)
-                adamw.state[key] = shape_copy
+        if not config_only:
+            adamw.state["t"] = nx.array(thing["t"], dtype=nx.int32)
+            for key, value in thing.items():
+                shape_copy = {}
+                if key != "t" and key != "adamw_configs":
+                    shape_copy["names"] = value["names"]
+                    if adamw.use_master:
+                        shape_copy["master"] = nx.array(value["master"], dtype=nx.float32)
+                    shape_copy["m"] = nx.array(value["m"], dtype=nx.float32)
+                    shape_copy["v"] = nx.array(value["v"], dtype=nx.float32)
+                    adamw.state[key] = shape_copy
+        else:
+            if hasattr(adamw, "state"):
+                del adamw.state
         return adamw

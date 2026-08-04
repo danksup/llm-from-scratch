@@ -22,7 +22,8 @@ DEFAULT_CONFIGS = {
     "train_split":.9,
     "dataloader_strides":64,
     "save":True,
-    "create_checkpoint":False
+    "create_checkpoint":False,
+    "inference_only": True,
 }
 
 OPTIMIZERS = {
@@ -69,8 +70,9 @@ DEFAULT_OPTIMIZER_ARGS = {
 
 class Session:
     def __init__(self, transformer:Transformer, tokenizer:Tokenizer, init_optimizer:bool | optimizers = True, configs:dict | None = None):
-        self.transformer = transformer
         self.tokenizer = tokenizer
+        self.transformer = transformer
+        assert len(tokenizer.vocab) == transformer.vocab_size, f"vocab size mismatch of {transformer.vocab_size} in transformer and {len(tokenizer.vocab)} in tokenizer."
 
         if configs is None:
             configs = {}
@@ -119,13 +121,7 @@ class Session:
         """
         total = 0
         for i in self.transformer.blocks:
-            total += i.ff.Wcombined.size
-            total += i.ff.Wout.size
-            total += i.ff.router.size
-            total += i.attention.Wqkv.size
-            total += i.attention.Wo.size
-            total += i.rmsnorm1.gamma.size
-            total += i.rmsnorm2.gamma.size
+            total += i.count_param()
         total += self.transformer.embedding.lookup_table.size
         return total
 
@@ -220,7 +216,8 @@ class Session:
                     #         print(f"block{idx}: ideal: {1/histogram.shape[0]} | spread: {hmax-hmin} | min: {hmin} | max: {hmax}")
 
             if self.configs["save"]:
-                filename = f"{self.count_params()}_param_{epoch+1}_epochs"
+                infer_only = "_inference_only" if self.configs["inference_only"] else ""
+                filename = f"{self.count_params()}_param_{epoch+1}_epochs{infer_only}"
                 if savefile_name == "":
                     savefile_name = filename
                 self.save(savefile_name)
@@ -323,7 +320,7 @@ class Session:
             "configs":self.configs,
             "transformer":self.transformer.to_dict(),
             "tokenizer":self.tokenizer.to_dict(),
-            "optimizer_states": self.optimizer.to_dict()
+            "optimizer":self.optimizer.to_dict(config_only=self.configs["inference_only"]),
         }
 
         filename = f"session_{filename}.ram2n"
@@ -348,7 +345,7 @@ class Session:
         tokenizer = Tokenizer.from_dict(session["tokenizer"])
         configs = session["configs"]
         optimizer_class = OPTIMIZERS[configs["optimizer"]]
-        optimizer = optimizer_class.from_dict(session["optimizer_states"])
+        optimizer = optimizer_class.from_dict(session["optimizer"])
         
         return  cls(transformer, tokenizer, optimizer, configs=configs)
     

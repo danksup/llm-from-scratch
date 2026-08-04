@@ -97,22 +97,26 @@ dataset: 5 files | using: MLX | block_size: 1 | corpus char len: 3417355
 - Date 2026-07-04 | 131387 function calls in 153.710 seconds | ram peaked at ~ 1200MB | logsumexp cross entropy, compiled cross entropy; BPE Tokenizer, corpus char len: 1106747 param: 323712 (larger vocabulary because of BPE)
 - Date 2026-07-13  | 122553 function calls in 297.455 seconds | ram peaked at ~4.6GB (stable) | MoE; param: 5256832, MoE: {'cf': 1.25, 'n_experts': 24, 'ff_width': 1024}; cosine decay LR;
 
-- Date 2026-08-02: 
-param: 213_165_568
-context_size: 256 | batch_size: 64 | optimizer: adamw | train_split: 0.9 | dataloader_strides: 256 optimizer_args: {'lr': 0.001, 'beta1': 0.9, 'beta2': 0.999, 'epsilon': 1e-08, 'weight_decay': 0.01, 'use_master': False, 'scheduler': None,'min_lr': None}
-dataset: 6 files block_size: 10 corpus char len: 4609144 -> BPE compression (16384 vocab size): 1102771. ratio = 76.074% 
-max step: 61 (256 strides) | embed_dim: 512 | gradient_scale: 2048 | precision: mixed precision (mlx.core.float16)
-block configs: {'ff_hidden_width': 2048, 'ff_n_experts': 12, 'ff_topk': 2, 'ff_cf': 1.25, 'ff_init': 'glorot_uniform', 'attn_type': 'full','attn_variant': 'gqa', 'attn_n_heads': 16, 'attn_init': 'glorot_uniform', 'attn_n_kv_heads': 4} 
+
+#### Date 2026-08-02: 
+Apple M1 Pro (MLX) \
+param: 213_165_568 \
+context_size: 256 | batch_size: 64 | optimizer: adamw | train_split: 0.9 | dataloader_strides: 256 \
+optimizer_args: {'lr': 0.001, 'beta1': 0.9, 'beta2': 0.999, 'epsilon': 1e-08, 'weight_decay': 0.01, 'use_master': False, 'scheduler': None,'min_lr': None} \
+dataset: 6 files block_size: 10 corpus char len: 4609144 -> BPE compression (16384 vocab size): 1102771. ratio = 76.074% \
+max step: 61 (256 strides) | embed_dim: 512 | gradient_scale: 2048 | precision: mixed precision (mlx.core.float16) \
+block configs: {'ff_hidden_width': 2048, 'ff_n_experts': 12, 'ff_topk': 2, 'ff_cf': 1.25, 'ff_init': 'glorot_uniform', 'attn_type': 'full','attn_variant': 'gqa', 'attn_n_heads': 16, 'attn_init': 'glorot_uniform', 'attn_n_kv_heads': 4} \ 
 individual block configs (only difference is shown): block 2: ff_n_experts: 6 | block 3: ff_n_experts: 6 | block 4: ff_n_experts: 6 | block 5: ff_n_experts: 6 | block 6: ff_n_experts: 6 | block 7: ff_n_experts: 3 | block 8: ff_n_experts: 3 | block 9: ff_n_experts: 3 
 - avg loss: 7.732100963592529 | val: 6.184670448303223 | best val loss: 6.184670448303223 | lr: 0.001 | time: 1461.225281s
   
-- Date: 2026-08-04:
-param: 35_438_848
-context_size: 256 | batch_size: 64 | optimizer: adamw | train_split: 0.9 | dataloader_strides: 256
-optimizer_args: {'lr': 0.001, 'beta1': 0.9, 'beta2': 0.999, 'epsilon': 1e-08, 'weight_decay': 0.01, 'use_master': False, 'scheduler': None, 'min_lr': None}
-dataset: 6 files | block_size: 7 | corpus char len: 4609144 -> BPE compression (16384 vocab size): 1102771. ratio = 76.074%
-max step: 61 (256 strides) | embed_dim: 256 | gradient_scale: 2048 | precision: mixed precision (mlx.core.float16)
-block configs: {'ff_hidden_width': 768, 'ff_n_experts': 12, 'ff_topk': 2, 'ff_cf': 1.25, 'ff_init': 'glorot_uniform', 'attn_type': 'full', 'attn_variant': 'gqa', 'attn_n_heads': 16, 'attn_init': 'glorot_uniform', 'attn_n_kv_heads': 4}
+#### Date: 2026-08-04:
+Apple M1 Pro (MLX) \
+param: 35_438_848 \
+context_size: 256 | batch_size: 64 | optimizer: adamw | train_split: 0.9 | dataloader_strides: 256 \
+optimizer_args: {'lr': 0.001, 'beta1': 0.9, 'beta2': 0.999, 'epsilon': 1e-08, 'weight_decay': 0.01, 'use_master': False, 'scheduler': None, 'min_lr': None} \
+dataset: 6 files | block_size: 7 | corpus char len: 4609144 -> BPE compression (16384 vocab size): 1102771. ratio = 76.074% \
+max step: 61 (256 strides) | embed_dim: 256 | gradient_scale: 2048 | precision: mixed precision (mlx.core.float16) \
+block configs: {'ff_hidden_width': 768, 'ff_n_experts': 12, 'ff_topk': 2, 'ff_cf': 1.25, 'ff_init': 'glorot_uniform', 'attn_type': 'full', 'attn_variant': 'gqa', 'attn_n_heads': 16, 'attn_init': 'glorot_uniform', 'attn_n_kv_heads': 4} \
 individual block configs (only difference is shown): block 2: ff_n_experts: 6 | block 3: ff_n_experts: 6 | block 4: ff_n_experts: 6 | block 5: ff_n_experts: 6 | block 6: ff_n_experts: 3 |
 - avg loss: 7.254411220550537 | val: 6.278104305267334 | best val loss: 6.278104305267334 | lr: 0.001 | time: 73.973663s
 

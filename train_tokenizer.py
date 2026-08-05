@@ -3,7 +3,7 @@ import time
 from engine.tokenizer import Tokenizer
 import cProfile
 import pstats
-VOCAB_SIZE = [1024, 2048, 4096, 8192, 16384, 32768]
+VOCAB_SIZE = [32768, 65536, 131072]
 
 corpus = ""
 files = []

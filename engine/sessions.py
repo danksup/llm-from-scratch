@@ -23,7 +23,7 @@ DEFAULT_CONFIGS = {
     "dataloader_strides":64,
     "save":True,
     "create_checkpoint":False,
-    "inference_only": True,
+    "weights_only": True,
 }
 
 OPTIMIZERS = {
@@ -211,12 +211,12 @@ class Session:
                     print(f"epoch {epoch} | avg loss: {error} | val: {val_loss} | best val loss: {best_val_loss} | lr: {self.optimizer.lr:.6f} | time: {time_}")
                     # if total_histograms:
                     #     for idx, histogram in enumerate(total_histograms):
-                    #         hmin = nx.min(histogram).item()
-                    #         hmax = nx.max(histogram).item()
-                    #         print(f"block{idx}: ideal: {1/histogram.shape[0]} | spread: {hmax-hmin} | min: {hmin} | max: {hmax}")
+                            # hmin = nx.min(histogram).item()
+                            # hmax = nx.max(histogram).item()
+                            # print(f"block{idx}: ideal: {1/histogram.shape[0]} | spread: {hmax-hmin} | min: {hmin} | max: {hmax}")
 
             if self.configs["save"]:
-                infer_only = "_inference_only" if self.configs["inference_only"] else ""
+                infer_only = "_weights_only" if self.configs["weights_only"] else ""
                 filename = f"{self.count_params()}_param_{epoch+1}_epochs{infer_only}"
                 if savefile_name == "":
                     savefile_name = filename
@@ -320,7 +320,7 @@ class Session:
             "configs":self.configs,
             "transformer":self.transformer.to_dict(),
             "tokenizer":self.tokenizer.to_dict(),
-            "optimizer":self.optimizer.to_dict(config_only=self.configs["inference_only"]),
+            "optimizer":self.optimizer.to_dict(config_only=self.configs["weights_only"]),
         }
 
         filename = f"session_{filename}.ram2n"

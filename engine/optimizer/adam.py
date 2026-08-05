@@ -13,7 +13,6 @@ class Adam:
         self.min_lr = self.__adamw.min_lr
 
     def step_many(self, name_param_gradient:list[Any], train_contexts, batch_size, total_epoch) -> dict[Any,Any]:
-        assert hasattr(self.__adamw, "state"), f"optimizer has no state. it may be configured as config_only or session inference_only is set as true."
         optimized = self.__adamw.step_many(name_param_gradient, train_contexts, batch_size, total_epoch)
         self.lr = self.__adamw.lr
         self.state = self.__adamw.state
@@ -38,4 +37,6 @@ class Adam:
 
         if not thing["config_only"]:
             adam.state = adamw.state
+        else:
+            adam.state = {}
         return adam

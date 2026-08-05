@@ -13,15 +13,15 @@ import engine.backend as nx
 from helper.singleton import init_corpus
 
 backend = os.environ["BACKEND"] = "auto"
-EPOCHS = 1
+EPOCHS = 5
 EMBED_DIM = 256
 CONTEXT_SIZE = 256
 BATCH_SIZE = 64
-BASE_WIDTH = 768
+BASE_WIDTH = 1024
 N_HEADS = 16
 N_KV_HEADS = max(1, N_HEADS // 4)
 N_EXPERTS = 12
-CF = 1.25
+CF = 1.5
 VAL = .9
 TOP_K = 2
 LOADER_STRIDE = CONTEXT_SIZE
@@ -44,20 +44,20 @@ session_configs = {
     "optimizer_args":{
         "lr": 1e-3,
         "use_master": False,
-        "scheduler": None,
-        "min_lr": None,
+        "scheduler": "cosine_decay",
+        "min_lr": 1e-5,
     },
     "using":backend,
-    "save":True,
+    "save":False,
     "create_checkpoint":False,
-    "inference_only": True
+    "weights_only": True
 }
 
 model_configs = {
-    "n_blocks":7,
+    "n_blocks":10,
     "embed_dim":EMBED_DIM,
     "dtype": nx.float16,
-    "gradient_scale":2048,
+    "gradient_scale":4096,
     "vocab_size": len(tokenizer1.vocab),
     "block_configs":{
         "ff_hidden_width": BASE_WIDTH,
@@ -66,19 +66,22 @@ model_configs = {
         "ff_cf":CF,
         "ff_init":"glorot_uniform",
         "attn_type":"full",
+        "attn_variant":"mha",
         "attn_n_heads":N_HEADS,
-        "attn_n_kv_heads":N_KV_HEADS,
+        # "attn_n_kv_heads":N_KV_HEADS,
         # "attn_windows":WINDOWS,
         "attn_init":"glorot_uniform",
         },
     "block_overrides":{
-        # 0: {"attn_type":"full"}, 
-        2:{"ff_n_experts": max(1,N_EXPERTS//2)},
-        3:{"ff_n_experts": max(1,N_EXPERTS//2)}, 
-        4:{"ff_n_experts":  max(1,N_EXPERTS//2)},
-        5:{"ff_n_experts":  max(1,N_EXPERTS//2)},
-        6:{"ff_n_experts":  max(1,N_EXPERTS//4)},
-    }
+        #   2:{"ff_hidden_width": max(1,BASE_WIDTH // 2), "ff_n_experts": max(1,N_EXPERTS//2)},
+        #   3:{"ff_hidden_width": max(1,BASE_WIDTH // 2), "ff_n_experts": max(1,N_EXPERTS//2)}, 
+        #   4:{"ff_hidden_width": max(1,BASE_WIDTH // 2), "ff_n_experts":  max(1,N_EXPERTS//2)},
+        #   5:{"ff_hidden_width": max(1,BASE_WIDTH // 2), "ff_n_experts":  max(1,N_EXPERTS//2)},
+        #   6:{"ff_hidden_width": max(1,BASE_WIDTH // 2), "ff_n_experts":  max(1,N_EXPERTS//2)},
+        #   7:{"ff_hidden_width": max(1,BASE_WIDTH // 2), "ff_n_experts":  max(1,N_EXPERTS//2)},
+        #   8:{"ff_hidden_width": max(1,BASE_WIDTH // 2), "ff_n_experts":  max(1,N_EXPERTS//2)},
+        #   9:{"ff_hidden_width": max(1,BASE_WIDTH // 4), "ff_n_experts":  max(1,N_EXPERTS//2)},
+      }
 }
 
 corpus, files = init_corpus("data")
@@ -100,7 +103,6 @@ max_pass = dataloader.get_pass_count(BATCH_SIZE)
 session_configs["max step"] = f"{max_pass} ({LOADER_STRIDE} strides)"
 
 session1 = Session(transformer, tokenizer1, True, session_configs)
-
 start = time.perf_counter()
 session1.train(dataloader, display_message=True)
 end = time.perf_counter()

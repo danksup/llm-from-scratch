@@ -74,7 +74,7 @@ class Transformer:
                 attn_type_str = overrided["attn_type"]
                 assert attn_type_str in ATTN_TYPE, f"[block {i}] invalid type of \"{attn_type_str}\" for attn_type. valid attn_type: {", ".join(ATTN_TYPE.keys())}"
                 attn_type = ATTN_TYPE[attn_type_str]["attn"]
-                check = this | ATTN_TYPE[this["attn_type"]] | ATTN_VARIANT[this["attn_variant"]] | ATTN_TYPE[overrided["attn_type"]] | ATTN_VARIANT[overrided["attn_variant"]]
+                check = default_block_configs | ATTN_TYPE[this["attn_type"]] | ATTN_VARIANT[this["attn_variant"]] | ATTN_TYPE[overrided["attn_type"]] | ATTN_VARIANT[overrided["attn_variant"]]
                 for config in overrided:
                     if config not in check:
                         raise ValueError(f"[block {i}] {config} is invalid. valid override: {", ".join(check.keys())}")
@@ -531,9 +531,10 @@ class Transformer:
         configs += "precision: float32\n" if self.dtype == nx.float32 else f"precision: mixed precision ({self.dtype})\n" 
         configs += f"block configs: {self.block_configs}\n"
         configs += "individual block configs (only difference is shown): \n"
-
+        similar_count = 0
         for i, block in  enumerate(self.individual_block_configs):
             if block == self.block_configs:
+                similar_count += 1
                 continue
             ind_con = f"block {i}: "
             for key, val in block.items():
@@ -541,4 +542,7 @@ class Transformer:
                     ind_con += f"{key}: {val} | "
             ind_con += "\n"
             configs += ind_con
+            
+        if similar_count == len(self.individual_block_configs):
+            configs += "None\n"
         return configs

@@ -18,6 +18,7 @@ class AttentionFull:
         assert embed_dim % n_heads == 0
         assert n_heads % n_kv_heads == 0, "cant have more kv heads than query heads."
         self.head_dim = embed_dim // n_heads
+        assert self.head_dim % 2 == 0,  f"rope needs headdim to be multiple of 2, get headdim of {self.head_dim} instead. math: embed_dim // n_heads -> {embed_dim} // {n_heads} = {embed_dim//n_heads}"
         self.dtype = dtype
         
         self.n_rep = self.n_heads // self.n_kv_heads 
@@ -43,13 +44,13 @@ class AttentionFull:
         return "full"
 
     @classmethod
-    def multihead(cls, D, n_heads, dtype, initializer):
-        mha = cls(D, n_heads=n_heads, n_kv_heads=n_heads, dtype=dtype, initializer=initializer)
+    def multihead(cls, embed_dim, n_heads, dtype, initializer):
+        mha = cls(embed_dim, n_heads=n_heads, n_kv_heads=n_heads, dtype=dtype, initializer=initializer)
         return mha
 
     @classmethod
-    def multiquery(cls, D, n_heads, dtype, initializer):
-        mqa = cls(D, n_heads=n_heads, n_kv_heads=1, dtype=dtype, initializer=initializer)
+    def multiquery(cls, embed_dim, n_heads, dtype, initializer):
+        mqa = cls(embed_dim, n_heads=n_heads, n_kv_heads=1, dtype=dtype, initializer=initializer)
         return mqa
 
     @staticmethod

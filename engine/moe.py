@@ -69,6 +69,9 @@ class MoE:
         slot_idx = cum_assignment[assignment_rows, flatten_top_expert_indices] - 1 #type:ignore #(N,)
 
         valid = slot_idx < capacity
+        # drop_rate = (~valid).sum() / valid.size
+        # print(f"drop rate: {drop_rate:.4f} ({(~valid).sum()}/{valid.size} tokens dropped)")
+        
         masked_tokens = flatten_x[assignement_tokens] * valid[:, None] #type:ignore
         safe_slot = nx.clip(slot_idx, 0, capacity - 1, dtype=nx.int32)
         expert_input = nx.zeros((n_expert, capacity, D), dtype=x.dtype)

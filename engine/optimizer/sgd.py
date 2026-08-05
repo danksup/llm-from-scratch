@@ -138,9 +138,9 @@ class SGD:
     @classmethod
     def from_dict(cls, thing) -> "SGD":
         sgd = cls(lr=thing["lr"], momentum=thing["momentum"], weight_decay=thing["weight_decay"], dampening=thing["dampening"], use_master=thing["use_master"], scheduler=thing["scheduler"], min_lr=thing["min_lr"])
-        sgd.t = nx.array(thing["t"], nx.int32)
 
         if not thing["config_only"]:
+            sgd.t = nx.array(thing["t"], nx.int32)
             if sgd.use_master:
                 masters = {}
                 for key, val in thing["masters"].items():
@@ -157,5 +157,9 @@ class SGD:
                         "v": nx.array(val["v"], nx.float32)
                     }
                 sgd.state = state
+        else:
+            sgd.t = nx.array(0, dtype=nx.int32)
+            sgd.masters = {}
+            sgd.state = {}
 
         return sgd

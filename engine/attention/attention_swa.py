@@ -19,6 +19,8 @@ class AttentionSWA:
         assert n_heads % n_kv_heads == 0, "cant have more kv heads than query heads."
         head_dim = embed_dim // n_heads
         self.head_dim = head_dim
+        assert self.head_dim % 2 == 0,  f"rope needs headdim to be multiple of 2, get headdim of {self.head_dim} instead. math: embed_dim // n_heads -> {embed_dim} // {n_heads} = {embed_dim//n_heads}"
+
         self.W = W
         self.dtype = dtype
 
@@ -210,7 +212,6 @@ class AttentionSWA:
         # print("dq after rope", dQ.dtype)
         # print("dv", dV.dtype)
         # print("dk", dK.dtype)
-
 
         dQKV = nx.concatenate([dQ, dK,dV], axis=-1) #(B,T, D + 2 * (n_kv_heads * Dh))
         DQKV = dQKV.reshape(-1, embed_dim + 2 * (n_kv_heads * head_dim))

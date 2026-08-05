@@ -29,7 +29,6 @@ class AdamW:
         self.use_master = use_master
     
     def step_many(self, name_param_gradient:list[Any], train_contexts, batch_size, total_epoch) -> dict[Any,Any]:
-        assert hasattr(self, "state"), f"optimizer has no state. it may be configured as config_only or session inference_only is set as true."
 
         if self.scheduler:
             current_step = self.state["t"]
@@ -37,7 +36,8 @@ class AdamW:
             progress = min(1, current_step / total_step) 
             self.lr = self.schedule(progress)
 
-        self.state["t"] += 1
+        
+        self.state["t"] = self.state.get("t", nx.array(0, dtype=nx.int32)) + 1
 
         group = {}
         for name,param,gradient in name_param_gradient:
@@ -148,6 +148,5 @@ class AdamW:
                     shape_copy["v"] = nx.array(value["v"], dtype=nx.float32)
                     adamw.state[key] = shape_copy
         else:
-            if hasattr(adamw, "state"):
-                del adamw.state
+            adamw.state = {}
         return adamw

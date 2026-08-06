@@ -4,15 +4,15 @@ import random
 # import mlx.core as mx
 EMBED_DIM = 256
 CONTEXT_SIZE = 256
-BATCH_SIZE = 128
-BASE_WIDTH = 2048#4 * EMBED_DIM 
+BATCH_SIZE = 32
+BASE_WIDTH = 768
 N_HEADS = 32
-N_KV_HEADS = N_HEADS // 4
-N_EXPERTS = 24
-CF = 1.25
+N_KV_HEADS = max(1, N_HEADS // 4)
+N_EXPERTS = 12
+CF = 1.5
 VAL = .9
 TOP_K = 2
-LOADER_STRIDE = CONTEXT_SIZE // 2
+LOADER_STRIDE = CONTEXT_SIZE
 WINDOWS = CONTEXT_SIZE // 4
 
 from pathlib import Path
@@ -28,47 +28,54 @@ from engine.embedding import Embedding
 from engine.dataloader import DataLoader
 from engine.sessions import Session
 import engine.backend as nx
+from helper.singleton import init_corpus
+
+tokenizer1 = Tokenizer.load("artifacts/tokenizer/tokenizer24000_533726742len.tokenizer")
 
 session_configs = {
     "context_size": CONTEXT_SIZE,
     "batch_size": BATCH_SIZE,
-    "dataloader_strides":LOADER_STRIDE,
     "optimizer":"adamw",
     "train_split":VAL,
     "optimizer_args":{
-        "lr": 5e-3,
+        "lr": 1e-3,
         "use_master": False,
-        "scheduler": None,
-        "min_lr": None,
+        "scheduler": "cosine_decay",
+        "min_lr": 1e-5,
     },
     "using":backend,
-    "save":True
 }
 
 model_configs = {
-    "n_blocks":5,
+    "n_blocks":8,
     "embed_dim":EMBED_DIM,
     "dtype": nx.float16,
-    "gradient_scale":1024,
-    "block_configs":{"ff_hidden_width": BASE_WIDTH,"ff_n_experts":N_EXPERTS,"ff_topk":TOP_K,"ff_cf":CF,"attn_n_heads":N_HEADS,"attn_n_kv_heads":N_KV_HEADS, "attn_windows":WINDOWS},
+    "gradient_scale":4096,
+    "vocab_size": len(tokenizer1.vocab),
+    "moe_lambda":0.05,
+    "block_configs":{
+        "ff_hidden_width": BASE_WIDTH,
+        "ff_n_experts":N_EXPERTS,
+        "ff_topk":TOP_K,
+        "ff_cf":CF,
+        "ff_init":"glorot_uniform",
+        "attn_type":"full",
+        "attn_variant":"gqa",
+        "attn_n_heads":N_HEADS,
+        "attn_n_kv_heads":N_KV_HEADS,
+        # "attn_windows":WINDOWS,
+        "attn_init":"glorot_uniform",
+        },
     "block_overrides":{
-        0: {"attn_windows":CONTEXT_SIZE}, 2:{"ff_n_experts": N_EXPERTS//2},3:{"ff_n_experts": N_EXPERTS//2}, 4:{"ff_n_experts": N_EXPERTS//4}
-    }
+      }
 }
 
 corpus = ""
-tokenizer1 = Tokenizer.load("artifacts/tokenizer/tokenizer8192_33414037len.tokenizer")
 # print(tokenizer1.vocab)
 files = []
 folder = Path("data")
-for file in folder.iterdir():
-    if file.name != ".gitkeep" and file.name[-1:-5:-1] == "txt." :
-        files.append(file)
+corpus, files = init_corpus("data")
 
-for file in files:
-    with open(file) as f:
-        data = f.read()
-        corpus += data + "\n\n\n"
 
 session_configs["dataset"] = f"{len(files)} files"
 weight_n = CONTEXT_SIZE * EMBED_DIM
@@ -93,7 +100,7 @@ session1 = Session(transformer, tokenizer1, True, session_configs)
 # profiler.enable()
 start = time.perf_counter()
 # mx.metal.start_capture("transformer.gputrace")
-session1.benchmark(dataloader, 38, 10)
+session1.benchmark(dataloader, 10, 10)
 end = time.perf_counter()
 # mx.metal.stop_capture()
 print(f"benchmarking finished. time: {end - start:.3f}s")

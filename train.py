@@ -16,12 +16,12 @@ backend = os.environ["BACKEND"] = "auto"
 EPOCHS = 5
 EMBED_DIM = 256
 CONTEXT_SIZE = 256
-BATCH_SIZE = 64
+BATCH_SIZE = 32
 BASE_WIDTH = 1024
-N_HEADS = 16
+N_HEADS = 32
 N_KV_HEADS = max(1, N_HEADS // 4)
 N_EXPERTS = 12
-CF = 1.5
+CF = 1.25
 VAL = .9
 TOP_K = 2
 LOADER_STRIDE = CONTEXT_SIZE
@@ -31,7 +31,7 @@ WINDOWS = CONTEXT_SIZE // 4
 PATIENCE = 20
 TRESHOLD = 1e-2
 
-TOKENIZER_PATH = "artifacts/tokenizer/tokenizer16384_33414037len.tokenizer"
+TOKENIZER_PATH = "artifacts/tokenizer/tokenizer24000_533726742len.tokenizer"
 tokenizer1 = Tokenizer.load(TOKENIZER_PATH)
 
 session_configs = {
@@ -44,11 +44,11 @@ session_configs = {
     "optimizer_args":{
         "lr": 1e-3,
         "use_master": False,
-        "scheduler": "cosine_decay",
-        "min_lr": 1e-5,
+        "scheduler": None,
+        "min_lr": None,
     },
     "using":backend,
-    "save":False,
+    "save":True,
     "create_checkpoint":False,
     "weights_only": True
 }
@@ -59,6 +59,7 @@ model_configs = {
     "dtype": nx.float16,
     "gradient_scale":4096,
     "vocab_size": len(tokenizer1.vocab),
+    "moe_lambda":0.025,
     "block_configs":{
         "ff_hidden_width": BASE_WIDTH,
         "ff_n_experts":N_EXPERTS,
@@ -66,21 +67,13 @@ model_configs = {
         "ff_cf":CF,
         "ff_init":"glorot_uniform",
         "attn_type":"full",
-        "attn_variant":"mha",
+        "attn_variant":"gqa",
         "attn_n_heads":N_HEADS,
-        # "attn_n_kv_heads":N_KV_HEADS,
+        "attn_n_kv_heads":N_KV_HEADS,
         # "attn_windows":WINDOWS,
         "attn_init":"glorot_uniform",
         },
     "block_overrides":{
-        #   2:{"ff_hidden_width": max(1,BASE_WIDTH // 2), "ff_n_experts": max(1,N_EXPERTS//2)},
-        #   3:{"ff_hidden_width": max(1,BASE_WIDTH // 2), "ff_n_experts": max(1,N_EXPERTS//2)}, 
-        #   4:{"ff_hidden_width": max(1,BASE_WIDTH // 2), "ff_n_experts":  max(1,N_EXPERTS//2)},
-        #   5:{"ff_hidden_width": max(1,BASE_WIDTH // 2), "ff_n_experts":  max(1,N_EXPERTS//2)},
-        #   6:{"ff_hidden_width": max(1,BASE_WIDTH // 2), "ff_n_experts":  max(1,N_EXPERTS//2)},
-        #   7:{"ff_hidden_width": max(1,BASE_WIDTH // 2), "ff_n_experts":  max(1,N_EXPERTS//2)},
-        #   8:{"ff_hidden_width": max(1,BASE_WIDTH // 2), "ff_n_experts":  max(1,N_EXPERTS//2)},
-        #   9:{"ff_hidden_width": max(1,BASE_WIDTH // 4), "ff_n_experts":  max(1,N_EXPERTS//2)},
       }
 }
 

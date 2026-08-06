@@ -1,21 +1,12 @@
 from pathlib import Path
 import time
 from engine.tokenizer import Tokenizer
+from helper.singleton import init_corpus
 import cProfile
 import pstats
-VOCAB_SIZE = [32768, 65536, 131072]
+VOCAB_SIZE = [15000, 24000, 48000]
 
-corpus = ""
-files = []
-folder = Path("data")
-for file in folder.iterdir():
-    if file.name != ".gitkeep" and file.name[-1:-5:-1] == "txt." :
-        files.append(file)
-
-for file in files:
-    with open(file) as f:
-        data = f.read()
-        corpus += data + "\n\n\n"
+corpus, file = init_corpus("data")
 
 corpus_len = len(corpus)
 

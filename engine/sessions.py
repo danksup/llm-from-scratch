@@ -33,6 +33,7 @@ OPTIMIZERS = {
 }
 
 SCHEDULER = {
+    "none": None,
     "cosine_decay": scheduler.CosineDecay,
     "linear_schedule":scheduler.LinearSchedule
 }
@@ -84,9 +85,10 @@ class Session:
         self.configs_str = copy.deepcopy(self.configs)
 
         if isinstance(init_optimizer, bool) and init_optimizer: 
-            optimizer_class = OPTIMIZERS[self.configs["optimizer"]]
+            optimizer_class = OPTIMIZERS[self.configs["optimizer"].lower()]
             schedule = self.configs["optimizer_args"]["scheduler"]
             if schedule is not None:
+                schedule = self.configs["optimizer_args"]["scheduler"].lower()
                 if isinstance(schedule, str):
                     if schedule not in SCHEDULER:
                         raise ValueError(f"invalid scheduler. valid schedulers: {", ".join(SCHEDULER.keys())}")
@@ -209,11 +211,11 @@ class Session:
 
                 if display_message and( i % display_every == 0 or i == self.configs["epochs"] - 1):
                     print(f"epoch {epoch} | avg loss: {error} | val: {val_loss} | best val loss: {best_val_loss} | lr: {self.optimizer.lr:.6f} | time: {time_}")
-                    # if total_histograms:
-                    #     for idx, histogram in enumerate(total_histograms):
-                            # hmin = nx.min(histogram).item()
-                            # hmax = nx.max(histogram).item()
-                            # print(f"block{idx}: ideal: {1/histogram.shape[0]} | spread: {hmax-hmin} | min: {hmin} | max: {hmax}")
+                    if total_histograms:
+                        for idx, histogram in enumerate(total_histograms):
+                            hmin = nx.min(histogram).item()
+                            hmax = nx.max(histogram).item()
+                            print(f"block{idx}: ideal: {1/histogram.shape[0]} | spread: {hmax-hmin} | min: {hmin} | max: {hmax}")
 
             if self.configs["save"]:
                 infer_only = "_weights_only" if self.configs["weights_only"] else ""

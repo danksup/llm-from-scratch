@@ -8,7 +8,6 @@ import engine.initializers as init
 import engine.backend as nx
 from typing import Any
 import time
-LAMBDA = 1e-2
 import copy
 
 default_block_configs = {
@@ -51,6 +50,7 @@ class Transformer:
         self.dtype = configs.get("dtype", nx.float32)
         self.embedding = Embedding(self.vocab_size, self.embed_dim, self.dtype)
         self.gradient_scale = configs.get("gradient_scale", 4096)
+        self.moe_lambda = configs.get("moe_lambda", 0.01)
         assert self.gradient_scale > 0, "gradient scale cant be less than 1"
         no_class_attn_type = copy.deepcopy(ATTN_TYPE)
         no_class_attn_type[default_block_configs["attn_type"]].pop('attn')
@@ -69,21 +69,26 @@ class Transformer:
                 override = block_overrides.get(i, {})
                 this = self.block_configs
                 overrided = this | override
-                overrided = overrided | ATTN_TYPE[overrided["attn_type"]] | ATTN_VARIANT[overrided["attn_variant"]] | this  | override 
-                overrided.pop('attn')
+
+                attn_variant = overrided["attn_variant"]
+                assert attn_variant in ATTN_VARIANT, f"[block {i}] invalid variant of \"{attn_variant}\" for attn_variant. valid attn_variant: {", ".join(ATTN_VARIANT.keys())}"
+
                 attn_type_str = overrided["attn_type"]
                 assert attn_type_str in ATTN_TYPE, f"[block {i}] invalid type of \"{attn_type_str}\" for attn_type. valid attn_type: {", ".join(ATTN_TYPE.keys())}"
+
+                overrided = overrided | ATTN_TYPE[overrided["attn_type"]] | ATTN_VARIANT[overrided["attn_variant"]] | this  | override 
+                overrided.pop('attn')
+
                 attn_type = ATTN_TYPE[attn_type_str]["attn"]
+
                 check = default_block_configs | ATTN_TYPE[this["attn_type"]] | ATTN_VARIANT[this["attn_variant"]] | ATTN_TYPE[overrided["attn_type"]] | ATTN_VARIANT[overrided["attn_variant"]]
                 for config in overrided:
                     if config not in check:
                         raise ValueError(f"[block {i}] {config} is invalid. valid override: {", ".join(check.keys())}")
                 self.individual_block_configs.append(overrided)
+
                 D = self.embed_dim
                 H = overrided["ff_hidden_width"]
-                
-                attn_variant = overrided["attn_variant"]
-                assert attn_variant in ATTN_VARIANT, f"[block {i}] invalid variant of \"{attn_variant}\" for attn_variant. valid attn_variant: {", ".join(ATTN_VARIANT.keys())}"
                 attn_init = INITIALIZERS[overrided["attn_init"]]
                 E = overrided["ff_n_experts"]
                 CF = overrided["ff_cf"]
@@ -212,7 +217,7 @@ class Transformer:
             _,T,_ = current_grad.shape
             caches_attn, caches_ff, caches_rmsnorm1, caches_rmsnorm2 = caches
             mask1, mask2 = masks
-            scaled_lambda = LAMBDA * self.gradient_scale
+            scaled_lambda = self.moe_lambda * self.gradient_scale
             moe_configs = block.ff.cf, block.ff.n_experts, block.ff.hidden_width, block.ff.router, scaled_lambda
             P = nx.array(0.1, dtype=self.dtype)
 
@@ -257,7 +262,7 @@ class Transformer:
                 for i in range(len(self.blocks)):
                     total_histograms[i] += histograms[i]
             loss = cross_entropy(batch_scores, next_tokens)
-            loss = nx.mean(loss) + LAMBDA * total_router_loss
+            loss = nx.mean(loss) + self.moe_lambda * total_router_loss
 
             if not nx.isfinite(loss):
                 forward_nan = nx.isnan(loss)
@@ -356,7 +361,7 @@ class Transformer:
             end = time.perf_counter()
             loss_times.append(end-start)
 
-            histogram_loss = LAMBDA * total_router_loss
+            histogram_loss = self.moe_lambda * total_router_loss
             loss = nx.mean(loss) + histogram_loss
             weighted_router_loss += histogram_loss
 
@@ -472,7 +477,7 @@ class Transformer:
             batch_validation_scores, total_router_loss = self.forward(embedded, False, False)
             
             val_loss = cross_entropy(batch_validation_scores, next_tokens)
-            val_loss = nx.mean(val_loss) + LAMBDA * total_router_loss
+            val_loss = nx.mean(val_loss) + self.moe_lambda * total_router_loss
             total_loss += val_loss.item() * next_tokens.size
             count += next_tokens.size
             

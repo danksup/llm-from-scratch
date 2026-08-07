@@ -2,14 +2,14 @@ import os
 backend = os.environ["BACKEND"] = "auto"
 import random
 # import mlx.core as mx
-EMBED_DIM = 256
+EMBED_DIM = 128
 CONTEXT_SIZE = 256
 BATCH_SIZE = 32
-BASE_WIDTH = 768
-N_HEADS = 32
-N_KV_HEADS = max(1, N_HEADS // 4)
-N_EXPERTS = 12
-CF = 1.5
+BASE_WIDTH = 1024
+N_HEADS = 4
+# N_KV_HEADS = max(1, N_HEADS // 4)
+N_EXPERTS = 8
+CF = 1.25
 VAL = .9
 TOP_K = 2
 LOADER_STRIDE = CONTEXT_SIZE
@@ -47,7 +47,7 @@ session_configs = {
 }
 
 model_configs = {
-    "n_blocks":8,
+    "n_blocks":7,
     "embed_dim":EMBED_DIM,
     "dtype": nx.float16,
     "gradient_scale":4096,
@@ -60,9 +60,9 @@ model_configs = {
         "ff_cf":CF,
         "ff_init":"glorot_uniform",
         "attn_type":"full",
-        "attn_variant":"gqa",
+        "attn_variant":"mha",
         "attn_n_heads":N_HEADS,
-        "attn_n_kv_heads":N_KV_HEADS,
+        # "attn_n_kv_heads":N_KV_HEADS,
         # "attn_windows":WINDOWS,
         "attn_init":"glorot_uniform",
         },
@@ -100,7 +100,7 @@ session1 = Session(transformer, tokenizer1, True, session_configs)
 # profiler.enable()
 start = time.perf_counter()
 # mx.metal.start_capture("transformer.gputrace")
-session1.benchmark(dataloader, 10, 10)
+session1.benchmark(dataloader, 1, 10)
 end = time.perf_counter()
 # mx.metal.stop_capture()
 print(f"benchmarking finished. time: {end - start:.3f}s")

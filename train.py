@@ -13,19 +13,19 @@ import engine.backend as nx
 from helper.singleton import init_corpus
 
 backend = os.environ["BACKEND"] = "auto"
-EPOCHS = 5
-EMBED_DIM = 256
+EPOCHS = 1
+EMBED_DIM = 192
 CONTEXT_SIZE = 256
 BATCH_SIZE = 32
-BASE_WIDTH = 1024
-N_HEADS = 32
-N_KV_HEADS = max(1, N_HEADS // 4)
-N_EXPERTS = 12
+BASE_WIDTH = 4 * EMBED_DIM
+N_HEADS = 6
+N_KV_HEADS = max(1, N_HEADS // 2)
+N_EXPERTS = 10
 CF = 1.25
 VAL = .9
 TOP_K = 2
 LOADER_STRIDE = CONTEXT_SIZE
-WINDOWS = CONTEXT_SIZE // 4
+# WINDOWS = CONTEXT_SIZE // 4
 
 #not hooked yet to session
 PATIENCE = 20
@@ -54,7 +54,7 @@ session_configs = {
 }
 
 model_configs = {
-    "n_blocks":10,
+    "n_blocks":6,
     "embed_dim":EMBED_DIM,
     "dtype": nx.float16,
     "gradient_scale":4096,

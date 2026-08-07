@@ -49,7 +49,7 @@ logs:
 - sliding windows attention jul 17 2026
 - jul 18 - jul 25: optimizing, fixed mix precision
 - ~~reverts back to non sliding attention jul 26~~
-- exposing more apis jul 27 - aug 3
+- exposing more apis,bug fix, stability jul 27 - aug 7
 
 ## Ongoing:
 - optimizing attention (backward mainly)

@@ -15,6 +15,7 @@ class DataLoader:
         self.data_count = len(data)
         self.train_split = train_split
         self.tokens = tokenizer.encode(data)
+        del data
         self.context_size = context_size
         assert stride <= context_size, "cant have more strides"
         self.stride = stride

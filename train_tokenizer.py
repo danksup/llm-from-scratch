@@ -1,29 +1,33 @@
 from pathlib import Path
 import time
 from engine.tokenizer import Tokenizer
-from helper.singleton import init_corpus
-import cProfile
-import pstats
-VOCAB_SIZE = [15000, 24000, 48000]
+import multiprocessing
 
-corpus, file = init_corpus("data")
+def train_tokenizer(vocab_size, filepath:str = "data"):
+    print(f"fitting size of {vocab_size}")
+    tokenizer1 = Tokenizer(vocab_size)
 
-corpus_len = len(corpus)
-
-for i in VOCAB_SIZE:
-    print(f"fitting corpus of length {corpus_len} with vocab size of {i}")
-    tokenizer1 = Tokenizer(i)
-    t = int(time.time())
-    print()
     start = time.perf_counter()
-    # profiler = cProfile.Profile()
-    # profiler.enable()
-    a =tokenizer1.fit(corpus)
-    # profiler.disable()
-    # stats = pstats.Stats(profiler)
-    # stats.sort_stats("cumtime")
-    # stats.print_stats(100)
+    tokenizer1.fit(filepath)
     end = time.perf_counter()
-    tokenizer_save_name = f"{i}_{len(corpus)}len"
+
+    tokenizer_save_name = f"{vocab_size}_{tokenizer1.total_char_raw}len"
     tokenizer1.save(tokenizer_save_name)
     print(f"{tokenizer_save_name} saved. fitting finished in {end-start:.3f}")
+
+if __name__ == "__main__":
+    train_tokenizer(48000)
+
+    # VOCAB_SIZE = [24000, 48000]
+    # processes = [
+    #     multiprocessing.Process(
+    #         target=train_tokenizer,
+    #         args=(vocab_size,)
+    #     )
+    #     for vocab_size in VOCAB_SIZE
+    # ]
+    # for process in processes:
+    #     process.start()
+
+    # for process in processes:
+    #     process.join()

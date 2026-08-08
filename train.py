@@ -15,8 +15,8 @@ from helper.singleton import init_corpus
 backend = os.environ["BACKEND"] = "auto"
 EPOCHS = 1
 EMBED_DIM = 192
-CONTEXT_SIZE = 256
-BATCH_SIZE = 32
+CONTEXT_SIZE = 1024
+BATCH_SIZE = 5
 BASE_WIDTH = 4 * EMBED_DIM
 N_HEADS = 6
 N_KV_HEADS = max(1, N_HEADS // 2)
@@ -31,7 +31,7 @@ LOADER_STRIDE = CONTEXT_SIZE
 PATIENCE = 20
 TRESHOLD = 1e-2
 
-TOKENIZER_PATH = "artifacts/tokenizer/tokenizer24000_533726742len.tokenizer"
+TOKENIZER_PATH = "artifacts/tokenizer/tokenizer48000_1351277738len.tokenizer"
 tokenizer1 = Tokenizer.load(TOKENIZER_PATH)
 
 session_configs = {
@@ -48,7 +48,7 @@ session_configs = {
         "min_lr": None,
     },
     "using":backend,
-    "save":True,
+    "save":False,
     "create_checkpoint":False,
     "weights_only": True
 }
@@ -89,6 +89,8 @@ print("loading dataloader ", end="\r")
 dataloader = DataLoader(corpus, tokenizer1, session_configs["context_size"], stride=LOADER_STRIDE)
 
 corpus_len = len(corpus)
+del corpus, files
+
 ratio = dataloader.get_compression_rate()
 token_size = dataloader.get_token_size()
 session_configs["corpus char len"] = f"{corpus_len} -> BPE compression ({len(tokenizer1.vocab)} vocab size): {token_size}. ratio = {ratio:.3f}% "
@@ -100,3 +102,5 @@ start = time.perf_counter()
 session1.train(dataloader, display_message=True)
 end = time.perf_counter()
 print(f"training finished. time: {end - start:.3f}s")
+
+# print(session1)

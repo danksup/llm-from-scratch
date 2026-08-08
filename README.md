@@ -49,10 +49,11 @@ logs:
 - sliding windows attention jul 17 2026
 - jul 18 - jul 25: optimizing, fixed mix precision
 - ~~reverts back to non sliding attention jul 26~~
-- exposing more apis,bug fix, stability jul 27 - aug 7
+- exposing more apis,bug fix, stability jul 27 - aug 7 2026
+- lazy BPE aug 8 2026
 
 ## Ongoing:
-- optimizing attention (backward mainly)
+- byte level bpe
 - optimizing/cleanup/docs
 
 ## TODO (not in order):
@@ -127,4 +128,5 @@ individual block configs (only difference is shown): block 2: ff_n_experts: 6 | 
 - 11296590 corpus len | 2048 | fitting finished in 17.050 incremental BPE py (4 jul 2026)
 - 195_605_563 corpus len | 8192 |fitting finished in 124.606 (4 jul 2026)
 - 195_605_563 corpus len | 16384 |fitting finished in 283.527 (5 jul 2026)
-
+- 1_351_277_738 corpus len | 24000 | fitting finished in 1437.236 (6 aug 2026)
+- 1_351_277_738 corpus len | 48000 | fitting finished in 3883.186 (6 aug 2026)

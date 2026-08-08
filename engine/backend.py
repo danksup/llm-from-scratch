@@ -35,6 +35,9 @@ int64 = _nx.int64
 int32 = _nx.int32
 int16 = _nx.int16
 int8 = _nx.int8
+uint32 = _nx.uint32
+uint16 = _nx.uint16
+uint8 = _nx.uint8
 bool_ = _nx.bool_
 bfloat16 = _nx.bfloat16 if backend == "MLX" else _nx.float32
 

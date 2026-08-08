@@ -2,14 +2,15 @@ import engine.backend as nx
 from collections import Counter
 from typing import Any
 import pickle
-
+from pathlib import Path
+import json
 
 class Tokenizer:
     def __init__(self, target_vocab_size= 1024):
         self.target_vocab_size = target_vocab_size
         self.merge_rank = {}
-        self.id_to_token = {0:"<PAD>", 1:"<UNK>", 2: "<EOT>", 3:"</w>"}
-        self.vocab = {"<PAD>":0,"<UNK>":1, "<EOT>":2, "</w>":3}
+        self.id_to_token = {0:"<PAD>", 1:"<UNK>", 2: "<EOT>", 3:"</w>", 4:"<|endofdoc|>"}
+        self.vocab = {"<PAD>":0,"<UNK>":1, "<EOT>":2, "</w>":3, "<|endofdoc|>":4}
 
     def __eq__(self, value: object) -> bool:
         if not isinstance(value, Tokenizer):
@@ -185,16 +186,44 @@ class Tokenizer:
 
         return new_word
 
-    def fit(self, corpus:str):
+    def stream_corpus(self, filepath:str, batch_size:int=10_485_760):
+        path = Path(filepath)
+        for file in path.iterdir():
+            if file.is_file() and file.suffix == ".txt":
+                with open(file, "r") as f:
+                    while True:
+                        chunk = f.read(batch_size)
+                        stream = chunk
+                        if not chunk:
+                            break
+                        while not stream[-1] in [""," ", "\n", "\r", "\t"] or not stream[-1].isspace():
+                            a = f.read(1)
+                            if a:
+                                stream += a
+                            else:
+                                break
+                        yield stream
+
+    def fit(self, filepath:str, batch_size=10_485_760):
         '''
         fill vocabs until specified amount (from `self.target_vocab_size`)
         '''
-        self.init_vocab(corpus)
-        words = [self.word_to_ids(word) for word in corpus.split()]
+        global_word_count = {}
+        total_char = 0
+        for batch in self.stream_corpus(filepath, batch_size):
+            total_char += len(batch) 
+            self.init_vocab(batch)
+            words = [self.word_to_ids(word) for word in batch.split()]
 
-        word_counts = self.get_word_counts(words)
-        pair_counts, pair_to_words = self.build_pair_index(word_counts)
+            word_counts = self.get_word_counts(words)
 
+            if not global_word_count:
+                global_word_count = word_counts
+            else:
+                for key, val in word_counts.items():
+                    global_word_count[key] = global_word_count.get(key, 0) + val
+
+        pair_counts, pair_to_words = self.build_pair_index(global_word_count)
         while len(self.vocab) < self.target_vocab_size:     
             if not pair_counts:
                 break
@@ -203,10 +232,10 @@ class Tokenizer:
 
             new_id = len(self.vocab)
             for affected_word in affected_words:
-                freq = word_counts.pop(affected_word)
+                freq = global_word_count.pop(affected_word)
                 self.remove_word(affected_word, freq, pair_counts, pair_to_words)
                 merged = tuple(self.merge(affected_word, best_pair, new_id))
-                word_counts[merged] = word_counts.get(merged, 0) + freq
+                global_word_count[merged] = global_word_count.get(merged, 0) + freq
                 self.add_word(merged, freq, pair_counts, pair_to_words)
 
             merged_best = self.id_to_token[best_pair[0]] + self.id_to_token[best_pair[1]]
@@ -215,6 +244,7 @@ class Tokenizer:
             self.merge_rank[best_pair] = (len(self.merge_rank), new_id)
             self.vocab[merged_best] = len_vocab
             self.id_to_token[len_vocab] = merged_best
+        self.total_char_raw = total_char
         
     def encode(self, text: str) -> nx.ArrayLike:
         words = [self.word_to_ids(word) for word in text.split()]
@@ -244,7 +274,11 @@ class Tokenizer:
 
         tokens = [token for word in words for token in word]
         encoded = tokens
-        return nx.array(encoded, dtype=nx.int32)
+
+        if max(encoded) <=  65_535:
+            return nx.array(encoded, dtype=nx.uint16)
+        else:
+            return nx.array(encoded, dtype=nx.uint32)
 
     def decode(self, thing:Any) -> str:
         decoded = ""
@@ -275,9 +309,19 @@ class Tokenizer:
 
         return tokenizer
     
-    def save(self, filename:str):
+    def save(self, filename:str, to_json=False):
         tokenizer = self.to_dict()
         filename = f"tokenizer{filename}.tokenizer"
+
+        if to_json:
+            merge_rank = {}
+            for key, val in tokenizer["merge_rank"].items():
+                merge_rank[key] = val
+            tokenizer["merge_rank"] = merge_rank
+            with open(f"artifacts/tokenizer/{filename}", "w") as f:
+                json.dump(tokenizer, f, indent=4)
+            return
+        
         with open(f"artifacts/tokenizer/{filename}", "wb") as f:
             f.write(b"tokenizer")
             f.write((1).to_bytes(4, "little"))
@@ -292,7 +336,6 @@ class Tokenizer:
             version = int.from_bytes(f.read(4), "little")
             loaded = pickle.load(f)
 
-        
         tokenizer = cls.from_dict(loaded)
 
         return tokenizer

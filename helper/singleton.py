@@ -11,5 +11,5 @@ def init_corpus(pathfile:str):
     for file in files:
         with open(file) as f:
             data = f.read()
-            corpus += data + "\n\n\n"
+            corpus += data + "\n\n\n <|endofdoc|>"
     return corpus, files

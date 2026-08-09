@@ -243,18 +243,14 @@ class Transformer:
 
         return current_grad
     
-    def train(self, dataloader:DataLoader, optimizer:AdamW, total_epoch:int, batch_size:int=32):
-        '''
-        Args:
-            dataloader: Dataloader object
-            embedding: Embedding object
-            batch_size = number of batch
-        '''
+    def train(self, dataloader:DataLoader, optimizer:AdamW, total_epoch:int, batch_size:int=32, max_step:int=50000):
         total_loss = nx.float_32(0.0)
         total_histograms = None
         count = 0
-        batch_counter = 0
-        for contexts, next_tokens in dataloader.get_pairs(batch_size):              
+        step_counter = 0
+        for contexts, next_tokens in dataloader.get_pairs(dataloader.train_files, batch_size):      
+            if step_counter >= max_step:
+                break
             embedded = self.embedding.forward(contexts)  # shape (batch, context_size, embed_dim)
             batch_scores, last_output, all_masks, all_caches, total_router_loss, histograms = self.forward(embedded)
             del embedded
@@ -271,7 +267,7 @@ class Transformer:
             if not nx.isfinite(loss):
                 forward_nan = nx.isnan(loss)
                 forward_inf = nx.isinf(loss)
-                raise FloatingPointError(f"[FORWARD] non finite loss at step {batch_counter}. isnan: {forward_nan} | isinf: {forward_inf}")
+                raise FloatingPointError(f"[FORWARD] non finite loss at step {step_counter}. isnan: {forward_nan} | isinf: {forward_inf}")
 
             batch_gradient = cross_entropy_gradient(batch_scores, next_tokens)
             batch_gradient /= (batch_gradient.shape[0] * batch_gradient.shape[1])
@@ -295,7 +291,7 @@ class Transformer:
                 backward_min = nx.min(current_grad)
                 backward_nan = nx.isnan(current_grad).any()
                 backward_inf = nx.isinf(current_grad).any()
-                raise FloatingPointError(f"[BACKWARD] non-finite gradient at step {batch_counter}. isnan: {backward_nan} | isinf: {backward_inf}.\nmin value: {backward_min}\nmax value: {backward_max}")
+                raise FloatingPointError(f"[BACKWARD] non-finite gradient at step {step_counter}. isnan: {backward_nan} | isinf: {backward_inf}.\nmin value: {backward_min}\nmax value: {backward_max}")
 
             embedding_gradient = nx.zeros_like(self.embedding.lookup_table, dtype=nx.float32)
             embedding_gradient = nx.add_at(embedding_gradient, contexts, current_grad)
@@ -328,8 +324,7 @@ class Transformer:
 
             del total_embedding_gradient
 
-            
-            optimized = optimizer.step_many(all_network_params,dataloader.train_contexts, batch_size, total_epoch)
+            optimized = optimizer.step_many(all_network_params, max_step, total_epoch)
             for i,block in enumerate(self.blocks):
                 block.attention.Wqkv = optimized[f"Wqkv_{i}"].astype(self.dtype)
                 block.attention.Wo = optimized[f"Wo_{i}"].astype(self.dtype)
@@ -343,14 +338,14 @@ class Transformer:
             total_loss += loss.item() * next_tokens.size
             del all_network_params, optimized, loss
             count += next_tokens.size
-            batch_counter += 1
+            step_counter += 1
         
-            print(f"step: {batch_counter}",end="\r" )
+            print(f"step: {step_counter}",end="\r" )
         final_loss = total_loss / count
         if total_histograms != None:
             for i in range(len(total_histograms)):
-                total_histograms[i] /= batch_counter
-        return nx.float_32(final_loss), total_histograms, batch_counter
+                total_histograms[i] /= step_counter
+        return nx.float_32(final_loss), total_histograms, step_counter
     
     def benchmark(self, dataloader:DataLoader, optimizer:AdamW, batch_size:int=32, pass_ =1):
         total_loss = nx.float_32(0.0)
@@ -363,7 +358,7 @@ class Transformer:
         network_optimizer_times = []
         total_histograms = None
         weighted_router_loss = nx.float_32(0.0)
-        for contexts, next_tokens in dataloader.get_pairs(batch_size):  
+        for contexts, next_tokens in dataloader.get_pairs(dataloader.train_files, batch_size):  
             if batch_idx == pass_:
                 break            
             embedded = self.embedding.forward(contexts)  # shape (batch, context_size, embed_dim)
@@ -440,7 +435,7 @@ class Transformer:
             all_network_params.extend([("embedding",self.embedding.lookup_table.astype(nx.float32), total_embedding_gradient)])
             
             start = time.perf_counter()
-            optimized = optimizer.step_many(all_network_params,dataloader.train_contexts, batch_size, total_epoch)
+            optimized = optimizer.step_many(all_network_params, pass_, total_epoch)
             for i,block in enumerate(self.blocks):
                 block.attention.Wqkv = optimized[f"Wqkv_{i}"].astype(self.dtype)
                 block.attention.Wo = optimized[f"Wo_{i}"].astype(self.dtype)
@@ -485,7 +480,7 @@ class Transformer:
         count = 0
         dataloader.train_split = train_split
     
-        for contexts, next_tokens in dataloader.get_validation_pairs(batch_size):
+        for contexts, next_tokens in dataloader.get_pairs(dataloader.validation_files, batch_size):
             embedded = self.embedding.forward(contexts) 
             batch_validation_scores, total_router_loss = self.forward(embedded, False, False)
             

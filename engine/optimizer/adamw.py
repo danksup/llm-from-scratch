@@ -28,11 +28,11 @@ class AdamW:
         self.weight_decay = nx.float_32(weight_decay)
         self.use_master = use_master
     
-    def step_many(self, name_param_gradient:list[Any], train_contexts, batch_size, total_epoch) -> dict[Any,Any]:
+    def step_many(self, name_param_gradient:list[Any], max_step:int, total_epoch:int) -> dict[Any,Any]:
 
         if self.scheduler:
             current_step = self.state["t"]
-            total_step = ((len(train_contexts)) // batch_size) * total_epoch
+            total_step = max_step * total_epoch
             progress = min(1, current_step / total_step) 
             self.lr = self.schedule(progress)
 

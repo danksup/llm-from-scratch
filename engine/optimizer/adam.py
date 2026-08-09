@@ -12,8 +12,8 @@ class Adam:
         self.scheduler = self.__adamw.scheduler
         self.min_lr = self.__adamw.min_lr
 
-    def step_many(self, name_param_gradient:list[Any], train_contexts, batch_size, total_epoch) -> dict[Any,Any]:
-        optimized = self.__adamw.step_many(name_param_gradient, train_contexts, batch_size, total_epoch)
+    def step_many(self, name_param_gradient:list[Any], max_step, total_epoch) -> dict[Any,Any]:
+        optimized = self.__adamw.step_many(name_param_gradient, max_step, total_epoch)
         self.lr = self.__adamw.lr
         self.state = self.__adamw.state
         return optimized

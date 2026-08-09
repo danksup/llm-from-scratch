@@ -31,10 +31,10 @@ class SGD:
         if momentum > 0.0:
             self.state = {}
     
-    def step_many(self, name_param_gradient:list[Any], train_contexts, batch_size, total_epoch):
+    def step_many(self, name_param_gradient:list[Any], max_step, total_epoch):
         if self.scheduler:
             current_step = self.state["t"]
-            total_step = ((len(train_contexts)) // batch_size) * total_epoch
+            total_step = max_step * total_epoch
             progress = min(1, current_step / total_step) 
             self.lr = self.schedule(progress)
 

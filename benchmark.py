@@ -70,14 +70,6 @@ model_configs = {
       }
 }
 
-corpus = ""
-# print(tokenizer1.vocab)
-files = []
-folder = Path("data")
-corpus, files = init_corpus("data")
-
-
-session_configs["dataset"] = f"{len(files)} files"
 weight_n = CONTEXT_SIZE * EMBED_DIM
 real_vocab_size = len(tokenizer1.vocab)
 model_configs["vocab_size"] = real_vocab_size
@@ -88,12 +80,8 @@ start = time.perf_counter()
 session_configs["block_size"] = len(transformer.blocks)
 
 print("loading dataloader", end="\r")
-dataloader = DataLoader(corpus, tokenizer1, session_configs["context_size"], LOADER_STRIDE)
+dataloader = DataLoader("data", tokenizer1, session_configs["context_size"], LOADER_STRIDE)
 
-corpus_len = len(corpus)
-token_size = dataloader.tokens.size
-ratio = ((corpus_len - token_size )/corpus_len) * 100
-session_configs["corpus char len"] = f"{corpus_len} -> BPE compression ({len(tokenizer1.vocab)} vocab size): {token_size}. ratio = {ratio:.3f}% "
 session1 = Session(transformer, tokenizer1, True, session_configs)
 
 # profiler = cProfile.Profile()

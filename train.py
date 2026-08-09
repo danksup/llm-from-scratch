@@ -24,7 +24,6 @@ N_EXPERTS = 10
 CF = 1.25
 VAL = .9
 TOP_K = 2
-LOADER_STRIDE = CONTEXT_SIZE
 # WINDOWS = CONTEXT_SIZE // 4
 
 #not hooked yet to session
@@ -38,7 +37,6 @@ session_configs = {
     "epochs":EPOCHS,
     "context_size": CONTEXT_SIZE,
     "batch_size": BATCH_SIZE,
-    "dataloader_strides":LOADER_STRIDE,
     "optimizer":"adamw",
     "train_split":VAL,
     "optimizer_args":{
@@ -77,24 +75,12 @@ model_configs = {
       }
 }
 
-corpus, files = init_corpus("data")
-
-session_configs["dataset"] = f"{len(files)} files"
-
 transformer = Transformer(model_configs)
 
 session_configs["block_size"] = len(transformer.blocks)
 
 print("loading dataloader ", end="\r")
-dataloader = DataLoader(corpus, tokenizer1, session_configs["context_size"], stride=LOADER_STRIDE)
-corpus_len = dataloader.data_count
-del corpus, files
-
-ratio = dataloader.get_compression_rate()
-token_size = dataloader.get_token_size()
-session_configs["corpus char len"] = f"{corpus_len} -> BPE compression ({len(tokenizer1.vocab)} vocab size): {token_size}. ratio = {ratio:.3f}% "
-max_pass = dataloader.get_pass_count(BATCH_SIZE)
-session_configs["max step"] = f"{max_pass} ({LOADER_STRIDE} strides)"
+dataloader = DataLoader("data", tokenizer1, session_configs["context_size"])
 
 session1 = Session(transformer, tokenizer1, True, session_configs)
 start = time.perf_counter()

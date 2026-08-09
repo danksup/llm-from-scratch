@@ -196,7 +196,7 @@ class Tokenizer:
                         stream = chunk
                         if not chunk:
                             break
-                        while not stream[-1] in [""," ", "\n", "\r", "\t"] or not stream[-1].isspace():
+                        while not stream[-1].isspace():
                             a = f.read(1)
                             if a:
                                 stream += a
@@ -273,7 +273,10 @@ class Tokenizer:
                 words[idx] = word
 
         tokens = [token for word in words for token in word]
+
         encoded = tokens
+
+        del tokens,words
 
         if max(encoded) <=  65_535:
             return nx.array(encoded, dtype=nx.uint16)
@@ -295,7 +298,8 @@ class Tokenizer:
         vocab = {
             "merge_rank":self.merge_rank.copy(),
             "vocab":self.vocab.copy(),
-            "id_to_token":self.id_to_token.copy()
+            "id_to_token":self.id_to_token.copy(),
+            "raw_char_size": self.total_char_raw if hasattr(self, "total_char_raw") else None
         }
         return vocab
     
@@ -306,6 +310,7 @@ class Tokenizer:
         tokenizer.vocab = thing["vocab"]
         tokenizer.id_to_token = thing["id_to_token"]
         tokenizer.merge_rank = thing["merge_rank"]
+        tokenizer.total_char_raw = thing.get("raw_char_size", None)
 
         return tokenizer
     

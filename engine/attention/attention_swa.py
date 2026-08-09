@@ -158,7 +158,6 @@ class AttentionSWA:
         # print("dweights",d_weights.dtype)
         # print("winv",windows_V.dtype)
 
-
         # nx.eval(d_weights)  
         # end = time.perf_counter()
         # print(f"d_weights {end-start:.5f}")
@@ -172,6 +171,8 @@ class AttentionSWA:
         d_weights = d_weights[:,:,:,:,0,:].astype(nx.float32)
         d_scores = softmax_derivative(weights_softmax, d_weights) / nx.sqrt(head_dim, dtype=nx.float32) #(B, n_kv_heads, n_rep, T, W+1)
         d_scores = d_scores.astype(x.dtype)
+        
+        del d_output_split, d_output_split_6d, d_weights, windows_V_6d
 
         # start = time.perf_counter()
         d_scores_6d = d_scores[:,:,:,:,None,:] #(B, n_kv_heads, n_rep, T, 1,W+1)
@@ -189,18 +190,23 @@ class AttentionSWA:
         # end = time.perf_counter()
         # print(f"d_windows_K {end-start:.5f}")
 
+        del Q, d_scores, d_scores_6d, windows_K_6d,  windows_K
+
         # start = time.perf_counter()
         d_padded_K = nx.zeros((B, n_kv_heads, T+W, head_dim), dtype=d_windows_K.dtype)
         d_padded_V = nx.zeros((B, n_kv_heads, T+W, head_dim), dtype=d_windows_V.dtype)
         for slot in range(W + 1):
             d_padded_K[:, :, slot:slot + T, :] += d_windows_K[:, :, :, slot, :]
             d_padded_V[:, :, slot:slot + T, :] += d_windows_V[:, :, :, slot, :]
+        
         # nx.eval(d_padded_K, d_padded_V)  
         # end = time.perf_counter()
         # print(f"padded loop {end-start:.5f}")
 
         dK = d_padded_K[:, :, W:, :]
         dV = d_padded_V[:, :, W:, :]
+
+        del d_windows_K, d_windows_V, d_padded_K, d_padded_V
 
         dQ = rope_inverse(dQ, freqs) #grad dtype
         dK = rope_inverse(dK, freqs) #grad dtype
@@ -215,6 +221,7 @@ class AttentionSWA:
 
         dQKV = nx.concatenate([dQ, dK,dV], axis=-1) #(B,T, D + 2 * (n_kv_heads * Dh))
         DQKV = dQKV.reshape(-1, embed_dim + 2 * (n_kv_heads * head_dim))
+        del dQ, dK, dV
 
         X = x.reshape(-1, embed_dim)
         dWqkv = DQKV.T @ X
@@ -228,7 +235,8 @@ class AttentionSWA:
         dWo = H.T @ G
         dx = dQKV @ Wqkv
         # print("dwo", dWo.dtype)
-        # print("dx", dx.dtype)
+        # print("dx", dx.dtype
+        del x, output_concat, freqs, Wqkv, Wo
         return dx,dWqkv,dWo
     
     def inference_forward(self, x, max_cache_len, freqs, cached_k=None, cached_v=None, position = 0):

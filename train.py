@@ -16,7 +16,7 @@ backend = os.environ["BACKEND"] = "auto"
 EPOCHS = 1
 EMBED_DIM = 192
 CONTEXT_SIZE = 1024
-BATCH_SIZE = 5
+BATCH_SIZE = 4
 BASE_WIDTH = 4 * EMBED_DIM
 N_HEADS = 6
 N_KV_HEADS = max(1, N_HEADS // 2)
@@ -31,7 +31,7 @@ LOADER_STRIDE = CONTEXT_SIZE
 PATIENCE = 20
 TRESHOLD = 1e-2
 
-TOKENIZER_PATH = "artifacts/tokenizer/tokenizer48000_1351277738len.tokenizer"
+TOKENIZER_PATH = "artifacts/tokenizer/tokenizer32000_1351277738len.tokenizer"
 tokenizer1 = Tokenizer.load(TOKENIZER_PATH)
 
 session_configs = {
@@ -43,23 +43,23 @@ session_configs = {
     "train_split":VAL,
     "optimizer_args":{
         "lr": 1e-3,
-        "use_master": False,
+        "use_master": True,
         "scheduler": None,
         "min_lr": None,
     },
     "using":backend,
-    "save":False,
+    "save":True,
     "create_checkpoint":False,
     "weights_only": True
 }
 
 model_configs = {
-    "n_blocks":6,
+    "n_blocks":5,
     "embed_dim":EMBED_DIM,
     "dtype": nx.float16,
-    "gradient_scale":4096,
+    "gradient_scale":1024,
     "vocab_size": len(tokenizer1.vocab),
-    "moe_lambda":0.025,
+    "moe_lambda":0.015,
     "block_configs":{
         "ff_hidden_width": BASE_WIDTH,
         "ff_n_experts":N_EXPERTS,
@@ -87,8 +87,7 @@ session_configs["block_size"] = len(transformer.blocks)
 
 print("loading dataloader ", end="\r")
 dataloader = DataLoader(corpus, tokenizer1, session_configs["context_size"], stride=LOADER_STRIDE)
-
-corpus_len = len(corpus)
+corpus_len = dataloader.data_count
 del corpus, files
 
 ratio = dataloader.get_compression_rate()

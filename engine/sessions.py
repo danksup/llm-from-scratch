@@ -165,7 +165,7 @@ class Session:
         train using set configs
         """
         if display_message:
-            print("[training]")
+            print("[training]              ")
             print(self)   
         epoch = 0
         checkpoint = None

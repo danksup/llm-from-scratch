@@ -122,23 +122,28 @@ class MoE:
         capacity = math.ceil(capacity_factor * N * top_k / n_experts)
         d_masked_output = assignment_gradient * valid[...,None]
 
+        del flatten_gradient, assignment_gradient
+
         d_gated_output = nx.zeros((n_experts, capacity, D), dtype=gradient.dtype)
         # start = time.perf_counter()
         d_gated_output = nx.add_at(d_gated_output, (flatten_top_expert_indices, safe_slot), d_masked_output)
         # nx.eval(d_gated_output)
         # end = time.perf_counter()
         # print("d_gated_output", end-start)
+        del d_masked_output
+
 
         d_raw_output = d_gated_output * expert_gate[..., None] #(E, capacity, D) #fp16
         d_expert_gate = nx.sum(d_gated_output * raw_output, axis=-1, dtype=nx.float32,) #(E, capacity)
        
         dWout = hidden.transpose(0, 2, 1) @ d_raw_output
-        
         # start = time.perf_counter()
         d_hidden = d_raw_output @ Wout.transpose(0, 2, 1) #(E,C,H) fp16
         # nx.eval(d_hidden)
         # end = time.perf_counter()
         # print("d_hidden", end-start)
+
+        del hidden, d_gated_output, Wout
 
         gate_half = projected[..., :hidden_width]
         value_half = projected[..., hidden_width:]
@@ -147,6 +152,7 @@ class MoE:
         d_value_half = d_hidden * swish(gate_half, dtype=value_half.dtype)
         d_projected = nx.concatenate([d_gate_half, d_value_half], axis=-1) #(E, C, 2H)  fp16
 
+        del projected, d_hidden, gate_half, value_half, d_gate_half, d_value_half
 
         # start = time.perf_counter()
         #expertinput = (E, C, D)
@@ -167,6 +173,8 @@ class MoE:
         d_chosen_gate = d_expert_gate[flatten_top_expert_indices, safe_slot]
         d_chosen_gate *= valid
 
+        del d_expert_input, d_projected, expert_input, d_raw_output, raw_output, expert_gate, Wcombined
+
         d_chosen_gate = d_chosen_gate.reshape(N,top_k)
         token_rows = nx.arange(N, dtype=nx.int32)[:,None]
         selected_prob = router_prob[token_rows, top_expert_indices] #N,K
@@ -175,8 +183,12 @@ class MoE:
         d_selected_prob = (d_chosen_gate - coupling)/gate_sum #(N,K)
         d_selected_prob = d_selected_prob.reshape(-1,)
 
+
         d_router_prob = nx.zeros((N,n_experts), dtype=d_selected_prob.dtype) #fp32
         d_router_prob[assignement_tokens, flatten_top_expert_indices] = d_selected_prob
+
+        del coupling, gate_sum, token_rows, selected_prob, top_gates32, d_chosen_gate,d_selected_prob, assignement_tokens, flatten_top_expert_indices
+
 
         d_avg_prob = n_experts * normalized_histogram
         d_router_prob += LAMBDA * (d_avg_prob / N)
@@ -184,9 +196,13 @@ class MoE:
         d_scores = softmax_derivative(router_prob, d_router_prob) #(N,E)
         # print("d_scores", d_scores.dtype)
 
+
         d_router = flatten_x.astype(nx.float32).T @ d_scores #(D,E) #fp32
         # print("droter", d_router.dtype)
         d_x_router = d_scores @ router.T #(N, D)
+
+        del normalized_histogram, d_avg_prob,flatten_x, d_scores, router
+
         # print("router", router.dtype)
         # print("dxrouter", d_x_router.dtype)
         d_x_expert = d_x_expert.reshape(N, top_k, D)
@@ -195,6 +211,9 @@ class MoE:
         dx_flat = d_x_expert + d_x_router #(N,D)
 
         dx = dx_flat.reshape(B,T,D) 
+
+        del dx_flat, top_expert_indices, valid, safe_slot
+
         return dx, dWcombined, dWout, d_router
 
     def to_dict(self) -> dict:

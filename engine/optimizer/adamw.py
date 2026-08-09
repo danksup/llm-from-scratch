@@ -66,6 +66,9 @@ class AdamW:
             state_shape = self.state[shape]    
             m_v_t = (state_shape["m"], state_shape["v"], self.state["t"])
             new_params, m,v,_ = self.__step(m_v_t,params,gradients,self.lr,  self.epsilon, self.beta1, self.beta2, self.weight_decay)
+
+            del params, gradients
+
             self.state[shape] = {"m":m, "v":v}
             if self.use_master:
                 self.state[shape]["master"] = new_params
@@ -75,6 +78,9 @@ class AdamW:
                 optimized[name] = new_params[idx]
                 name_list.append(name)
             self.state[shape]["names"] = name_list
+            
+            del new_params
+
         return optimized
     
     @staticmethod

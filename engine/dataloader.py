@@ -2,6 +2,7 @@ from engine.tokenizer import Tokenizer
 import engine.backend as nx
 from typing import Any
 import math
+from pathlib import Path
 
 class DataLoader:
     def __init__(self,data:str, tokenizer:Tokenizer, context_size:int=16, train_split=0.9, stride=8) -> None:
@@ -31,6 +32,22 @@ class DataLoader:
         self.train_targets = shuffled_targets[:split]
         self.validate_contexts = shuffled_contexts[split:]
         self.validate_targets = shuffled_targets[split:]
+
+    @staticmethod
+    def get_file_permutation(filepath:str, return_files:bool=False) -> nx.ArrayLike | tuple[nx.ArrayLike, list[Path]]:
+        path = Path(filepath)
+        files = []
+        
+        for file in path.iterdir():
+            if file.is_file and file.suffix == ".txt":
+                files.append(file)
+
+        n_files = len(files)
+        permutation = nx.permutation(n_files)
+
+        if return_files:
+            return permutation, files
+        return permutation
 
     def get_pairs(self, batch_size:int=32):
         """ 

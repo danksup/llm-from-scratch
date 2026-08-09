@@ -238,8 +238,9 @@ class Transformer:
 
             block.rmsnorm1.d_gamma = d_gamma1 
             block.rmsnorm2.d_gamma = d_gamma2 
+
             current_grad = dx
-        
+
         return current_grad
     
     def train(self, dataloader:DataLoader, optimizer:AdamW, total_epoch:int, batch_size:int=32):
@@ -256,6 +257,7 @@ class Transformer:
         for contexts, next_tokens in dataloader.get_pairs(batch_size):              
             embedded = self.embedding.forward(contexts)  # shape (batch, context_size, embed_dim)
             batch_scores, last_output, all_masks, all_caches, total_router_loss, histograms = self.forward(embedded)
+            del embedded
             if total_histograms is None:
                 total_histograms = histograms
             else:
@@ -263,6 +265,8 @@ class Transformer:
                     total_histograms[i] += histograms[i]
             loss = cross_entropy(batch_scores, next_tokens)
             loss = nx.mean(loss) + self.moe_lambda * total_router_loss
+
+            del histograms
 
             if not nx.isfinite(loss):
                 forward_nan = nx.isnan(loss)
@@ -278,9 +282,13 @@ class Transformer:
             
             d_table = batch_gradient.reshape(-1, self.vocab_size).T @ last_output.reshape(-1, self.embed_dim) 
             d_table = d_table.astype(nx.float32) / self.gradient_scale
+
+            del batch_gradient
             
             current_grad = self.backward(block_gradient, self.embedding.lookup_table, last_output, all_masks, all_caches)
             current_grad = current_grad.astype(nx.float32) / self.gradient_scale
+
+            del block_gradient, last_output, all_masks, all_caches
 
             if not nx.isfinite(current_grad).all().item():
                 backward_max = nx.max(current_grad)
@@ -294,24 +302,32 @@ class Transformer:
 
             total_embedding_gradient = embedding_gradient + d_table
 
+            del embedding_gradient, current_grad, d_table
+
             all_network_params = []
             for i,block in enumerate(self.blocks):
-                block.attention.dWqkv = block.attention.dWqkv.astype(nx.float32) / self.gradient_scale
-                block.attention.dWo = block.attention.dWo.astype(nx.float32) / self.gradient_scale
-                block.ff.dWcombined = block.ff.dWcombined.astype(nx.float32) / self.gradient_scale
-                block.ff.dWout = block.ff.dWout.astype(nx.float32) / self.gradient_scale
-                block.ff.d_router = block.ff.d_router.astype(nx.float32) / self.gradient_scale
-                block.rmsnorm1.d_gamma = block.rmsnorm1.d_gamma.astype(nx.float32) / self.gradient_scale
-                block.rmsnorm2.d_gamma = block.rmsnorm2.d_gamma.astype(nx.float32) / self.gradient_scale
+                dWqkv = block.attention.dWqkv.astype(nx.float32) / self.gradient_scale
+                dWo = block.attention.dWo.astype(nx.float32) / self.gradient_scale
+                dWcombined = block.ff.dWcombined.astype(nx.float32) / self.gradient_scale
+                dWout = block.ff.dWout.astype(nx.float32) / self.gradient_scale
+                d_router = block.ff.d_router.astype(nx.float32) / self.gradient_scale
+                d_gamma1 = block.rmsnorm1.d_gamma.astype(nx.float32) / self.gradient_scale
+                d_gamma2 = block.rmsnorm2.d_gamma.astype(nx.float32) / self.gradient_scale
                 all_network_params.extend(
-                    [(f"Wqkv_{i}", block.attention.Wqkv.astype(nx.float32), block.attention.dWqkv),
-                    (f"Wo_{i}", block.attention.Wo.astype(nx.float32), block.attention.dWo),
-                    (f"ff_wcombined_{i}", block.ff.Wcombined.astype(nx.float32), block.ff.dWcombined),
-                    (f"ff_wout_{i}", block.ff.Wout.astype(nx.float32), block.ff.dWout),
-                    (f"ff_router_{i}", block.ff.router.astype(nx.float32), block.ff.d_router),
-                    (f"rmsnorm1_gamma_{i}", block.rmsnorm1.gamma.astype(nx.float32), block.rmsnorm1.d_gamma),
-                    (f"rmsnorm2_gamma_{i}", block.rmsnorm2.gamma.astype(nx.float32), block.rmsnorm2.d_gamma)])
+                    [(f"Wqkv_{i}", block.attention.Wqkv.astype(nx.float32), dWqkv),
+                    (f"Wo_{i}", block.attention.Wo.astype(nx.float32), dWo),
+                    (f"ff_wcombined_{i}", block.ff.Wcombined.astype(nx.float32),dWcombined),
+                    (f"ff_wout_{i}", block.ff.Wout.astype(nx.float32), dWout),
+                    (f"ff_router_{i}", block.ff.router.astype(nx.float32), d_router),
+                    (f"rmsnorm1_gamma_{i}", block.rmsnorm1.gamma.astype(nx.float32), d_gamma1),
+                    (f"rmsnorm2_gamma_{i}", block.rmsnorm2.gamma.astype(nx.float32), d_gamma2)])
+                del dWqkv, dWo, dWcombined, dWout, d_router, d_gamma1, d_gamma2
+                del block.attention.dWqkv, block.attention.dWo, block.ff.dWcombined, block.ff.dWout, block.ff.d_router, block.rmsnorm1.d_gamma, block.rmsnorm2.d_gamma
+                
             all_network_params.extend([("embedding",self.embedding.lookup_table.astype(nx.float32), total_embedding_gradient)])
+
+            del total_embedding_gradient
+
             
             optimized = optimizer.step_many(all_network_params,dataloader.train_contexts, batch_size, total_epoch)
             for i,block in enumerate(self.blocks):
@@ -325,14 +341,11 @@ class Transformer:
             self.embedding.lookup_table = optimized["embedding"].astype(self.dtype)
 
             total_loss += loss.item() * next_tokens.size
+            del all_network_params, optimized, loss
             count += next_tokens.size
             batch_counter += 1
-
-            del (embedded,batch_scores,last_output,all_masks,all_caches,total_router_loss,loss,batch_gradient,block_gradient,d_table,current_grad,
-                    embedding_gradient,total_embedding_gradient,all_network_params,optimized,)
-            # if batch_counter % 10 == 0:
-            #     gc.collect()
-
+        
+            print(f"step: {batch_counter}",end="\r" )
         final_loss = total_loss / count
         if total_histograms != None:
             for i in range(len(total_histograms)):
@@ -534,6 +547,7 @@ class Transformer:
         configs += f"embed_dim: {str(self.embed_dim)}" + "\n"
         configs += f"gradient_scale: {str(self.gradient_scale)}" + "\n"
         configs += "precision: float32\n" if self.dtype == nx.float32 else f"precision: mixed precision ({self.dtype})\n" 
+        configs += f"block count: {len(self.blocks)}\n"
         configs += f"block configs: {self.block_configs}\n"
         configs += "individual block configs (only difference is shown): \n"
         similar_count = 0

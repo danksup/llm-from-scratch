@@ -16,7 +16,7 @@ def train_tokenizer(vocab_size, filepath:str = "data"):
     print(f"{tokenizer_save_name} saved. fitting finished in {end-start:.3f}")
 
 if __name__ == "__main__":
-    train_tokenizer(48000)
+    train_tokenizer(32000)
 
     # VOCAB_SIZE = [24000, 48000]
     # processes = [

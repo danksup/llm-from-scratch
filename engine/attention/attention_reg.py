@@ -114,7 +114,9 @@ class AttentionFull:
         dQ = nx.einsum("bkrQK,bkKh->bkrQh", dscores, K) #(B, nkv, n_rep, Tq, Dh)
 
         dK = nx.einsum("bkrQK,bkrQh->bkKh",dscores, Q) #(B, nkv, Tk, Dh)
-        
+
+        del Q, dscores, dweights, d_output, d_output_concat
+
         dQ = dQ.reshape(B, -1, T, head_dim)
         dQ = rope_inverse(dQ, freqs)
         dK = rope_inverse(dK, freqs)
@@ -126,6 +128,8 @@ class AttentionFull:
         dQKV = nx.concatenate([dQ, dK,dV], axis=-1)
         DQKV = dQKV.reshape(-1, embed_dim + 2 * (n_kv_heads * head_dim))
 
+        del dQ, dK, dV
+
         X = x.reshape(-1, embed_dim)
         dWqkv = DQKV.T @ X
 
@@ -136,7 +140,7 @@ class AttentionFull:
         dx = dQKV @ Wqkv
 
         # print("dx", dx.dtype)
-
+        del x, output_concat, freqs, Wqkv, Wo
         return dx,dWqkv,dWo
         
     def inference_forward(self, x, max_cache_len, freqs, cached_k=None, cached_v=None, position = 0):

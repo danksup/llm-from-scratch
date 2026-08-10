@@ -35,6 +35,7 @@ tokenizer1 = Tokenizer.load(TOKENIZER_PATH)
 
 session_configs = {
     "epochs":EPOCHS,
+    "max_step":50000,
     "context_size": CONTEXT_SIZE,
     "batch_size": BATCH_SIZE,
     "optimizer":"adamw",
@@ -52,10 +53,10 @@ session_configs = {
 }
 
 model_configs = {
-    "n_blocks":5,
+    "n_blocks":7,
     "embed_dim":EMBED_DIM,
-    "dtype": nx.float16,
-    "gradient_scale":1024,
+    "dtype": nx.float32,
+    "gradient_scale":1,
     "vocab_size": len(tokenizer1.vocab),
     "moe_lambda":0.015,
     "block_configs":{

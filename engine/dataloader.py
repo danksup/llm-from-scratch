@@ -68,21 +68,25 @@ class DataLoader:
     @staticmethod
     def stream_file(files:list[Path], permutation:list[int]) -> Iterator[Path]:
         for idx in permutation:
+            print(files[idx])
             yield files[idx]
 
     @staticmethod
     def stream_chunk(file:Path, chunk_size= 100_240_000):
         chunk = None
-        with open(file, "r") as f:
+        with open(file, "r", encoding="utf-8", errors='ignore') as f:
             while True:
                 chunk = f.read(chunk_size)
                 if not chunk:
                     break
-                if not chunk[-1].isspace():
+
+                if chunk and not chunk[-1].isspace():
                     while True:
                         a = f.read(1)
                         if a:
                             chunk += a
+                            if a.isspace():
+                                break
                         else:
                             break
                 yield chunk
@@ -96,13 +100,14 @@ class DataLoader:
             for chungus in self.stream_chunk(file, chunk_size):
                 context = None
 
-                if leftover_temp_context:
+                if leftover_temp_context is not None:
                     context = leftover_temp_context
                     leftover_temp_context = None
 
+                # print(chungus)
                 temp_context = self.tokenizer.encode(chungus)  
 
-                if context and temp_context.size < needed_T:
+                if context is not None and temp_context.size < needed_T:
                     concatenated = nx.concatenate([context, temp_context])
                     if concatenated.size == needed_T:
                         yield concatenated
@@ -114,8 +119,8 @@ class DataLoader:
                         context = None
 
                 while temp_context.size >= needed_T:
-                    need = needed_T - len(context) if context else needed_T
-                    context = nx.concatenate([context, temp_context[0:need]]) if context else temp_context[0:need]
+                    need = needed_T - len(context) if context is not None else needed_T
+                    context = nx.concatenate([context, temp_context[0:need]]) if context is not None else temp_context[0:need]
                     yield context
                     context = None
                     temp_context = temp_context[need:]

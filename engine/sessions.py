@@ -10,12 +10,14 @@ import time
 import pickle
 import numpy as np
 import copy
+import warnings
 
 optimizers = Union[optim.Adam, optim.AdamW, optim.SGD]
 OPTIMIZER_TYPES = (optim.Adam,optim.AdamW,optim.SGD,)
 
 DEFAULT_CONFIGS = {
     "epochs": 100,
+    "max_step":50000,
     "context_size": 64,
     "batch_size": 32,
     "optimizer":"adamw",
@@ -75,6 +77,7 @@ class Session:
         self.transformer = transformer
         assert len(tokenizer.vocab) == transformer.vocab_size, f"vocab size mismatch of {transformer.vocab_size} in transformer and {len(tokenizer.vocab)} in tokenizer."
 
+
         if configs is None:
             configs = {}
 
@@ -82,6 +85,10 @@ class Session:
         config_optimizer = self.configs["optimizer"].lower()
         assert config_optimizer in OPTIMIZERS, f"invalid optimizer \"{config_optimizer}\". valid optimizers: {", ".join(OPTIMIZERS.keys())}"
         self.configs["optimizer_args"] = DEFAULT_OPTIMIZER_ARGS[config_optimizer] | configs.get("optimizer_args", {})
+        if transformer.dtype == nx.float32 and self.configs["optimizer_args"]["use_master"]:
+            warnings.warn("master is disabled when using full precision", Warning)
+            self.configs["optimizer_args"]["use_master"] = False
+
         self.configs_str = copy.deepcopy(self.configs)
 
         if isinstance(init_optimizer, bool) and init_optimizer: 
@@ -178,7 +185,7 @@ class Session:
                 epoch = i
                 start = time.perf_counter()
                 assert self.optimizer, "optimizer doesnt exist"
-                error, total_histograms, batch_count = self.transformer.train(dataloader, self.optimizer, self.configs["epochs"], batch_size=self.configs["batch_size"]) #type:ignore
+                error, total_histograms, batch_count = self.transformer.train(dataloader, self.optimizer, self.configs["epochs"], batch_size=self.configs["batch_size"], max_step=self.configs["max_step"]) #type:ignore
                 val_loss = self.validation(dataloader)
                 end = time.perf_counter()   
                 time_ = end-start
@@ -239,6 +246,7 @@ class Session:
             print(f"epoch {epoch}: {e}")
             if checkpoint is not None:
                 checkpoint.save("keyboardinterrupt_save")
+            raise
     
     def inference(self, context:Any, temperature=0.8, top_k=3, top_p=0.9, n=100, mem_size=16, penalty:float=.05) -> Any:
         all_caches = None

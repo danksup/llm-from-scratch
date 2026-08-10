@@ -48,9 +48,9 @@ logs:
 - MoE top k jul 15 2026
 - sliding windows attention jul 17 2026
 - jul 18 - jul 25: optimizing, fixed mix precision
-- ~~reverts back to non sliding attention jul 26~~
 - exposing more apis,bug fix, stability jul 27 - aug 7 2026
 - lazy BPE aug 8 2026
+- fully lazy dataloader aug 10 2026
 
 ## Ongoing:
 - byte level bpe

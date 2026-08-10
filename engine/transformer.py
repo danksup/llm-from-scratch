@@ -541,7 +541,7 @@ class Transformer:
         configs += f"vocab_size: {str(self.vocab_size)}" + "\n"
         configs += f"embed_dim: {str(self.embed_dim)}" + "\n"
         configs += f"gradient_scale: {str(self.gradient_scale)}" + "\n"
-        configs += "precision: float32\n" if self.dtype == nx.float32 else f"precision: mixed precision ({self.dtype})\n" 
+        configs += "precision: full (float32)\n" if self.dtype == nx.float32 else f"precision: mixed precision ({self.dtype})\n" 
         configs += f"block count: {len(self.blocks)}\n"
         configs += f"block configs: {self.block_configs}\n"
         configs += "individual block configs (only difference is shown): \n"

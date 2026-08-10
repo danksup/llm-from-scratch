@@ -190,19 +190,22 @@ class Tokenizer:
         path = Path(filepath)
         for file in path.iterdir():
             if file.is_file() and file.suffix == ".txt":
-                with open(file, "r") as f:
+                with open(file, "r", encoding="utf-8", errors='ignore') as f:
                     while True:
                         chunk = f.read(batch_size)
-                        stream = chunk
                         if not chunk:
                             break
-                        while not stream[-1].isspace():
-                            a = f.read(1)
-                            if a:
-                                stream += a
-                            else:
-                                break
-                        yield stream
+
+                        if chunk and not chunk[-1].isspace():
+                            while True:# or stream[-1] not in  ["", " ", "\r",]:
+                                a = f.read(1)
+                                if a:
+                                    chunk += a
+                                    if a.isspace():
+                                        break
+                                else:
+                                    break
+                            yield chunk
 
     def fit(self, filepath:str, batch_size=10_485_760):
         '''

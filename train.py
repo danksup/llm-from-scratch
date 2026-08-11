@@ -38,7 +38,6 @@ session_configs = {
     "max_step":50000,
     "eval_every":1, 
     "validate_every":5000,
-    "checkpoint_every":5000,
     "context_size": CONTEXT_SIZE,
     "batch_size": BATCH_SIZE,
     "optimizer":"adamw",
@@ -51,7 +50,7 @@ session_configs = {
     },
     "using":backend,
     "save":True,
-    "create_checkpoint":False,
+    "create_checkpoint":True,
     "weights_only": True
 }
 

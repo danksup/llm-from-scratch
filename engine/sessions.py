@@ -168,7 +168,8 @@ class Session:
 
                         if val_loss and val_loss < best_val_loss:
                             best_val_loss = val_loss
-                            checkpoint = self.create_checkpoint(self)
+                            if self.configs["create_checkpoint"]:
+                                checkpoint = self.create_checkpoint(self)
                         else:
                             print(f"step: {step_counter}: validation becomes worse: best: {best_val_loss} | val:{val_loss}")
 
@@ -334,6 +335,6 @@ class Session:
     def create_checkpoint(cls, to_checkpoint:"Session",) -> "Session":
         transformer_checkpoint = Transformer.create_checkpoint(to_checkpoint.transformer)
         tokenizer_checkpoint = Tokenizer.from_dict(to_checkpoint.tokenizer.to_dict())
-        optimizer = to_checkpoint.optimizer.from_dict(to_checkpoint.optimizer.to_dict(to_checkpoint.configs["weight_only"]))        
+        optimizer = to_checkpoint.optimizer.from_dict(to_checkpoint.optimizer.to_dict(to_checkpoint.configs["weights_only"]))        
         checkpoint = cls(transformer=transformer_checkpoint, tokenizer = tokenizer_checkpoint, init_optimizer=optimizer)
         return checkpoint

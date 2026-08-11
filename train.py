@@ -36,7 +36,7 @@ tokenizer1 = Tokenizer.load(TOKENIZER_PATH)
 session_configs = {
     "epochs":EPOCHS,
     "max_step":50000,
-    "eval_every":1, 
+    "eval_every":3, 
     "validate_every":5000,
     "context_size": CONTEXT_SIZE,
     "batch_size": BATCH_SIZE,

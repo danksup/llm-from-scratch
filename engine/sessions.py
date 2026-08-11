@@ -19,6 +19,7 @@ DEFAULT_CONFIGS = {
     "epochs": 100,
     "max_step":50000,
     "eval_every":5,
+    "validate_every":5000,
     "context_size": 64,
     "batch_size": 32,
     "optimizer":"adamw",
@@ -142,6 +143,7 @@ class Session:
         epoch = 0
         checkpoint = None
         batch_size = self.configs["batch_size"]
+        best_val_loss = float('inf')
         
         try:
             for i in range(self.configs["epochs"]):
@@ -153,20 +155,20 @@ class Session:
                 final_loss = 0.0
                 total_histograms = None
                 total_steps = 0
-
-                best_val_loss = nx.inf
                 val_loss = None
+                next_validate_step = self.configs["validate_every"]
 
                 for loss, count, histograms, step_counter in train:
                     final_loss = loss / count
                     total_steps = step_counter
                     total_histograms = histograms
 
-                    if dataloader.validation_files and step_counter > 0 and step_counter % self.configs["validate_every"] == 0:
+                    if dataloader.validation_files and step_counter >= next_validate_step:
+                        next_validate_step += self.configs["validate_every"]
                         print(f"step: {step_counter} validating", end="\r")
                         val_loss = self.transformer.validate(dataloader, batch_size)
 
-                        if val_loss and val_loss < best_val_loss:
+                        if val_loss is not None and val_loss < best_val_loss:
                             best_val_loss = val_loss
                             if self.configs["create_checkpoint"]:
                                 checkpoint = self.create_checkpoint(self)

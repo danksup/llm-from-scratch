@@ -18,6 +18,7 @@ OPTIMIZER_TYPES = (optim.Adam,optim.AdamW,optim.SGD,)
 DEFAULT_CONFIGS = {
     "epochs": 100,
     "max_step":50000,
+    "max_val_step":"all",
     "eval_every":5,
     "validate_every":5000,
     "context_size": 64,
@@ -166,7 +167,7 @@ class Session:
                     if dataloader.validation_files and step_counter >= next_validate_step:
                         next_validate_step += self.configs["validate_every"]
                         print(f"step: {step_counter} validating", end="\r")
-                        val_loss = self.transformer.validate(dataloader, batch_size)
+                        val_loss = self.transformer.validate(dataloader, batch_size, self.configs["max_val_step"])
 
                         if val_loss is not None and val_loss < best_val_loss:
                             best_val_loss = val_loss
@@ -186,6 +187,12 @@ class Session:
                 display_every = max(1, self.configs["epochs"] // 10)
 
                 if display_message and( i % display_every == 0 or i == self.configs["epochs"] - 1):
+                    if val_loss is None:
+                        if not dataloader.validation_files:
+                            val_loss = 'no validation' 
+                        else:
+                            val_loss = 'validation is skipped because something is wrong' 
+
                     print(f"epoch {epoch} | avg loss: {final_loss} | avg val: {val_loss} | lr: {self.optimizer.lr:.6f} | time: {time_}")
                     if total_histograms:
                         for idx, histogram in enumerate(total_histograms):
@@ -234,7 +241,7 @@ class Session:
         token = raw_token.item()
         decoded = self.tokenizer.decode([token])
         print(decoded,end="",flush=True)
-        if "<EOT>" in decoded:
+        if any(token in decoded for token in ("<EOT>", "<|endofdoc|>")):
             return
 
         next_token = nx.array([[token]], dtype=nx.int32)
@@ -250,7 +257,7 @@ class Session:
             token = raw_token.item()
             decoded = self.tokenizer.decode([token])
             print(decoded,end="",flush=True)
-            if "<EOT>" in decoded:
+            if any(token in decoded for token in ("<EOT>", "<|endofdoc|>")):
                 break
             next_token = nx.array([[token]], dtype=nx.int32)
             position += 1

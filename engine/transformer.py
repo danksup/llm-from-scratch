@@ -345,17 +345,18 @@ class Transformer:
                 
                 yield total_loss.item(), count, total_histograms, step_counter
         
-    def validate(self, dataloader:DataLoader, batch_size:int, val_step:int|Literal["all"]=200):
+    def validate(self, dataloader:DataLoader, batch_size:int, val_step:int|Literal["all"]="all"):
         total_loss = nx.float_32(0.0)
         count = 0
         step_counter = 0
 
         if not dataloader.validation_files:
-            return
-            
+            return None
+
         for contexts, next_tokens in dataloader.get_pairs(dataloader.validation_files, batch_size):
             if isinstance(val_step, int) and step_counter >= val_step:
                 break
+            
             embedded = self.embedding.forward(contexts) 
             batch_validation_scores, total_router_loss = self.forward(embedded, False, False)
             
@@ -366,7 +367,10 @@ class Transformer:
             step_counter += 1
 
             nx.eval(*[val_loss, total_loss])
-            
+
+        if count == 0:
+            return None
+        
         final_loss = total_loss / count
         return final_loss.item()
 

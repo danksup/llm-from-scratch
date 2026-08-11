@@ -1,12 +1,12 @@
 from engine.tokenizer import Tokenizer
 import engine.backend as nx
-from typing import Any, Iterator
+from typing import Any, Iterator,Literal
 import math
 from pathlib import Path
 
 
 class DataLoader:
-    def __init__(self, filepath:str, tokenizer:Tokenizer, context_size:int=16, train_split=0.9) -> None:
+    def __init__(self, filepath:str, tokenizer:Tokenizer, context_size:int=16, train_split:float|Literal['all']=0.9) -> None:
         '''
         Args:
             filepath: filepath
@@ -19,7 +19,12 @@ class DataLoader:
         self.tokenizer = tokenizer
         self.filepath = filepath
 
+        if train_split == "all":
+            train_split = 1.0
+
         train_files, validation_files = self.split_files(filepath, train_split)
+        print(train_files)
+        print("va", validation_files)
         self.train_files = train_files
         self.validation_files = validation_files
 
@@ -37,7 +42,11 @@ class DataLoader:
     @staticmethod
     def split_files(filepath:str, split_value:float=.9):
         files = DataLoader.get_files(filepath)
-        assert len(files) >= 2, "erm"
+
+        assert len(files) > 0, "no files found in directory."
+
+        if split_value < 1.0:
+            assert len(files) >= 2, "at least 2 files are needed if using validation."
 
         file_sizes = nx.array([i.stat().st_size for i in files], nx.uint64)
         target_train = (nx.sum(file_sizes) * split_value).item()
@@ -55,7 +64,7 @@ class DataLoader:
             distance_no = abs(target_train - cum)
 
             if distance_take < distance_no:
-                if i == sorted_sizes[-1]:
+                if i == sorted_sizes[-1] and split_value < 1.0:
                     validate_files.append(files[i])
                     break   
                 train_files.append(files[i])  

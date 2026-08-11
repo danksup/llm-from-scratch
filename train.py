@@ -15,14 +15,14 @@ from helper.singleton import init_corpus
 backend = os.environ["BACKEND"] = "auto"
 EPOCHS = 1
 EMBED_DIM = 192
-CONTEXT_SIZE = 768
+CONTEXT_SIZE = 1024
 BATCH_SIZE = 4
 BASE_WIDTH = 4 * EMBED_DIM
 N_HEADS = 6
 N_KV_HEADS = max(1, N_HEADS // 2)
 N_EXPERTS = 8
 CF = 1.25
-VAL = 1
+VAL = .9
 TOP_K = 2
 # WINDOWS = CONTEXT_SIZE // 4
 
@@ -36,8 +36,8 @@ tokenizer1 = Tokenizer.load(TOKENIZER_PATH)
 session_configs = {
     "epochs":EPOCHS,
     "max_step":50000,
-    "train_split":"all",
-    "max_val_step":"all",
+    "train_split": VAL,
+    "max_val_step":300,
     "eval_every":3, 
     "validate_every":5000,
     "context_size": CONTEXT_SIZE,

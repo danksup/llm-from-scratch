@@ -19,12 +19,18 @@ class DataLoader:
         self.tokenizer = tokenizer
         self.filepath = filepath
 
+        assert isinstance(train_split, (float,int)) or train_split == "all", f"provide either float or \"all\" for train_split argument. got {train_split} of type {type(train_split)} instead"
+
+        if isinstance(train_split, (float,int)): 
+            assert 0 < train_split <= 1.0, f"provide a value within (0,1] for train split. got {train_split} instead"
+
         if train_split == "all":
             train_split = 1.0
 
         train_files, validation_files = self.split_files(filepath, train_split)
-        print(train_files)
-        print("va", validation_files)
+        
+        assert len(train_files) > 0, f"train_split ({train_split}) is too small. 0 files were allocated for training."
+
         self.train_files = train_files
         self.validation_files = validation_files
 

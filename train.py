@@ -22,7 +22,7 @@ N_HEADS = 6
 N_KV_HEADS = max(1, N_HEADS // 2)
 N_EXPERTS = 10
 CF = 1.25
-VAL = .9
+VAL = 0.95
 TOP_K = 2
 # WINDOWS = CONTEXT_SIZE // 4
 
@@ -36,13 +36,16 @@ tokenizer1 = Tokenizer.load(TOKENIZER_PATH)
 session_configs = {
     "epochs":EPOCHS,
     "max_step":50000,
+    "eval_every":1, 
+    "validate_every":5000,
+    "checkpoint_every":5000,
     "context_size": CONTEXT_SIZE,
     "batch_size": BATCH_SIZE,
     "optimizer":"adamw",
     "train_split":VAL,
     "optimizer_args":{
         "lr": 1e-3,
-        "use_master": True,
+        "use_master": False,
         "scheduler": None,
         "min_lr": None,
     },
@@ -55,10 +58,10 @@ session_configs = {
 model_configs = {
     "n_blocks":7,
     "embed_dim":EMBED_DIM,
-    "dtype": nx.float32,
-    "gradient_scale":1,
+    "dtype": nx.float16,
+    "gradient_scale":2048,
     "vocab_size": len(tokenizer1.vocab),
-    "moe_lambda":0.015,
+    "moe_lambda":0.0125,
     "block_configs":{
         "ff_hidden_width": BASE_WIDTH,
         "ff_n_experts":N_EXPERTS,
@@ -81,7 +84,7 @@ transformer = Transformer(model_configs)
 session_configs["block_size"] = len(transformer.blocks)
 
 print("loading dataloader ", end="\r")
-dataloader = DataLoader("data", tokenizer1, session_configs["context_size"])
+dataloader = DataLoader("data", tokenizer1, session_configs["context_size"], session_configs["train_split"])
 
 session1 = Session(transformer, tokenizer1, True, session_configs)
 start = time.perf_counter()

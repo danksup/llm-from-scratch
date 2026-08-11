@@ -19,7 +19,7 @@ class DataLoader:
         self.tokenizer = tokenizer
         self.filepath = filepath
 
-        train_files, validation_files = self.split_files(filepath)
+        train_files, validation_files = self.split_files(filepath, train_split)
         self.train_files = train_files
         self.validation_files = validation_files
 
@@ -68,7 +68,6 @@ class DataLoader:
     @staticmethod
     def stream_file(files:list[Path], permutation:list[int]) -> Iterator[Path]:
         for idx in permutation:
-            print(files[idx])
             yield files[idx]
 
     @staticmethod

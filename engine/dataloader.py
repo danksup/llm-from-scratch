@@ -141,7 +141,18 @@ class DataLoader:
 
                 leftover_temp_context = temp_context
 
-    def get_pairs(self, files:list[Path], batch_size:int, chunk_size:int= 1002400):
+    def get_total_tokens(self, files:list[Path], batch_size:int, chunk_size:int=  1_024_000):
+        total_tokens = 0
+        indices = [i for i in range(len(files))]
+
+        for token in self.stream_token(files, indices, chunk_size=chunk_size):
+            total_tokens += token.size
+        return total_tokens
+
+    def estimate_step(self, total_tokens, batch_size:int):
+        return total_tokens // self.context_size // batch_size
+
+    def get_pairs(self, files:list[Path], batch_size:int, chunk_size:int= 1024000):
         context_batches = []
         target_batches = []
 

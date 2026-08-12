@@ -11,7 +11,7 @@ import pickle
 import numpy as np
 import copy
 import warnings
-
+import uuid
 optimizers = Union[optim.Adam, optim.AdamW, optim.SGD]
 OPTIMIZER_TYPES = (optim.Adam,optim.AdamW,optim.SGD,)
 
@@ -25,7 +25,6 @@ DEFAULT_CONFIGS = {
     "batch_size": 32,
     "optimizer":"adamw",
     "train_split":.9,
-    "dataloader_strides":64,
     "save":True,
     "create_checkpoint":False,
     "weights_only": True,
@@ -148,10 +147,11 @@ class Session:
             print("[training]              ")
             print(self)   
         epoch = 0
-        checkpoint = None
         batch_size = self.configs["batch_size"]
         best_val_loss = float('inf')
         validate_every = self.configs["validate_every"]
+        checkpoint_every = self.configs["checkpoint_every"]
+        session_id = uuid.uuid4()
         try:
             for i in range(self.configs["epochs"]):
                 epoch = i
@@ -164,11 +164,13 @@ class Session:
                 total_steps = 0
                 val_loss = None
                 next_validate_step = validate_every
+                next_checkpoint = checkpoint_every
 
                 for loss, count, histograms, step_counter in train:
                     final_loss = loss / count
                     total_steps = step_counter
                     total_histograms = histograms
+                    flag_to_check_if_validate_checkpoint_crash_with_regular_checkpoint = False
 
                     if dataloader.validation_files and validate_every > 0 and step_counter >= next_validate_step:
                         next_validate_step += validate_every
@@ -178,9 +180,17 @@ class Session:
                         if val_loss is not None and val_loss < best_val_loss:
                             best_val_loss = val_loss
                             if self.configs["create_checkpoint"]:
-                                checkpoint = self.create_checkpoint(self)
+                                flag_to_check_if_validate_checkpoint_crash_with_regular_checkpoint = True
+                                self.save(f"checkpoint_best_{session_id}")
                         else:
                             print(f"step: {step_counter}: validation becomes worse: best: {best_val_loss} | val:{val_loss}")
+
+                    if self.configs["create_checkpoint"] and checkpoint_every > 0 and step_counter >= next_checkpoint:
+                        if flag_to_check_if_validate_checkpoint_crash_with_regular_checkpoint:
+                            flag_to_check_if_validate_checkpoint_crash_with_regular_checkpoint = False
+                            next_checkpoint += checkpoint_every
+                            continue
+                        self.save(f"checkpoint_latest_{session_id}")
 
                     print(f"step: {step_counter}                                            ",end="\r" )
 
@@ -199,7 +209,7 @@ class Session:
                         else:
                             val_loss = 'validation is skipped because something is wrong' 
 
-                    print(f"epoch {epoch} | avg loss: {final_loss} | avg val: {val_loss} | lr: {self.optimizer.lr:.6f} | time: {time_}")
+                    print(f"epoch {epoch} | step_counter: {total_steps}:  | avg loss: {final_loss} | avg val: {val_loss} | lr: {self.optimizer.lr:.6f} | time: {time_}")
                     if total_histograms:
                         for idx, histogram in enumerate(total_histograms):
                             hmin = nx.min(histogram).item()
@@ -208,31 +218,29 @@ class Session:
 
             if self.configs["save"]:
                 infer_only = "_weights_only" if self.configs["weights_only"] else ""
-                filename = f"{self.count_params()}_param_{epoch+1}_epochs{infer_only}"
+                filename = f"{self.count_params()}_param_{epoch+1}_epochs{infer_only}_{session_id}"
                 if savefile_name == "":
                     savefile_name = filename
                 self.save(savefile_name)
-                if checkpoint is not None and self.configs["create_checkpoint"]:
-                    checkpoint.save(f"checkpoint_save_{savefile_name}")
         except ValueError as e:
             print(f"epoch {epoch}: {e}")
-            if checkpoint is not None:
-                checkpoint.save("valueerror_save")
+            if self.configs["save"] and self.configs["create_checkpoint"]:
+                self.save(f"valueerror_save_{session_id}")
             raise
         except OverflowError as e:
             print(f"epoch {epoch}: {e}")
-            if checkpoint is not None:
-                checkpoint.save("overflow_save")
+            if self.configs["save"] and self.configs["create_checkpoint"]:
+                self.save(f"overflow_save_{session_id}")
             raise
         except KeyboardInterrupt as e:
             print(f"epoch {epoch}: {e}")
-            if checkpoint is not None:
-                checkpoint.save("keyboardinterrupt_save")
+            if self.configs["save"] and self.configs["create_checkpoint"]:
+                self.save(f"keyboardinterrupt_save_{session_id}")
             raise
         except RuntimeError as e:
             print(f"epoch {epoch}: {e}")
-            if checkpoint is not None:
-                checkpoint.save("RuntimeError_save")
+            if self.configs["save"] and self.configs["create_checkpoint"]:
+                self.save(f"RuntimeError_save_{session_id}")
             raise
     
     def inference(self, context:Any, temperature=0.8, top_k=3, top_p=0.9, n=100, mem_size=16, penalty:float=.05) -> Any:

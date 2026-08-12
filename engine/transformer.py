@@ -248,7 +248,7 @@ class Transformer:
         count = 0
         step_counter = 0 
         total_histograms = None
-        embed_acc = nx.zeros((self.vocab_size, self.embed_dim), self.dtype)
+        embed_acc = nx.zeros((self.vocab_size, self.embed_dim), nx.float32)
 
         for contexts, next_tokens in dataloader.get_pairs(dataloader.train_files, batch_size):      
             if step_counter >= max_step:

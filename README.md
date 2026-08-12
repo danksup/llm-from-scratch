@@ -83,6 +83,12 @@ logs:
   - fix: initializing `t` as an mlx array.
 ### Open
 - inference breaks when token length is too large -> generate freqs on demand when needed (jun 29 2026)
+
+## Known issue:
+### Open
+- if num of last batch or microbatch not the multiplier, it will be dropped (aug 13 2026, non severe) 
+  - cause: cus `if len(context_batches) == batch_size:` in dataloader and `step_counter % microbatch_size == 0:` in train
+  - fix: like in stream_token, handle leftover
   
 # Performance Logs
 Apple M1 Pro \

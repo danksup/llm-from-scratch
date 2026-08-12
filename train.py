@@ -24,7 +24,7 @@ N_EXPERTS = 10
 CF = 1.25
 VAL = 1
 TOP_K = 2
-# WINDOWS = CONTEXT_SIZE // 4
+WINDOWS = CONTEXT_SIZE // 4
 
 #not hooked yet to session
 PATIENCE = 20
@@ -42,7 +42,7 @@ session_configs = {
     "validate_every":0,
     "context_size": CONTEXT_SIZE,
     "batch_size": BATCH_SIZE,
-    "microbatch_size":16,
+    "microbatch_size":20,
     "optimizer":"adamw",
     "optimizer_args":{
         "lr": 1e-3,
@@ -53,6 +53,7 @@ session_configs = {
     "using":backend,
     "save":True,
     "create_checkpoint":True,
+    "checkpoint_every":10000,
     "weights_only": True
 }
 

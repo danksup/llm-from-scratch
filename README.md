@@ -51,6 +51,7 @@ logs:
 - exposing more apis,bug fix, stability jul 27 - aug 7 2026
 - lazy BPE aug 8 2026
 - fully lazy dataloader aug 10 2026
+- gradient accumulation aug 12 2026
 
 ## Ongoing:
 - byte level bpe

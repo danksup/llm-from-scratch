@@ -92,7 +92,13 @@ class Session:
             warnings.warn("master is disabled when using full precision", Warning)
             self.configs["optimizer_args"]["use_master"] = False
 
+        if self.configs["train_split"] == 1:
+            self.configs["validate_every"] = 0
+
         self.configs_str = copy.deepcopy(self.configs)
+        if self.configs["train_split"] == 1 or self.configs["validate_every"] == 0:
+            self.configs_str["validate_every"] = f"validation is disabled"
+            self.configs_str["val_max_step"] = f"validation is disabled"
 
         if isinstance(init_optimizer, bool) and init_optimizer: 
             optimizer_class = OPTIMIZERS[self.configs["optimizer"].lower()]
@@ -145,27 +151,27 @@ class Session:
         checkpoint = None
         batch_size = self.configs["batch_size"]
         best_val_loss = float('inf')
-        
+        validate_every = self.configs["validate_every"]
         try:
             for i in range(self.configs["epochs"]):
                 epoch = i
                 start = time.perf_counter()
                 assert self.optimizer, "optimizer doesnt exist"
-                train = self.transformer.train(dataloader, self.optimizer, self.configs["epochs"], batch_size=batch_size, max_step=self.configs["max_step"], eval_every=self.configs["eval_every"])
+                train = self.transformer.train(dataloader, self.optimizer, self.configs["epochs"], batch_size=batch_size, max_step=self.configs["max_step"], eval_every=self.configs["eval_every"], microbatch_size=self.configs["microbatch_size"])
                 
                 final_loss = 0.0
                 total_histograms = None
                 total_steps = 0
                 val_loss = None
-                next_validate_step = self.configs["validate_every"]
+                next_validate_step = validate_every
 
                 for loss, count, histograms, step_counter in train:
                     final_loss = loss / count
                     total_steps = step_counter
                     total_histograms = histograms
 
-                    if dataloader.validation_files and step_counter >= next_validate_step:
-                        next_validate_step += self.configs["validate_every"]
+                    if dataloader.validation_files and validate_every > 0 and step_counter >= next_validate_step:
+                        next_validate_step += validate_every
                         print(f"step: {step_counter} validating", end="\r")
                         val_loss = self.transformer.validate(dataloader, batch_size, self.configs["max_val_step"])
 

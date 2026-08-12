@@ -16,13 +16,13 @@ backend = os.environ["BACKEND"] = "auto"
 EPOCHS = 1
 EMBED_DIM = 192
 CONTEXT_SIZE = 1024
-BATCH_SIZE = 4
+BATCH_SIZE = 5
 BASE_WIDTH = 4 * EMBED_DIM
 N_HEADS = 6
 N_KV_HEADS = max(1, N_HEADS // 2)
-N_EXPERTS = 8
+N_EXPERTS = 10
 CF = 1.25
-VAL = .9
+VAL = 1
 TOP_K = 2
 # WINDOWS = CONTEXT_SIZE // 4
 
@@ -35,13 +35,14 @@ tokenizer1 = Tokenizer.load(TOKENIZER_PATH)
 
 session_configs = {
     "epochs":EPOCHS,
-    "max_step":50000,
+    "max_step":100000,
     "train_split": VAL,
     "max_val_step":300,
-    "eval_every":3, 
-    "validate_every":5000,
+    "eval_every":1, 
+    "validate_every":0,
     "context_size": CONTEXT_SIZE,
     "batch_size": BATCH_SIZE,
+    "microbatch_size":16,
     "optimizer":"adamw",
     "optimizer_args":{
         "lr": 1e-3,
@@ -50,7 +51,7 @@ session_configs = {
         "min_lr": None,
     },
     "using":backend,
-    "save":False,
+    "save":True,
     "create_checkpoint":True,
     "weights_only": True
 }

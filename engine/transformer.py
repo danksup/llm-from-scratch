@@ -227,30 +227,33 @@ class Transformer:
             dx, dWout, dWcombined, d_router, dWqkv, dWo, d_gamma1, d_gamma2 = block._backward(current_grad, mask1=mask1, mask2=mask2, p=P, attention=attn_str,
                                                                 caches_attn=caches_attn, caches_ff=caches_ff, caches_rmsnorm1=caches_rmsnorm1, caches_rmsnorm2=caches_rmsnorm2, 
                                                                 attn_configs = attn_configs, attn_params=attn_params, gamma1=block.rmsnorm1.gamma, gamma2=block.rmsnorm2.gamma, ff_params=ff_params, moe_configs=moe_configs)
-            
-            block.ff.dWout = dWout 
-            block.ff.dWcombined = dWcombined 
-            block.ff.d_router = d_router 
-            
-            block.attention.dWqkv=dWqkv 
-            block.attention.dWo = dWo 
 
-            block.rmsnorm1.d_gamma = d_gamma1 
-            block.rmsnorm2.d_gamma = d_gamma2 
+            
+            block.ff.dWout = dWout if getattr(block.ff, "dWout", None) is None else block.ff.dWout + dWout
+            block.ff.dWcombined = dWcombined if getattr(block.ff, "dWcombined", None) is None else block.ff.dWcombined + dWcombined 
+            block.ff.d_router = d_router if getattr(block.ff, "d_router", None) is None else block.ff.d_router + d_router  
+
+            block.attention.dWqkv = dWqkv if getattr(block.attention, "dWqkv", None) is None else block.attention.dWqkv + dWqkv   
+            block.attention.dWo = dWo if getattr(block.attention, "dWo", None) is None else block.attention.dWo + dWo    
+
+            block.rmsnorm1.d_gamma = d_gamma1 if getattr(block.rmsnorm1, "d_gamma", None) is None else block.rmsnorm1.d_gamma + d_gamma1     
+            block.rmsnorm2.d_gamma = d_gamma2 if getattr(block.rmsnorm2, "d_gamma", None) is None else block.rmsnorm2.d_gamma + d_gamma2  
 
             current_grad = dx
 
         return current_grad
     
-    def train(self, dataloader:DataLoader, optimizer:optimizers, total_epoch:int, batch_size:int=32, max_step:int=50000, eval_every:int=5):
+    def train(self, dataloader:DataLoader, optimizer:optimizers, total_epoch:int, batch_size:int=32, max_step:int=50000, eval_every:int=5, microbatch_size:int=16):
         total_loss = nx.float_32(0.0)
         count = 0
         step_counter = 0 
         total_histograms = None
+        embed_acc = nx.zeros((self.vocab_size, self.embed_dim), self.dtype)
 
         for contexts, next_tokens in dataloader.get_pairs(dataloader.train_files, batch_size):      
             if step_counter >= max_step:
                 break
+
             embedded = self.embedding.forward(contexts)  # shape (batch, context_size, embed_dim)
             batch_scores, last_output, all_masks, all_caches, total_router_loss, histograms = self.forward(embedded)
 
@@ -280,46 +283,14 @@ class Transformer:
             embedding_gradient = nx.add_at(embedding_gradient, contexts, current_grad)
 
             total_embedding_gradient = embedding_gradient + d_table
-
-            all_network_params = []
-            for i,block in enumerate(self.blocks):
-                dWqkv = block.attention.dWqkv.astype(nx.float32) / self.gradient_scale
-                dWo = block.attention.dWo.astype(nx.float32) / self.gradient_scale
-                dWcombined = block.ff.dWcombined.astype(nx.float32) / self.gradient_scale
-                dWout = block.ff.dWout.astype(nx.float32) / self.gradient_scale
-                d_router = block.ff.d_router.astype(nx.float32) / self.gradient_scale
-                d_gamma1 = block.rmsnorm1.d_gamma.astype(nx.float32) / self.gradient_scale
-                d_gamma2 = block.rmsnorm2.d_gamma.astype(nx.float32) / self.gradient_scale
-                all_network_params.extend(
-                    [(f"Wqkv_{i}", block.attention.Wqkv.astype(nx.float32), dWqkv),
-                    (f"Wo_{i}", block.attention.Wo.astype(nx.float32), dWo),
-                    (f"ff_wcombined_{i}", block.ff.Wcombined.astype(nx.float32),dWcombined),
-                    (f"ff_wout_{i}", block.ff.Wout.astype(nx.float32), dWout),
-                    (f"ff_router_{i}", block.ff.router.astype(nx.float32), d_router),
-                    (f"rmsnorm1_gamma_{i}", block.rmsnorm1.gamma.astype(nx.float32), d_gamma1),
-                    (f"rmsnorm2_gamma_{i}", block.rmsnorm2.gamma.astype(nx.float32), d_gamma2)])
-                del dWqkv, dWo, dWcombined, dWout, d_router, d_gamma1, d_gamma2
-                del block.attention.dWqkv, block.attention.dWo, block.ff.dWcombined, block.ff.dWout, block.ff.d_router, block.rmsnorm1.d_gamma, block.rmsnorm2.d_gamma
-                
-            all_network_params.extend([("embedding",self.embedding.lookup_table.astype(nx.float32), total_embedding_gradient)])
-
-            optimized = optimizer.step_many(all_network_params, max_step, total_epoch)
-            for i,block in enumerate(self.blocks):
-                block.attention.Wqkv = optimized[f"Wqkv_{i}"].astype(self.dtype)
-                block.attention.Wo = optimized[f"Wo_{i}"].astype(self.dtype)
-                block.ff.Wcombined = optimized[f"ff_wcombined_{i}"].astype(self.dtype)
-                block.ff.Wout = optimized[f"ff_wout_{i}"].astype(self.dtype)
-                block.ff.router = optimized[f"ff_router_{i}"]
-                block.rmsnorm1.gamma = optimized[f"rmsnorm1_gamma_{i}"]
-                block.rmsnorm2.gamma = optimized[f"rmsnorm2_gamma_{i}"]
-            self.embedding.lookup_table = optimized["embedding"].astype(self.dtype)
+            embed_acc += total_embedding_gradient
 
             total_loss += loss * next_tokens.size
             count += next_tokens.size
             step_counter += 1
 
             if step_counter % eval_every == 0:
-                to_eval = [loss, total_loss, self.embedding.lookup_table, current_grad, histograms, total_histograms]
+                to_eval = [loss, total_loss, self.embedding.lookup_table, current_grad, histograms, total_histograms, embed_acc]
                 for block in self.blocks:
                     to_eval.append(block.attention.Wqkv)
                     to_eval.append(block.attention.Wo)
@@ -328,6 +299,13 @@ class Transformer:
                     to_eval.append(block.ff.router)
                     to_eval.append(block.rmsnorm1.gamma)
                     to_eval.append(block.rmsnorm2.gamma)
+                    to_eval.append(block.attention.dWqkv)
+                    to_eval.append(block.attention.dWo)
+                    to_eval.append(block.ff.dWcombined)
+                    to_eval.append(block.ff.dWout)
+                    to_eval.append(block.ff.d_router)
+                    to_eval.append(block.rmsnorm1.d_gamma)
+                    to_eval.append(block.rmsnorm2.d_gamma)
 
                 nx.eval(*to_eval)
 
@@ -342,6 +320,41 @@ class Transformer:
                     backward_nan = nx.isnan(current_grad).any()
                     backward_inf = nx.isinf(current_grad).any()
                     raise FloatingPointError(f"[BACKWARD] non-finite gradient at step {step_counter}. isnan: {backward_nan} | isinf: {backward_inf}.\nmin value: {backward_min}\nmax value: {backward_max}")
+                
+            if step_counter > 0 and step_counter % microbatch_size == 0:
+                all_network_params = []
+                for i,block in enumerate(self.blocks):
+                    dWqkv = block.attention.dWqkv.astype(nx.float32) / self.gradient_scale / microbatch_size
+                    dWo = block.attention.dWo.astype(nx.float32) / self.gradient_scale / microbatch_size
+                    dWcombined = block.ff.dWcombined.astype(nx.float32) / self.gradient_scale / microbatch_size
+                    dWout = block.ff.dWout.astype(nx.float32) / self.gradient_scale / microbatch_size
+                    d_router = block.ff.d_router.astype(nx.float32) / self.gradient_scale / microbatch_size
+                    d_gamma1 = block.rmsnorm1.d_gamma.astype(nx.float32) / self.gradient_scale / microbatch_size
+                    d_gamma2 = block.rmsnorm2.d_gamma.astype(nx.float32) / self.gradient_scale / microbatch_size
+                    all_network_params.extend(
+                        [(f"Wqkv_{i}", block.attention.Wqkv.astype(nx.float32), dWqkv),
+                        (f"Wo_{i}", block.attention.Wo.astype(nx.float32), dWo),
+                        (f"ff_wcombined_{i}", block.ff.Wcombined.astype(nx.float32),dWcombined),
+                        (f"ff_wout_{i}", block.ff.Wout.astype(nx.float32), dWout),
+                        (f"ff_router_{i}", block.ff.router.astype(nx.float32), d_router),
+                        (f"rmsnorm1_gamma_{i}", block.rmsnorm1.gamma.astype(nx.float32), d_gamma1),
+                        (f"rmsnorm2_gamma_{i}", block.rmsnorm2.gamma.astype(nx.float32), d_gamma2)])
+                    del dWqkv, dWo, dWcombined, dWout, d_router, d_gamma1, d_gamma2
+                    del block.attention.dWqkv, block.attention.dWo, block.ff.dWcombined, block.ff.dWout, block.ff.d_router, block.rmsnorm1.d_gamma, block.rmsnorm2.d_gamma
+                    
+                all_network_params.extend([("embedding",self.embedding.lookup_table.astype(nx.float32), embed_acc / microbatch_size)])
+
+                optimized = optimizer.step_many(all_network_params, max_step, total_epoch)
+                for i,block in enumerate(self.blocks):
+                    block.attention.Wqkv = optimized[f"Wqkv_{i}"].astype(self.dtype)
+                    block.attention.Wo = optimized[f"Wo_{i}"].astype(self.dtype)
+                    block.ff.Wcombined = optimized[f"ff_wcombined_{i}"].astype(self.dtype)
+                    block.ff.Wout = optimized[f"ff_wout_{i}"].astype(self.dtype)
+                    block.ff.router = optimized[f"ff_router_{i}"]
+                    block.rmsnorm1.gamma = optimized[f"rmsnorm1_gamma_{i}"]
+                    block.rmsnorm2.gamma = optimized[f"rmsnorm2_gamma_{i}"]
+                self.embedding.lookup_table = optimized["embedding"].astype(self.dtype)
+                embed_acc = nx.zeros_like(embed_acc)
                 
                 yield total_loss.item(), count, total_histograms, step_counter
         

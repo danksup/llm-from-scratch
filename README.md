@@ -133,5 +133,3 @@ individual block configs (only difference is shown): block 2: ff_n_experts: 6 | 
 - 195_605_563 corpus len | 16384 |fitting finished in 283.527 (5 jul 2026)
 - 1_351_277_738 corpus len | 24000 | fitting finished in 1437.236 (6 aug 2026)
 - 1_351_277_738 corpus len | 48000 | fitting finished in 3883.186 (6 aug 2026)
-
-![numpy(left) ~1500s vs mlx(right) ~2s](image.png)

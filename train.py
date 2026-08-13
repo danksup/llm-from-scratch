@@ -2,8 +2,8 @@ import os
 from pathlib import Path
 import time
 
-import cProfile
-import pstats
+backend = os.environ["BACKEND"] = "auto"
+seed = os.environ["SEED"] = "1"
 
 from engine.transformer import Transformer
 from engine.tokenizer import Tokenizer
@@ -12,7 +12,6 @@ from engine.sessions import Session
 import engine.backend as nx
 from helper.singleton import init_corpus
 
-backend = os.environ["BACKEND"] = "auto"
 EPOCHS = 1
 EMBED_DIM = 192
 CONTEXT_SIZE = 1024
@@ -35,14 +34,14 @@ tokenizer1 = Tokenizer.load(TOKENIZER_PATH)
 
 session_configs = {
     "epochs":EPOCHS,
-    "max_step":100000,
+    "max_step":1,
     "train_split": VAL,
     "max_val_step":300,
     "eval_every":1, 
     "validate_every":0,
     "context_size": CONTEXT_SIZE,
     "batch_size": BATCH_SIZE,
-    "microbatch_size":20,
+    "microbatch_size":1,
     "optimizer":"adamw",
     "optimizer_args":{
         "lr": 1e-3,
@@ -50,7 +49,7 @@ session_configs = {
         "scheduler": None,
         "min_lr": None,
     },
-    "using":backend,
+    "using":os.environ.get("BACKEND"),
     "save":True,
     "create_checkpoint":True,
     "checkpoint_every":10000,
@@ -81,17 +80,18 @@ model_configs = {
       }
 }
 
-transformer = Transformer(model_configs)
+if __name__ == "__main__":
+    transformer = Transformer(model_configs)
 
-session_configs["block_size"] = len(transformer.blocks)
+    session_configs["block_size"] = len(transformer.blocks)
 
-print("loading dataloader ", end="\r")
-dataloader = DataLoader("data", tokenizer1, session_configs["context_size"], session_configs["train_split"])
+    print("loading dataloader ", end="\r")
+    dataloader = DataLoader("data", tokenizer1, session_configs["context_size"], session_configs["train_split"])
 
-session1 = Session(transformer, tokenizer1, True, session_configs)
-start = time.perf_counter()
-session1.train(dataloader, display_message=True)
-end = time.perf_counter()
-print(f"training finished. time: {end - start:.3f}s")
+    session1 = Session(transformer, tokenizer1, True, session_configs)
+    start = time.perf_counter()
+    session1.train(dataloader, display_message=True)
+    end = time.perf_counter()
+    print(f"training finished. time: {end - start:.3f}s")
 
-# print(session1)
+    # print(session1)

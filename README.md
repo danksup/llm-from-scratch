@@ -52,26 +52,22 @@ logs:
 - lazy BPE aug 8 2026
 - fully lazy dataloader aug 10 2026
 - gradient accumulation aug 12 2026
+- prefetching encoded chunk aug 13 2026
 
 ## Ongoing:
 - byte level bpe
 - optimizing/cleanup/docs
 
 ## TODO (not in order):
-- centralizing source of truth (D, E, etc)
-- broadcast instead of repeat in attention
 - moe noise
 - moe router z loss
 - inference optimization 
 - inference quantization
 - conversation memory
-- more optimization
   
 #### Maybe:
 - autograd
 - other gpus acceleration (maybe not)
-- better batching
-
 ## Bugs:
 ### Fixed
 - inference degraded after a certain number of tokens 
@@ -137,3 +133,5 @@ individual block configs (only difference is shown): block 2: ff_n_experts: 6 | 
 - 195_605_563 corpus len | 16384 |fitting finished in 283.527 (5 jul 2026)
 - 1_351_277_738 corpus len | 24000 | fitting finished in 1437.236 (6 aug 2026)
 - 1_351_277_738 corpus len | 48000 | fitting finished in 3883.186 (6 aug 2026)
+
+![numpy(left) ~1500s vs mlx(right) ~2s](image.png)

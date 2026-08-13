@@ -6,22 +6,30 @@
 from typing import Any, Union,Literal
 import os
 backend = os.environ.get("BACKEND", "auto").lower()
+seed = int(os.environ.get("SEED", 1))
+assert isinstance(seed, int), "handsome youre a mansion with a view"
 
 if backend == "auto":
     try:
         import mlx.core as _nx
         backend = "MLX"
+        os.environ["BACKEND"] = "MLX"
+        _nx.random.seed = seed
     except ImportError:
         import numpy as _nx
         backend = "NumPy"
-        rng = _nx.random.default_rng()
+        os.environ["BACKEND"] = "NumPy"
+        rng = _nx.random.default_rng(seed)
 elif backend == "mlx":
     import mlx.core as _nx
     backend = "MLX"
+    os.environ["BACKEND"] = "MLX"
+    _nx.random.seed = seed
 else:
     import numpy as _nx
     backend = "NumPy"
-    rng = _nx.random.default_rng()
+    os.environ["BACKEND"] = "NumPy"
+    rng = _nx.random.default_rng(seed)
 
 ArrayLike = Any
 e = _nx.e
@@ -43,21 +51,33 @@ bool_ = _nx.bool_
 bfloat16 = _nx.bfloat16 if backend == "MLX" else _nx.float32
 
 dtype_to_srt = {
-    float16: "float16",
+    float64: "float64",
     float32: "float32",
+    float16: "float16",
+    bfloat16: "bf16",
     int64: "int64",
     int32: "int32",
+    int16:"int16",
+    int8:"int8",
+    uint32:"uint32",
+    uint16:"uint16",
+    uint8: "uint8" ,
     bool_: "bool",
-    bfloat16: "bf16",
 }
 
 str_to_dtype = {
-    "float16":float16,
+    "float64":float64,
     "float32":float32,
+    "float16":float16,
+    "bf16":bfloat16,
     "int64":int64,
     "int32":int32,
+    "int16":int16,
+    "int8":int8,
+    "uint32":uint32,
+    "uint16":uint16,
+    "uint8":uint8,
     "bool":bool_,
-    "bf16":bfloat16,
 }
     
 def array(x:Any, dtype=None) -> ArrayLike:
@@ -65,14 +85,14 @@ def array(x:Any, dtype=None) -> ArrayLike:
         dtype = float32
     return _nx.array(x, dtype=dtype)
 
-def sum(a:ArrayLike, axis:Any=None, keepdims:bool=False, dtype=None) -> Any:
+def sum(a:ArrayLike, axis:Any=None, keepdims:bool=False, dtype=None, *, stream=None) -> Any:
     if dtype is None:
         dtype = a.dtype
     if backend == "MLX":
         if dtype is not None:
             a = a.astype(dtype)
-        return _nx.sum(a, axis=axis, keepdims=keepdims)
-    
+            return _nx.sum(a, axis=axis, keepdims=keepdims, stream=stream)
+
     return _nx.sum(a,axis=axis,keepdims=keepdims,dtype=dtype)
 
 def float_32(x:list | ArrayLike | float) -> Any:
@@ -280,6 +300,8 @@ def argpartition(x:ArrayLike, kth, axis=None) -> ArrayLike:
 
 def random_choice(a:ArrayLike, *, p=None) -> Any:
     if backend == "MLX":
+        if p is None:
+            p = _nx.full(a.shape, _nx.array(1/a.size, a.dtype)) 
         cdf = _nx.cumsum(p)
         r = _nx.random.uniform()
         idx = _nx.argmax(cdf >= r)

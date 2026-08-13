@@ -2,6 +2,7 @@ from engine.transformer import Transformer
 from engine.tokenizer import Tokenizer
 from engine.dataloader import DataLoader
 from engine.activations import softmax
+from helper.singleton import colorize
 import engine.optimizer as optim
 import engine.optimizer.scheduler as scheduler
 import engine.backend as nx
@@ -12,6 +13,8 @@ import numpy as np
 import copy
 import warnings
 import uuid
+import random
+
 optimizers = Union[optim.Adam, optim.AdamW, optim.SGD]
 OPTIMIZER_TYPES = (optim.Adam,optim.AdamW,optim.SGD,)
 
@@ -74,7 +77,10 @@ DEFAULT_OPTIMIZER_ARGS = {
 }
 
 class Session:
-    def __init__(self, transformer:Transformer, tokenizer:Tokenizer, init_optimizer:bool | optimizers = True, configs:dict | None = None):
+    def __init__(self, transformer:Transformer, tokenizer:Tokenizer, init_optimizer:bool | optimizers = True, configs:dict | None = None, *, session_id=None):
+        self.session_id = session_id
+        if self.session_id is None:
+            self.session_id = uuid.uuid4()
         self.tokenizer = tokenizer
         self.transformer = transformer
         assert len(tokenizer.vocab) == transformer.vocab_size, f"vocab size mismatch of {transformer.vocab_size} in transformer and {len(tokenizer.vocab)} in tokenizer."
@@ -98,6 +104,10 @@ class Session:
         if self.configs["train_split"] == 1 or self.configs["validate_every"] == 0:
             self.configs_str["validate_every"] = f"validation is disabled"
             self.configs_str["val_max_step"] = f"validation is disabled"
+
+        if not self.configs['save']:
+            self.configs_str["save"]= colorize("False", "red")
+            self.configs_str["create_checkpoint"] = "disabled because save is false"
 
         if isinstance(init_optimizer, bool) and init_optimizer: 
             optimizer_class = OPTIMIZERS[self.configs["optimizer"].lower()]
@@ -151,11 +161,10 @@ class Session:
         best_val_loss = float('inf')
         validate_every = self.configs["validate_every"]
         checkpoint_every = self.configs["checkpoint_every"]
-        session_id = uuid.uuid4()
+        start = time.perf_counter()
         try:
             for i in range(self.configs["epochs"]):
                 epoch = i
-                start = time.perf_counter()
                 assert self.optimizer, "optimizer doesnt exist"
                 train = self.transformer.train(dataloader, self.optimizer, self.configs["epochs"], batch_size=batch_size, max_step=self.configs["max_step"], eval_every=self.configs["eval_every"], microbatch_size=self.configs["microbatch_size"])
                 
@@ -167,6 +176,11 @@ class Session:
                 next_checkpoint = checkpoint_every
 
                 for loss, count, histograms, step_counter in train:
+                    # if self.function_that_decides_to_end_training_randomly_because_why_not():
+                    #     savefile_name = f"hi_lol_{session_id}"
+                    #     print("i came to save your laptop from hurting.")
+                    #     break
+
                     final_loss = loss / count
                     total_steps = step_counter
                     total_histograms = histograms
@@ -181,19 +195,18 @@ class Session:
                             best_val_loss = val_loss
                             if self.configs["create_checkpoint"]:
                                 flag_to_check_if_validate_checkpoint_crash_with_regular_checkpoint = True
-                                self.save(f"checkpoint_best_{session_id}")
+                                self.save(f"checkpoint_best_{self.session_id}")
                         else:
                             print(f"step: {step_counter}: validation becomes worse: best: {best_val_loss} | val:{val_loss}")
 
                     if self.configs["create_checkpoint"] and checkpoint_every > 0 and step_counter >= next_checkpoint:
+                        next_checkpoint += checkpoint_every
                         if flag_to_check_if_validate_checkpoint_crash_with_regular_checkpoint:
                             flag_to_check_if_validate_checkpoint_crash_with_regular_checkpoint = False
-                            next_checkpoint += checkpoint_every
                             continue
-                        self.save(f"checkpoint_latest_{session_id}")
+                        self.save(f"checkpoint_latest_{self.session_id}")
 
                     print(f"step: {step_counter}                                            ",end="\r" )
-
                 if total_histograms is not None:
                     for i in range(len(total_histograms)):
                         total_histograms[i] /= total_steps
@@ -218,29 +231,33 @@ class Session:
 
             if self.configs["save"]:
                 infer_only = "_weights_only" if self.configs["weights_only"] else ""
-                filename = f"{self.count_params()}_param_{epoch+1}_epochs{infer_only}_{session_id}"
+                filename = f"{self.count_params()}_param_{epoch+1}_epochs{infer_only}_{self.session_id}"
                 if savefile_name == "":
                     savefile_name = filename
                 self.save(savefile_name)
         except ValueError as e:
-            print(f"epoch {epoch}: {e}")
+            end = time.perf_counter()
+            print(f"epoch {epoch}: {e}. Time elapsed: {end-start:.5f}")
             if self.configs["save"] and self.configs["create_checkpoint"]:
-                self.save(f"valueerror_save_{session_id}")
+                self.save(f"valueerror_save_{self.session_id}")
             raise
         except OverflowError as e:
-            print(f"epoch {epoch}: {e}")
+            end = time.perf_counter()
+            print(f"epoch {epoch}: {e}. Time elapsed: {end-start:.5f}")
             if self.configs["save"] and self.configs["create_checkpoint"]:
-                self.save(f"overflow_save_{session_id}")
+                self.save(f"overflow_save_{self.session_id}")
             raise
         except KeyboardInterrupt as e:
-            print(f"epoch {epoch}: {e}")
+            end = time.perf_counter()
+            print(f"epoch {epoch}: {e}. Time elapsed: {end-start:.5f}")
             if self.configs["save"] and self.configs["create_checkpoint"]:
-                self.save(f"keyboardinterrupt_save_{session_id}")
+                self.save(f"keyboardinterrupt_save_{self.session_id}")
             raise
         except RuntimeError as e:
-            print(f"epoch {epoch}: {e}")
+            end = time.perf_counter()
+            print(f"epoch {epoch}: {e}. Time elapsed: {end-start:.5f}")
             if self.configs["save"] and self.configs["create_checkpoint"]:
-                self.save(f"RuntimeError_save_{session_id}")
+                self.save(f"RuntimeError_save_{self.session_id}")
             raise
     
     def inference(self, context:Any, temperature=0.8, top_k=3, top_p=0.9, n=100, mem_size=16, penalty:float=.05) -> Any:
@@ -326,6 +343,7 @@ class Session:
             "transformer":self.transformer.to_dict(),
             "tokenizer":self.tokenizer.to_dict(),
             "optimizer":self.optimizer.to_dict(config_only=self.configs["weights_only"]),
+            "session_id":self.session_id
         }
 
         filename = f"session_{filename}.ram2n"
@@ -351,8 +369,9 @@ class Session:
         configs = session["configs"]
         optimizer_class = OPTIMIZERS[configs["optimizer"]]
         optimizer = optimizer_class.from_dict(session["optimizer"])
+        session_id = session["session_id"]
         
-        return  cls(transformer, tokenizer, optimizer, configs=configs)
+        return  cls(transformer, tokenizer, optimizer, configs=configs, session_id=session_id)
     
     @classmethod
     def create_checkpoint(cls, to_checkpoint:"Session",) -> "Session":
@@ -361,3 +380,7 @@ class Session:
         optimizer = to_checkpoint.optimizer.from_dict(to_checkpoint.optimizer.to_dict(to_checkpoint.configs["weights_only"]))        
         checkpoint = cls(transformer=transformer_checkpoint, tokenizer = tokenizer_checkpoint, init_optimizer=optimizer)
         return checkpoint
+
+    @staticmethod
+    def function_that_decides_to_end_training_randomly_because_why_not():
+        return random.random() < .01

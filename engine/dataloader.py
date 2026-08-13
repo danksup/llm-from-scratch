@@ -1,9 +1,9 @@
 from engine.tokenizer import Tokenizer
 import engine.backend as nx
 from typing import Any, Iterator,Literal
-import math
+import random
 from pathlib import Path
-
+from multiprocessing import Process, Queue
 
 class DataLoader:
     def __init__(self, filepath:str, tokenizer:Tokenizer, context_size:int=16, train_split:float|Literal['all']=0.9) -> None:
@@ -33,6 +33,12 @@ class DataLoader:
 
         self.train_files = train_files
         self.validation_files = validation_files
+
+        if len(tokenizer.vocab) <=  65_535:
+            self.dtype= nx.dtype_to_srt[nx.uint16]
+        else:
+            self.dtype= nx.dtype_to_srt[nx.uint32]
+
 
     @staticmethod
     def get_files(filepath:str="data"):
@@ -121,48 +127,76 @@ class DataLoader:
                 # print(chungus)
                 temp_context = self.tokenizer.encode(chungus)  
 
-                if context is not None and temp_context.size < needed_T:
-                    concatenated = nx.concatenate([context, temp_context])
-                    if concatenated.size == needed_T:
-                        yield concatenated
-                    elif concatenated.size < needed_T:
-                        leftover_temp_context = concatenated
+                if context is not None and len(temp_context) < needed_T:
+                    context.extend(temp_context)
+                    concat_len = len(context)
+                    if concat_len == needed_T:
+                        yield context
+                    elif concat_len < needed_T:
+                        leftover_temp_context = context
                         continue
                     else:
-                        temp_context = concatenated
+                        temp_context = context
                         context = None
 
-                while temp_context.size >= needed_T:
+                while len(temp_context) >= needed_T:
                     need = needed_T - len(context) if context is not None else needed_T
-                    context = nx.concatenate([context, temp_context[0:need]]) if context is not None else temp_context[0:need]
+                    if context is not None:
+                        context.extend( temp_context[0:need])  
+                    else: 
+                        context = temp_context[0:need]
                     yield context
                     context = None
                     temp_context = temp_context[need:]
 
                 leftover_temp_context = temp_context
 
+    def get_pairs(self, files:list[Path], batch_size:int, chunk_size:int= 1024000):
+        context_batches = []
+        target_batches = []
+
+        permutation = [i for i in range(len(files))]
+        random.shuffle(permutation)
+        for token in self.stream_token(files, permutation, chunk_size=chunk_size):
+            if token is None: 
+                continue
+            context_batches.append(token[:-1])
+            target_batches.append(token[1:])
+
+            if len(context_batches) == batch_size:
+                yield context_batches,target_batches
+                context_batches = []
+                target_batches = []
+
+    def worker(self, Q:Queue, files:list[Path], batch_size:int, chunk_size:int= 1024000):
+        for batch in self.get_pairs(files, batch_size, chunk_size):
+            Q.put(batch)
+        Q.put(None)
+
+    def prefetch_batch(self, files:list[Path], batch_size:int, chunk_size:int= 1024000):
+        queue = Queue(10)
+        process  = Process(target=self.worker, args=(queue, files, batch_size, chunk_size))
+
+        try:
+            process.start()
+            while True:
+                item = queue.get()
+                if item is None:
+                    break
+                yield (nx.array(item[0], dtype=nx.str_to_dtype[self.dtype]), nx.array(item[1], dtype=nx.str_to_dtype[self.dtype]))
+        finally:
+            if process.is_alive():
+                process.terminate()
+        process.join()
+
     def get_total_tokens(self, files:list[Path], batch_size:int, chunk_size:int=  1_024_000):
         total_tokens = 0
         indices = [i for i in range(len(files))]
 
         for token in self.stream_token(files, indices, chunk_size=chunk_size):
-            total_tokens += token.size
+            total_tokens += len(token)
         return total_tokens
 
-    def estimate_step(self, total_tokens, batch_size:int):
-        return total_tokens // self.context_size // batch_size
-
-    def get_pairs(self, files:list[Path], batch_size:int, chunk_size:int= 1024000):
-        context_batches = []
-        target_batches = []
-
-        permutation = nx.permutation(len(files)).tolist()
-        for token in self.stream_token(files, permutation, chunk_size=chunk_size):
-            context_batches.append(token[:-1])
-            target_batches.append(token[1:])
-
-            if len(context_batches) == batch_size:
-                dtype = token.dtype
-                yield nx.array(context_batches, dtype=dtype), nx.array(target_batches,   dtype=dtype)
-                context_batches = []
-                target_batches = []
+    def estimate_step(self, total_tokens, batch_size:int, microbatch_size:int=1):
+        return total_tokens // self.context_size // batch_size // microbatch_size
+            

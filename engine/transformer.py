@@ -10,6 +10,7 @@ from typing import Any, Literal, Union
 import time
 import copy
 
+
 optimizers = Union[optim.Adam, optim.AdamW, optim.SGD]
 
 default_block_configs = {
@@ -246,12 +247,13 @@ class Transformer:
     def train(self, dataloader:DataLoader, optimizer:optimizers, total_epoch:int, batch_size:int=32, max_step:int=50000, eval_every:int=5, microbatch_size:int=16):
         total_loss = nx.float_32(0.0)
         count = 0
-        step_counter = 0 
+        microstep = 0 
+        step = 0
         total_histograms = None
         embed_acc = nx.zeros((self.vocab_size, self.embed_dim), nx.float32)
 
-        for contexts, next_tokens in dataloader.get_pairs(dataloader.train_files, batch_size):      
-            if step_counter >= max_step:
+        for contexts, next_tokens in dataloader.prefetch_batch(dataloader.train_files, batch_size):      
+            if step >= max_step:
                 break
 
             embedded = self.embedding.forward(contexts)  # shape (batch, context_size, embed_dim)
@@ -287,9 +289,9 @@ class Transformer:
 
             total_loss += loss * next_tokens.size
             count += next_tokens.size
-            step_counter += 1
+            microstep += 1
 
-            if step_counter % eval_every == 0:
+            if microstep % eval_every == 0:
                 to_eval = [loss, total_loss, self.embedding.lookup_table, current_grad, histograms, total_histograms, embed_acc]
                 for block in self.blocks:
                     to_eval.append(block.attention.Wqkv)
@@ -312,16 +314,17 @@ class Transformer:
                 if not nx.isfinite(loss).item():
                     forward_nan = nx.isnan(loss)
                     forward_inf = nx.isinf(loss)
-                    raise FloatingPointError(f"[FORWARD] non finite loss at step {step_counter}. isnan: {forward_nan} | isinf: {forward_inf}")
+                    raise FloatingPointError(f"[FORWARD] non finite loss at step {microstep}. isnan: {forward_nan} | isinf: {forward_inf}")
 
                 if not nx.isfinite(current_grad).all().item():
                     backward_max = nx.max(current_grad)
                     backward_min = nx.min(current_grad)
                     backward_nan = nx.isnan(current_grad).any()
                     backward_inf = nx.isinf(current_grad).any()
-                    raise FloatingPointError(f"[BACKWARD] non-finite gradient at step {step_counter}. isnan: {backward_nan} | isinf: {backward_inf}.\nmin value: {backward_min}\nmax value: {backward_max}")
+                    raise FloatingPointError(f"[BACKWARD] non-finite gradient at step {microstep}. isnan: {backward_nan} | isinf: {backward_inf}.\nmin value: {backward_min}\nmax value: {backward_max}")
                 
-            if step_counter > 0 and step_counter % microbatch_size == 0:
+            if microstep > 0 and microstep % microbatch_size == 0:
+                step += 1
                 all_network_params = []
                 for i,block in enumerate(self.blocks):
                     dWqkv = block.attention.dWqkv.astype(nx.float32) / self.gradient_scale / microbatch_size
@@ -356,7 +359,7 @@ class Transformer:
                 self.embedding.lookup_table = optimized["embedding"].astype(self.dtype)
                 embed_acc = nx.zeros_like(embed_acc)
                 
-                yield total_loss.item(), count, total_histograms, step_counter
+                yield total_loss.item(), count, total_histograms, step
         
     def validate(self, dataloader:DataLoader, batch_size:int, val_step:int|Literal["all"]="all"):
         total_loss = nx.float_32(0.0)
@@ -366,7 +369,7 @@ class Transformer:
         if not dataloader.validation_files:
             return None
 
-        for contexts, next_tokens in dataloader.get_pairs(dataloader.validation_files, batch_size):
+        for contexts, next_tokens in dataloader.prefetch_batch(dataloader.validation_files, batch_size):
             if isinstance(val_step, int) and step_counter >= val_step:
                 break
             
@@ -437,7 +440,6 @@ class Transformer:
         configs += f"embed_dim: {str(self.embed_dim)}" + "\n"
         configs += f"gradient_scale: {str(self.gradient_scale)}" + "\n"
         configs += "precision: full (float32)\n" if self.dtype == nx.float32 else f"precision: mixed precision ({self.dtype})\n" 
-        configs += f"block count: {len(self.blocks)}\n"
         configs += f"block configs: {self.block_configs}\n"
         configs += "individual block configs (only difference is shown): \n"
         similar_count = 0

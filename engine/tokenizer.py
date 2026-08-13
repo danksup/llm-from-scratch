@@ -277,14 +277,7 @@ class Tokenizer:
 
         tokens = [token for word in words for token in word]
 
-        encoded = tokens
-
-        del tokens,words
-
-        if max(encoded) <=  65_535:
-            return nx.array(encoded, dtype=nx.uint16)
-        else:
-            return nx.array(encoded, dtype=nx.uint32)
+        return tokens
 
     def decode(self, thing:Any) -> str:
         decoded = ""

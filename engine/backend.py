@@ -16,15 +16,24 @@ if backend == "auto":
         os.environ["BACKEND"] = "MLX"
         _nx.random.seed = seed
     except ImportError:
-        import numpy as _nx
-        backend = "NumPy"
-        os.environ["BACKEND"] = "NumPy"
-        rng = _nx.random.default_rng(seed)
+        try:
+            import cupy as _nx # type: ignore
+            backend = "CuPy"
+            os.environ["BACKEND"] = "CuPy"
+        except ImportError:
+            import numpy as _nx
+            backend = "NumPy"
+            os.environ["BACKEND"] = "NumPy"
+            rng = _nx.random.default_rng(seed)
 elif backend == "mlx":
     import mlx.core as _nx
     backend = "MLX"
     os.environ["BACKEND"] = "MLX"
     _nx.random.seed = seed
+elif backend == "cupy":
+    import cupy as _nx # type: ignore
+    backend = "CuPy"
+    os.environ["BACKEND"] = "CuPy"
 else:
     import numpy as _nx
     backend = "NumPy"

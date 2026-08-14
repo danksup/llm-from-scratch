@@ -8,9 +8,16 @@ venv/
 
 data/*
 !data/.gitkeep
+!data/test/
+!data/testim_a_cow.txt
 
 artifacts/sessions/*
 !artifacts/sessions/.gitkeep
+
+artifacts/dataloader/*
+!artifacts/dataloader/.gitkeep
+
+test/*
 
 *.DS_Store
 

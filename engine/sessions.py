@@ -9,11 +9,9 @@ import engine.backend as nx
 from typing import Any,Union
 import time
 import pickle
-import numpy as np
 import copy
 import warnings
 import uuid
-import random
 
 optimizers = Union[optim.Adam, optim.AdamW, optim.SGD]
 OPTIMIZER_TYPES = (optim.Adam,optim.AdamW,optim.SGD,)
@@ -216,8 +214,10 @@ class Session:
                         else:
                             val_loss = 'validation is skipped because something is wrong' 
 
-                   
-                    print(f"epoch {epoch} | step_counter: {total_steps}:  | avg loss: {final_loss} | avg val: {val_loss} | lr: {self.optimizer.lr:.6f} | time: {time_}")
+                    if hasattr(dataloader, "luck_decrease"):
+                        print(f"epoch {epoch} | step_counter: {total_steps}:  | avg loss: {final_loss} | avg val: {val_loss} | lr: {self.optimizer.lr:.6f} | cow_factor: {dataloader.luck_decrease + 0.3} | time: {time_}")
+                    else:
+                        print(f"epoch {epoch} | step_counter: {total_steps}:  | avg loss: {final_loss} | avg val: {val_loss} | lr: {self.optimizer.lr:.6f} | time: {time_}")
                     if total_histograms:
                         for idx, histogram in enumerate(total_histograms):
                             hmin = nx.min(histogram).item()

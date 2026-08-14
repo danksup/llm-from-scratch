@@ -21,7 +21,6 @@ class DataLoader:
         self.batch_size = batch_size
         self.tokenizer = tokenizer
         self.filepath = filepath
-        self.luck_decrease = 0
 
         assert isinstance(train_split, (float,int)) or train_split == "all", f"provide either float or \"all\" for train_split argument. got {train_split} of type {type(train_split)} instead"
 
@@ -171,6 +170,7 @@ class DataLoader:
                         context.extend( chungus[0:need])  
                     else: 
                         context = chungus[0:need]
+                    # yield self.function_that_turns_n_tokens_in_random_sequence_into_the_token_for_the_word_cow_randomly(context)
                     yield context
                     context = None
                     chungus = chungus[need:]
@@ -188,8 +188,8 @@ class DataLoader:
                 continue
             if isinstance(token, array.array):
                 token = token.tolist()
-            context_batches.append(token[:-1])
-            target_batches.append(token[1:])
+            context_batches.append(token[:-1]) #type:ignore
+            target_batches.append(token[1:]) #type:ignore
 
             if len(context_batches) == self.batch_size:
                 yield context_batches,target_batches
@@ -218,29 +218,30 @@ class DataLoader:
                 process.terminate()
         process.join()
 
-    def pretokenize(self, to_txt:bool=False):
+    def pretokenize(self, one_file:bool=True):
         files = self.train_files + self.validation_files
         indices = [i for i in range(len(files))]
 
-        if len(files) == 1:
-            filename = f"{files[0].name}"
-        else:
+        if len(files) > 1 and one_file:
             filename = f"{len(files)}_files"
 
-        if to_txt:
-            print(Warning("to_txt is not usable and therefore to be used for test only."))
-            with open(f"artifacts/dataloader/{filename}.txt", "w") as f:
-                for token in self.stream_token(files, indices):
-                    f.write(f"{str(token[0])}\n")
-            return 0
-        
-        with open(f"artifacts/dataloader/{filename}.tokenized", "wb") as f:
-            f.write(b"tokenized")
-            f.write((1).to_bytes(4, "little"))
-            for token in self.stream_token(files, indices):
-                tokens = array.array(self.type_code, token)
-                tokens.tofile(f)
+            with open(f"artifacts/dataloader/{filename}.tokenized", "wb") as f:
+                f.write(b"tokenized")
+                f.write((1).to_bytes(4, "little"))
 
+                for token in self.stream_token(files, indices):
+                    tokens = array.array(self.type_code, token)
+                    tokens.tofile(f)
+        else:
+            for file in self.stream_file(files, indices):
+                filename = file.stem
+                with open(f"artifacts/dataloader/{filename}.tokenized", "wb") as f:
+                    f.write(b"tokenized")
+                    f.write((1).to_bytes(4, "little"))
+                    for x in self.stream_token([file], [0]):
+                        tokens = array.array(self.type_code, x)
+                        tokens.tofile(f)
+                    
     def get_total_tokens(self, files:list[Path], chunk_size:int=  1_024_000):
         total_tokens = 0
         indices = [i for i in range(len(files))]
@@ -256,23 +257,24 @@ class DataLoader:
         return total_tokens // self.context_size // self.batch_size // microbatch_size
 
     def function_that_turns_n_tokens_in_random_sequence_into_the_token_for_the_word_cow_randomly(self, token):
-        self.luck_decrease = min(self.luck_decrease, 0.2)
+        self.luck_decrease = min(getattr(self, "luck_decrease", 0), 0.2) 
         if random.random() < (0.30 + self.luck_decrease):
             cow  = self.tokenizer.encode("cow")  
             len_token = len(token)
             if len(token) == len(cow):
                 token = cow
             else:
-                how_much = random.randint(0, max(len_token//4, 1))
+                how_much = random.randint(0, max(len_token//8, 1))
                 cow_length = len(cow)
 
                 for i in range(how_much):
                     random_place = random.randint(0, len_token - 1 - cow_length)
                   
                     if [token[random_place + i] for i in range(cow_length)] == cow:
-                        self.luck_decrease += 0.001
+                        self.luck_decrease += 0.1
                     else:
                         for cow_piece in range(cow_length):
                             token[random_place+cow_piece+1] = cow[cow_piece] 
+        else:
+            self.luck_decrease += 0.01
         return token
-            

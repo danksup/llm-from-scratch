@@ -12,18 +12,6 @@ from engine.sessions import Session
 import engine.backend as nx
 from helper.singleton import init_corpus
 
-EPOCHS = 1
-EMBED_DIM = 256
-CONTEXT_SIZE = 2048
-BATCH_SIZE = 3
-BASE_WIDTH = 4 * EMBED_DIM
-N_HEADS = 8
-N_KV_HEADS = max(1, N_HEADS // 2)
-N_EXPERTS = 10
-CF = 1.25
-VAL = 1
-TOP_K = 2
-
 #not hooked yet to session
 PATIENCE = 20
 TRESHOLD = 1e-2
@@ -32,24 +20,24 @@ TOKENIZER_PATH = "artifacts/tokenizer/tokenizer32000_1351277738len.tokenizer"
 tokenizer1 = Tokenizer.load(TOKENIZER_PATH)
 
 session_configs = {
-    "epochs":EPOCHS,
+    "epochs":1,
     "max_step":50,
-    "train_split": VAL,
-    "max_val_step":300,
+    "train_split": 1,
+    "max_val_step":1,
     "eval_every":1, 
     "validate_every":0,
-    "context_size": CONTEXT_SIZE,
-    "batch_size": BATCH_SIZE,
-    "microbatch_size":16,
+    "context_size": 4,
+    "batch_size": 1,
+    "microbatch_size":1,
     "optimizer":"adamw",
     "optimizer_args":{
         "lr": 1e-3,
-        "use_master": False,
-        "scheduler": None,
-        "min_lr": None,
+        "use_master": True,
+        "scheduler": "cosine_decay",
+        "min_lr": 1e-5,
     },
     "using":os.environ.get("BACKEND"),
-    "save":True,
+    "save":False,
     "create_checkpoint":True,
     "checkpoint_every":1000,
     "weights_only": True
@@ -57,21 +45,21 @@ session_configs = {
 
 model_configs = {
     "n_blocks":10,
-    "embed_dim":EMBED_DIM,
+    "embed_dim":256,
     "dtype": nx.float16,
-    "gradient_scale":2048,
+    "gradient_scale":8,
     "vocab_size": len(tokenizer1.vocab),
     "moe_lambda":0.01,
     "block_configs":{
-        "ff_hidden_width": BASE_WIDTH,
-        "ff_n_experts":N_EXPERTS,
-        "ff_topk":TOP_K,
-        "ff_cf":CF,
+        "ff_hidden_width": 256,
+        "ff_n_experts":10,
+        "ff_topk":2,
+        "ff_cf":1.25,
         "ff_init":"glorot_uniform",
         "attn_type":"full",
         "attn_variant":"gqa",
-        "attn_n_heads":N_HEADS,
-        "attn_n_kv_heads":N_KV_HEADS,
+        "attn_n_heads":8,
+        "attn_n_kv_heads":4,
         "attn_init":"glorot_uniform",
         },
     "block_overrides":{
@@ -84,12 +72,10 @@ if __name__ == "__main__":
     session_configs["block_size"] = len(transformer.blocks)
 
     print("loading dataloader ", end="\r")
-    dataloader = DataLoader("data", tokenizer1, session_configs["context_size"], session_configs["batch_size"], session_configs["train_split"])
+    dataloader = DataLoader("data/test", tokenizer1, session_configs["context_size"], session_configs["batch_size"], session_configs["train_split"])
 
     session1 = Session(transformer, tokenizer1, True, session_configs)
     start = time.perf_counter()
     session1.train(dataloader, display_message=True)
     end = time.perf_counter()
     print(f"training finished. time: {end - start:.3f}s")
-
-    # print(session1)

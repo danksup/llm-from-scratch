@@ -1,15 +1,18 @@
 from engine.sessions import Session
+import engine.backend as nx 
 import time
 
-session = Session.load("artifacts/sessions/session_keyboardinterrupt_save_e2472e77-70c2-46bf-8c59-6ec48d31af12.ram2n")
+
+session = Session.load("artifacts/sessions/session_88832000_param_1_epochs_weights_only_6a6265cd-6720-463f-9099-fba28da80f14.ram2n")
 tokenizer = session.tokenizer
 context_size = session.configs["context_size"]
-context = "YOURE REPEATING URSELF"
+context = "give me everything."
 print(f"input: {context}")
-context = tokenizer.encode(context)
+context = nx.array(tokenizer.encode(context), nx.uint16)
+
 context = context.reshape(-1, context.shape[0])
 
-TEMPERATURE = 0.6
+TEMPERATURE = 1
 TOP_K = 30
 TOP_P = .8
 N = 120

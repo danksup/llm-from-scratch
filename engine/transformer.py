@@ -243,8 +243,39 @@ class Transformer:
             current_grad = dx
 
         return current_grad
+
+    def eval_networks(self, others:list|None = None, include_gradients:bool=True, optimizer:optimizers|None=None):
+        to_eval = []
+        if others is not None:
+            to_eval.extend(others)
+
+        for block in self.blocks:
+            to_eval.append(block.attention.Wqkv)
+            to_eval.append(block.attention.Wo)
+            to_eval.append(block.ff.Wcombined)
+            to_eval.append(block.ff.Wout)
+            to_eval.append(block.ff.router)
+            to_eval.append(block.rmsnorm1.gamma)
+            to_eval.append(block.rmsnorm2.gamma)
+            
+            if include_gradients:
+                to_eval.append(block.attention.dWqkv)
+                to_eval.append(block.attention.dWo)
+                to_eval.append(block.ff.dWcombined)
+                to_eval.append(block.ff.dWout)
+                to_eval.append(block.ff.d_router)
+                to_eval.append(block.rmsnorm1.d_gamma)
+                to_eval.append(block.rmsnorm2.d_gamma)
+            else:
+                if optimizer is not None:
+                    if hasattr(optimizer, "state"):
+                        to_eval.append(optimizer.state)
+                    if hasattr(optimizer, "masters"):
+                        to_eval.append(optimizer.masters) #type:ignore
+                  
+        nx.eval(*to_eval)
     
-    def train(self, dataloader:DataLoader, optimizer:optimizers, total_epoch:int, batch_size:int=32, max_step:int=50000, eval_every:int=5, microbatch_size:int=16):
+    def train(self, dataloader:DataLoader, optimizer:optimizers, total_epoch:int, max_step:int=50000, eval_every:int=5, microbatch_size:int=16):
         total_loss = nx.float_32(0.0)
         count = 0
         microstep = 0 
@@ -252,7 +283,10 @@ class Transformer:
         total_histograms = None
         embed_acc = nx.zeros((self.vocab_size, self.embed_dim), nx.float32)
 
-        for contexts, next_tokens in dataloader.prefetch_batch(dataloader.train_files, batch_size):      
+        for contexts, next_tokens in dataloader.prefetch_batch(dataloader.train_files):   
+            contexts = nx.array(contexts, nx.str_to_dtype[dataloader.dtype])
+            next_tokens = nx.array(next_tokens, nx.str_to_dtype[dataloader.dtype])
+
             if step >= max_step:
                 break
 
@@ -291,25 +325,10 @@ class Transformer:
             count += next_tokens.size
             microstep += 1
 
+        
             if microstep % eval_every == 0:
                 to_eval = [loss, total_loss, self.embedding.lookup_table, current_grad, histograms, total_histograms, embed_acc]
-                for block in self.blocks:
-                    to_eval.append(block.attention.Wqkv)
-                    to_eval.append(block.attention.Wo)
-                    to_eval.append(block.ff.Wcombined)
-                    to_eval.append(block.ff.Wout)
-                    to_eval.append(block.ff.router)
-                    to_eval.append(block.rmsnorm1.gamma)
-                    to_eval.append(block.rmsnorm2.gamma)
-                    to_eval.append(block.attention.dWqkv)
-                    to_eval.append(block.attention.dWo)
-                    to_eval.append(block.ff.dWcombined)
-                    to_eval.append(block.ff.dWout)
-                    to_eval.append(block.ff.d_router)
-                    to_eval.append(block.rmsnorm1.d_gamma)
-                    to_eval.append(block.rmsnorm2.d_gamma)
-
-                nx.eval(*to_eval)
+                self.eval_networks(to_eval)
 
                 if not nx.isfinite(loss).item():
                     forward_nan = nx.isnan(loss)
@@ -359,9 +378,12 @@ class Transformer:
                 self.embedding.lookup_table = optimized["embedding"].astype(self.dtype)
                 embed_acc = nx.zeros_like(embed_acc)
                 
+                self.eval_networks(include_gradients=False, optimizer=optimizer)
+                
                 yield total_loss.item(), count, total_histograms, step
+                nx.clear_cache()
         
-    def validate(self, dataloader:DataLoader, batch_size:int, val_step:int|Literal["all"]="all"):
+    def validate(self, dataloader:DataLoader, val_step:int|Literal["all"]="all"):
         total_loss = nx.float_32(0.0)
         count = 0
         step_counter = 0
@@ -369,7 +391,7 @@ class Transformer:
         if not dataloader.validation_files:
             return None
 
-        for contexts, next_tokens in dataloader.prefetch_batch(dataloader.validation_files, batch_size):
+        for contexts, next_tokens in dataloader.prefetch_batch(dataloader.validation_files):
             if isinstance(val_step, int) and step_counter >= val_step:
                 break
             

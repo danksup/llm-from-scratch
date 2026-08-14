@@ -85,10 +85,9 @@ class Session:
         self.transformer = transformer
         assert len(tokenizer.vocab) == transformer.vocab_size, f"vocab size mismatch of {transformer.vocab_size} in transformer and {len(tokenizer.vocab)} in tokenizer."
 
-
         if configs is None:
             configs = {}
-
+        configs["session_id"] = self.session_id
         self.configs = DEFAULT_CONFIGS | configs
         config_optimizer = self.configs["optimizer"].lower()
         assert config_optimizer in OPTIMIZERS, f"invalid optimizer \"{config_optimizer}\". valid optimizers: {", ".join(OPTIMIZERS.keys())}"
@@ -166,7 +165,7 @@ class Session:
             for i in range(self.configs["epochs"]):
                 epoch = i
                 assert self.optimizer, "optimizer doesnt exist"
-                train = self.transformer.train(dataloader, self.optimizer, self.configs["epochs"], batch_size=batch_size, max_step=self.configs["max_step"], eval_every=self.configs["eval_every"], microbatch_size=self.configs["microbatch_size"])
+                train = self.transformer.train(dataloader, self.optimizer, self.configs["epochs"], max_step=self.configs["max_step"], eval_every=self.configs["eval_every"], microbatch_size=self.configs["microbatch_size"])
                 
                 final_loss = 0.0
                 total_histograms = None
@@ -176,11 +175,6 @@ class Session:
                 next_checkpoint = checkpoint_every
 
                 for loss, count, histograms, step_counter in train:
-                    # if self.function_that_decides_to_end_training_randomly_because_why_not():
-                    #     savefile_name = f"hi_lol_{session_id}"
-                    #     print("i came to save your laptop from hurting.")
-                    #     break
-
                     final_loss = loss / count
                     total_steps = step_counter
                     total_histograms = histograms
@@ -189,7 +183,7 @@ class Session:
                     if dataloader.validation_files and validate_every > 0 and step_counter >= next_validate_step:
                         next_validate_step += validate_every
                         print(f"step: {step_counter} validating", end="\r")
-                        val_loss = self.transformer.validate(dataloader, batch_size, self.configs["max_val_step"])
+                        val_loss = self.transformer.validate(dataloader, self.configs["max_val_step"])
 
                         if val_loss is not None and val_loss < best_val_loss:
                             best_val_loss = val_loss
@@ -222,6 +216,7 @@ class Session:
                         else:
                             val_loss = 'validation is skipped because something is wrong' 
 
+                   
                     print(f"epoch {epoch} | step_counter: {total_steps}:  | avg loss: {final_loss} | avg val: {val_loss} | lr: {self.optimizer.lr:.6f} | time: {time_}")
                     if total_histograms:
                         for idx, histogram in enumerate(total_histograms):
@@ -380,7 +375,3 @@ class Session:
         optimizer = to_checkpoint.optimizer.from_dict(to_checkpoint.optimizer.to_dict(to_checkpoint.configs["weights_only"]))        
         checkpoint = cls(transformer=transformer_checkpoint, tokenizer = tokenizer_checkpoint, init_optimizer=optimizer)
         return checkpoint
-
-    @staticmethod
-    def function_that_decides_to_end_training_randomly_because_why_not():
-        return random.random() < .01

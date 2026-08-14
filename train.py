@@ -13,17 +13,16 @@ import engine.backend as nx
 from helper.singleton import init_corpus
 
 EPOCHS = 1
-EMBED_DIM = 192
-CONTEXT_SIZE = 1024
-BATCH_SIZE = 5
+EMBED_DIM = 256
+CONTEXT_SIZE = 2048
+BATCH_SIZE = 2
 BASE_WIDTH = 4 * EMBED_DIM
-N_HEADS = 6
+N_HEADS = 8
 N_KV_HEADS = max(1, N_HEADS // 2)
 N_EXPERTS = 10
 CF = 1.25
 VAL = 1
 TOP_K = 2
-WINDOWS = CONTEXT_SIZE // 4
 
 #not hooked yet to session
 PATIENCE = 20
@@ -34,14 +33,14 @@ tokenizer1 = Tokenizer.load(TOKENIZER_PATH)
 
 session_configs = {
     "epochs":EPOCHS,
-    "max_step":1,
+    "max_step":20,
     "train_split": VAL,
     "max_val_step":300,
     "eval_every":1, 
     "validate_every":0,
     "context_size": CONTEXT_SIZE,
     "batch_size": BATCH_SIZE,
-    "microbatch_size":1,
+    "microbatch_size":16,
     "optimizer":"adamw",
     "optimizer_args":{
         "lr": 1e-3,
@@ -52,7 +51,7 @@ session_configs = {
     "using":os.environ.get("BACKEND"),
     "save":True,
     "create_checkpoint":True,
-    "checkpoint_every":10000,
+    "checkpoint_every":1000,
     "weights_only": True
 }
 
@@ -62,7 +61,7 @@ model_configs = {
     "dtype": nx.float16,
     "gradient_scale":2048,
     "vocab_size": len(tokenizer1.vocab),
-    "moe_lambda":0.0125,
+    "moe_lambda":0.01,
     "block_configs":{
         "ff_hidden_width": BASE_WIDTH,
         "ff_n_experts":N_EXPERTS,
@@ -73,7 +72,6 @@ model_configs = {
         "attn_variant":"gqa",
         "attn_n_heads":N_HEADS,
         "attn_n_kv_heads":N_KV_HEADS,
-        # "attn_windows":WINDOWS,
         "attn_init":"glorot_uniform",
         },
     "block_overrides":{
@@ -86,7 +84,7 @@ if __name__ == "__main__":
     session_configs["block_size"] = len(transformer.blocks)
 
     print("loading dataloader ", end="\r")
-    dataloader = DataLoader("data", tokenizer1, session_configs["context_size"], session_configs["train_split"])
+    dataloader = DataLoader("data", tokenizer1, session_configs["context_size"], session_configs["batch_size"], session_configs["train_split"])
 
     session1 = Session(transformer, tokenizer1, True, session_configs)
     start = time.perf_counter()

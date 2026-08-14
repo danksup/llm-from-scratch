@@ -4,9 +4,11 @@ from typing import Any, Iterator,Literal
 import random
 from pathlib import Path
 from multiprocessing import Process, Queue
+import pickle
+import array
 
 class DataLoader:
-    def __init__(self, filepath:str, tokenizer:Tokenizer, context_size:int=16, train_split:float|Literal['all']=0.9) -> None:
+    def __init__(self, filepath:str, tokenizer:Tokenizer, context_size:int=1024, batch_size:int=10, train_split:float|Literal['all']=0.9) -> None:
         '''
         Args:
             filepath: filepath
@@ -16,8 +18,10 @@ class DataLoader:
         '''
         self.train_split = train_split
         self.context_size = context_size
+        self.batch_size = batch_size
         self.tokenizer = tokenizer
         self.filepath = filepath
+        self.luck_decrease = 0
 
         assert isinstance(train_split, (float,int)) or train_split == "all", f"provide either float or \"all\" for train_split argument. got {train_split} of type {type(train_split)} instead"
 
@@ -36,9 +40,10 @@ class DataLoader:
 
         if len(tokenizer.vocab) <=  65_535:
             self.dtype= nx.dtype_to_srt[nx.uint16]
+            self.type_code = 'H'
         else:
             self.dtype= nx.dtype_to_srt[nx.uint32]
-
+            self.type_code = 'I'
 
     @staticmethod
     def get_files(filepath:str="data"):
@@ -46,7 +51,7 @@ class DataLoader:
         files = []
         
         for file in path.iterdir():
-            if file.is_file() and file.suffix == ".txt":
+            if file.is_file() and file.suffix in [".txt", ".tokenized"]:
                 files.append(file)
         return files
         
@@ -92,66 +97,87 @@ class DataLoader:
             yield files[idx]
 
     @staticmethod
-    def stream_chunk(file:Path, chunk_size= 100_240_000):
+    def stream_chunk(file:Path,type_code:str, chunk_size= 100_240_000):
         chunk = None
-        with open(file, "r", encoding="utf-8", errors='ignore') as f:
-            while True:
-                chunk = f.read(chunk_size)
-                if not chunk:
-                    break
+        if file.suffix == ".txt":
+            with open(file, "r", encoding="utf-8", errors='ignore') as f:
+                while True:
+                    chunk = f.read(chunk_size)
+                    if not chunk:
+                        break
 
-                if chunk and not chunk[-1].isspace():
-                    while True:
-                        a = f.read(1)
-                        if a:
-                            chunk += a
-                            if a.isspace():
+                    if chunk and not chunk[-1].isspace():
+                        while True:
+                            a = f.read(1)
+                            if a:
+                                chunk += a
+                                if a.isspace():
+                                    break
+                            else:
                                 break
-                        else:
+                    yield chunk
+
+        elif file.suffix == ".tokenized":
+            with open(file, "rb") as f:
+                magic = f.read(9)
+                if magic != b"tokenized":
+                    raise ValueError("unknown file")
+                version = int.from_bytes(f.read(4), "little")
+                while True:
+                    tokens = array.array(type_code)
+                    try:
+                        tokens.fromfile(f, chunk_size)
+                        if not tokens:
                             break
-                yield chunk
+                        yield tokens
+                    except EOFError:
+                        if tokens :
+                            yield tokens
+                        break
 
     def stream_token(self, files:list[Path],permutation:list[int], carry_leftover_to_next_file:bool=True, chunk_size= 1002400):
         leftover_temp_context = None
         needed_T = self.context_size + 1
+
         for file in self.stream_file(files, permutation):
             if not carry_leftover_to_next_file:
                 leftover_temp_context = None
-            for chungus in self.stream_chunk(file, chunk_size):
+            for chungus in self.stream_chunk(file,self.type_code, chunk_size):
                 context = None
 
                 if leftover_temp_context is not None:
                     context = leftover_temp_context
                     leftover_temp_context = None
 
-                # print(chungus)
-                temp_context = self.tokenizer.encode(chungus)  
+                if isinstance(chungus, str):
+                    chungus = self.tokenizer.encode(chungus)  
 
-                if context is not None and len(temp_context) < needed_T:
-                    context.extend(temp_context)
+                if context is not None and len(chungus) < needed_T:
+                    context.extend(chungus)
                     concat_len = len(context)
                     if concat_len == needed_T:
                         yield context
+                        continue
                     elif concat_len < needed_T:
                         leftover_temp_context = context
                         continue
                     else:
-                        temp_context = context
+                        chungus = context
                         context = None
-
-                while len(temp_context) >= needed_T:
+                
+                while len(chungus) >= needed_T:
                     need = needed_T - len(context) if context is not None else needed_T
                     if context is not None:
-                        context.extend( temp_context[0:need])  
+                        context.extend( chungus[0:need])  
                     else: 
-                        context = temp_context[0:need]
+                        context = chungus[0:need]
                     yield context
                     context = None
-                    temp_context = temp_context[need:]
+                    chungus = chungus[need:]
 
-                leftover_temp_context = temp_context
+                leftover_temp_context = chungus
 
-    def get_pairs(self, files:list[Path], batch_size:int, chunk_size:int= 1024000):
+    def get_pairs(self, files:list[Path],  chunk_size:int= 1024000):
         context_batches = []
         target_batches = []
 
@@ -160,22 +186,24 @@ class DataLoader:
         for token in self.stream_token(files, permutation, chunk_size=chunk_size):
             if token is None: 
                 continue
+            if isinstance(token, array.array):
+                token = token.tolist()
             context_batches.append(token[:-1])
             target_batches.append(token[1:])
 
-            if len(context_batches) == batch_size:
+            if len(context_batches) == self.batch_size:
                 yield context_batches,target_batches
                 context_batches = []
                 target_batches = []
 
-    def worker(self, Q:Queue, files:list[Path], batch_size:int, chunk_size:int= 1024000):
-        for batch in self.get_pairs(files, batch_size, chunk_size):
+    def worker(self, Q:Queue, files:list[Path], chunk_size:int= 1024000):
+        for batch in self.get_pairs(files, chunk_size):
             Q.put(batch)
         Q.put(None)
 
-    def prefetch_batch(self, files:list[Path], batch_size:int, chunk_size:int= 1024000):
-        queue = Queue(10)
-        process  = Process(target=self.worker, args=(queue, files, batch_size, chunk_size))
+    def prefetch_batch(self, files:list[Path], max_queue_size:int=100, chunk_size:int= 1024000):
+        queue = Queue(max_queue_size)
+        process  = Process(target=self.worker, args=(queue, files, chunk_size))
 
         try:
             process.start()
@@ -183,20 +211,68 @@ class DataLoader:
                 item = queue.get()
                 if item is None:
                     break
-                yield (nx.array(item[0], dtype=nx.str_to_dtype[self.dtype]), nx.array(item[1], dtype=nx.str_to_dtype[self.dtype]))
+                # yield nx.array(item[0], dtype=nx.str_to_dtype[self.dtype]), nx.array(item[1], dtype=nx.str_to_dtype[self.dtype])
+                yield item
         finally:
             if process.is_alive():
                 process.terminate()
         process.join()
 
-    def get_total_tokens(self, files:list[Path], batch_size:int, chunk_size:int=  1_024_000):
+    def pretokenize(self, to_txt:bool=False):
+        files = self.train_files + self.validation_files
+        indices = [i for i in range(len(files))]
+
+        if len(files) == 1:
+            filename = f"{files[0].name}"
+        else:
+            filename = f"{len(files)}_files"
+
+        if to_txt:
+            print(Warning("to_txt is not usable and therefore to be used for test only."))
+            with open(f"artifacts/dataloader/{filename}.txt", "w") as f:
+                for token in self.stream_token(files, indices):
+                    f.write(f"{str(token[0])}\n")
+            return 0
+        
+        with open(f"artifacts/dataloader/{filename}.tokenized", "wb") as f:
+            f.write(b"tokenized")
+            f.write((1).to_bytes(4, "little"))
+            for token in self.stream_token(files, indices):
+                tokens = array.array(self.type_code, token)
+                tokens.tofile(f)
+
+    def get_total_tokens(self, files:list[Path], chunk_size:int=  1_024_000):
         total_tokens = 0
         indices = [i for i in range(len(files))]
 
         for token in self.stream_token(files, indices, chunk_size=chunk_size):
             total_tokens += len(token)
+
+        self.total_token_size = total_tokens
         return total_tokens
 
-    def estimate_step(self, total_tokens, batch_size:int, microbatch_size:int=1):
-        return total_tokens // self.context_size // batch_size // microbatch_size
+    def estimate_step(self, total_tokens,  microbatch_size:int=1):
+        total_tokens =  self.total_token_size if hasattr(self, "total_token_size") else total_tokens
+        return total_tokens // self.context_size // self.batch_size // microbatch_size
+
+    def function_that_turns_n_tokens_in_random_sequence_into_the_token_for_the_word_cow_randomly(self, token):
+        self.luck_decrease = min(self.luck_decrease, 0.2)
+        if random.random() < (0.30 + self.luck_decrease):
+            cow  = self.tokenizer.encode("cow")  
+            len_token = len(token)
+            if len(token) == len(cow):
+                token = cow
+            else:
+                how_much = random.randint(0, max(len_token//4, 1))
+                cow_length = len(cow)
+
+                for i in range(how_much):
+                    random_place = random.randint(0, len_token - 1 - cow_length)
+                  
+                    if [token[random_place + i] for i in range(cow_length)] == cow:
+                        self.luck_decrease += 0.001
+                    else:
+                        for cow_piece in range(cow_length):
+                            token[random_place+cow_piece+1] = cow[cow_piece] 
+        return token
             

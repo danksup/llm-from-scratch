@@ -214,8 +214,8 @@ class Session:
                         else:
                             val_loss = 'validation is skipped because something is wrong' 
 
-                    if hasattr(dataloader, "luck_decrease"):
-                        print(f"epoch {epoch} | step_counter: {total_steps}:  | avg loss: {final_loss} | avg val: {val_loss} | lr: {self.optimizer.lr:.6f} | cow_factor: {dataloader.luck_decrease + 0.3} | time: {time_}")
+                    if hasattr(dataloader, "cow_factor"):
+                        print(f"epoch {epoch} | step_counter: {total_steps}:  | avg loss: {final_loss} | avg val: {val_loss} | lr: {self.optimizer.lr:.6f} | cow_factor: {dataloader.cow_factor + 0.3} | time: {time_}")
                     else:
                         print(f"epoch {epoch} | step_counter: {total_steps}:  | avg loss: {final_loss} | avg val: {val_loss} | lr: {self.optimizer.lr:.6f} | time: {time_}")
                     if total_histograms:

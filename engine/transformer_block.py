@@ -93,7 +93,7 @@ class TransformerBlock:
         d_attn_drop = Dropout._backward(d_attn_out, mask1, p)
         d_attn, dWqkv, dWo = ATTN_TYPE[attention]._backward(d_attn_drop, caches_attn, attn_configs, attn_params)
 
-        d_attn = d_attn.astype(nx.float32) #type:ignore
+        d_attn = d_attn.astype(nx.float32) 
         d_rmsn1, d_gamma1 = RMSNorm._backward(d_attn,caches_rmsnorm1,gamma1)
 
         dx = d_rmsn1 + d_attn_out

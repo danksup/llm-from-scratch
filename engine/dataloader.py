@@ -301,5 +301,5 @@ class DataLoader:
                         for cow_piece in range(cow_length):
                             token[random_place+cow_piece+1] = cow[cow_piece] 
         else:
-            self.luck_decrease += 0.01
+            self.cow_factor += 0.01
         return token

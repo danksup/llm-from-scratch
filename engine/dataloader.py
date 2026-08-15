@@ -8,7 +8,7 @@ import pickle
 import array
 
 class DataLoader:
-    def __init__(self, filepath:str, tokenizer:Tokenizer, context_size:int=1024, batch_size:int=10, train_split:float|Literal['all']=0.9) -> None:
+    def __init__(self, filepath:str, tokenizer:Tokenizer, context_size:int=1024, batch_size:int=10, train_split:float|Literal['all']=0.9, *, __test_mode:bool = False) -> None:
         '''
         Args:
             filepath: filepath
@@ -43,6 +43,9 @@ class DataLoader:
         else:
             self.dtype= nx.dtype_to_srt[nx.uint32]
             self.type_code = 'I'
+
+        self.__test_mode = __test_mode
+        self.__cow_factor = 0.1
 
     @staticmethod
     def get_files(filepath:str="data"):
@@ -200,8 +203,10 @@ class DataLoader:
                         context.extend( chungus[0:need])  
                     else: 
                         context = chungus[0:need]
-                    # yield self.function_that_turns_n_tokens_in_random_sequence_into_the_token_for_the_word_cow_randomly(context)
-                    yield context
+                    if self.__test_mode:
+                        yield self.function_that_turns_n_tokens_in_random_sequence_into_the_token_for_the_word_cow_randomly(context)
+                    else:
+                        yield context
                     context = None
                     chungus = chungus[need:]
 
@@ -282,24 +287,29 @@ class DataLoader:
         return total_tokens // self.context_size // self.batch_size // microbatch_size
 
     def function_that_turns_n_tokens_in_random_sequence_into_the_token_for_the_word_cow_randomly(self, token):
-        self.cow_factor = min(getattr(self, "cow_factor", 0.2), 0.5) 
-        if random.random() < self.cow_factor:
+        self.__cow_factor = min(getattr(self, "__cow_factor", 0.1), 0.5) 
+        if random.random() < self.__cow_factor:
             cow  = self.tokenizer.encode("cow")  
             len_token = len(token)
             if len(token) == len(cow):
                 token = cow
             else:
-                how_much = random.randint(0, max(len_token//8, 1))
+                n_cow_base =  max(len_token//8, 1) 
+                considering_cow_factor = n_cow_base + int(n_cow_base * self.__cow_factor)
+                how_much = random.randint(0, considering_cow_factor)
                 cow_length = len(cow)
+
+                if how_much == 0:
+                    self.__cow_factor += 0.123456789
 
                 for _ in range(how_much):
                     random_place = random.randint(0, len_token - 1 - cow_length)
                     
                     if token[random_place:random_place+cow_length] == cow and (token[random_place - cow_length:random_place] != cow if random_place > (cow_length-1) else True):
-                        self.cow_factor += 0.05
+                        self.__cow_factor += 0.05
                     else:
                         for cow_piece in range(cow_length):
-                            token[random_place+cow_piece+1] = cow[cow_piece] 
+                            token[random_place+cow_piece] = cow[cow_piece] 
         else:
-            self.cow_factor += 0.01
+            self.__cow_factor += 0.01
         return token

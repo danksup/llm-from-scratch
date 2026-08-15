@@ -1,9 +1,9 @@
+import engine.backend as nx
 from engine.moe import MoE
-import engine.attention as attn
 from engine.rmsnorm import RMSNorm
 from engine.dropout import Dropout
+import engine.attention as attn
 import engine.initializers as init
-import engine.backend as nx
 from typing import Any, Union
 Attention = Union[attn.AttentionFull, attn.AttentionSWA]
 import time
@@ -59,32 +59,21 @@ class TransformerBlock:
             \n
             -> rmsnorm(attn_out) = rmsnorm_out -> swiglu(rmsnorm_out)  -> ff_out + resudial = ff_out shape(B,T,D)
         '''
-        # print("x block",x.dtype)
         rmsnorm1_out, caches_rmsnorm1 = RMSNorm._forward(x, gamma1,epsilon)
 
         rmsnorm1_out = rmsnorm1_out.astype(x.dtype) 
-
         attn_out, caches_attn = ATTN_TYPE[attention]._forward(rmsnorm1_out, causal_mask, attn_configs, attn_params)
-        # print("attn forward", attn_out.dtype)
-
         drop_attn_out, mask1 = Dropout._forward(attn_out, p,is_training)
-        # print("drop attn out", drop_attn_out.dtype)
 
         attn_out = drop_attn_out + x
-        # print("attn out", attn_out.dtype)
 
         rmsnorm2_out, caches_rmsnorm2 = RMSNorm._forward(attn_out, gamma2,epsilon)
 
         rmsnorm2_out = rmsnorm2_out.astype(x.dtype) 
-
         ff_out, caches_ff, router_loss, normalized_histogram = MoE.forward(rmsnorm2_out, cf, top_k, router,n_experts,hidden_width,Wcombined, Wout)
-        # print("ff_out", ff_out.dtype)
-        
         drop_ff_out, mask2 =  Dropout._forward(ff_out, p,is_training)
-        # print("drop ff out", drop_ff_out.dtype)
 
         ff_out = drop_ff_out + attn_out
-        # print("FINAL BLOCK OUTPUT", ff_out.dtype)
         
         masks = (mask1, mask2)
         caches = (caches_attn, caches_ff, caches_rmsnorm1, caches_rmsnorm2)
@@ -95,14 +84,14 @@ class TransformerBlock:
     def _backward(gradient:Any, mask1:Any, mask2:Any, attention:str, p, caches_attn:tuple[Any,...], caches_ff:tuple[Any,...], caches_rmsnorm1:tuple[Any,...], caches_rmsnorm2:tuple[Any,...], attn_configs:tuple[Any,...], attn_params:tuple[Any,...], gamma1:Any, gamma2:Any, ff_params:tuple, moe_configs) -> tuple[Any, Any, Any, Any, Any, Any, Any, Any]:
         d_ff_drop = Dropout._backward(gradient, mask2, 0.1) #grad dtype
         dx_ff,  dWcombined, dWout, d_router = MoE.backward(d_ff_drop, caches_ff, moe_configs, ff_params) #out:fp32
+
         d_rmsn2,d_gamma2 = RMSNorm._backward(dx_ff, caches_rmsnorm2 ,gamma2)
 
         d_attn_out = gradient + d_rmsn2
+
         d_attn_out = d_attn_out.astype(gradient.dtype)
         d_attn_drop = Dropout._backward(d_attn_out, mask1, p)
-        # print("d_attn_drop", d_attn_drop.dtype)
         d_attn, dWqkv, dWo = ATTN_TYPE[attention]._backward(d_attn_drop, caches_attn, attn_configs, attn_params)
-        # print("d_attn", d_attn.dtype)
 
         d_attn = d_attn.astype(nx.float32) #type:ignore
         d_rmsn1, d_gamma1 = RMSNorm._backward(d_attn,caches_rmsnorm1,gamma1)

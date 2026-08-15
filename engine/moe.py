@@ -1,10 +1,10 @@
 import engine.backend as nx
 from engine.activations import softmax, softmax_derivative
 from engine.activations import swish,swish_derivative
-import time
-import math
 from typing import Any, Callable
 import engine.initializers as initializer
+import time
+import math
 
 class MoE:
     def __init__(self, capacity_factor, top_k, n_experts, embed_dim, hidden_width, dtype:Any=nx.float16, initializer:Callable=initializer.glorot_uniform) -> None:

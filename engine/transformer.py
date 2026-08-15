@@ -7,7 +7,6 @@ import engine.attention as attn
 import engine.initializers as init
 import engine.backend as nx
 from typing import Any, Literal, Union
-import time
 import copy
 
 
@@ -268,6 +267,7 @@ class Transformer:
                 to_eval.append(block.rmsnorm2.d_gamma)
             else:
                 if optimizer is not None:
+                    to_eval.append(optimizer.lr)
                     if hasattr(optimizer, "state"):
                         to_eval.append(optimizer.state)
                     if hasattr(optimizer, "masters"):
@@ -327,7 +327,7 @@ class Transformer:
 
         
             if microstep % eval_every == 0:
-                to_eval = [loss, total_loss, self.embedding.lookup_table, current_grad, histograms, total_histograms, embed_acc]
+                to_eval = [loss, total_loss, self.embedding.lookup_table, current_grad, histograms,embedding_gradient, d_table, total_histograms, embed_acc]
                 self.eval_networks(to_eval)
 
                 if not nx.isfinite(loss).item():
@@ -394,6 +394,8 @@ class Transformer:
         for contexts, next_tokens in dataloader.prefetch_batch(dataloader.validation_files):
             if isinstance(val_step, int) and step_counter >= val_step:
                 break
+            contexts = nx.array(contexts, nx.str_to_dtype[dataloader.dtype])
+            next_tokens = nx.array(next_tokens, nx.str_to_dtype[dataloader.dtype])
             
             embedded = self.embedding.forward(contexts) 
             batch_validation_scores, total_router_loss = self.forward(embedded, False, False)

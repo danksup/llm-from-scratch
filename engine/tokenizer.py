@@ -1,16 +1,20 @@
-import engine.backend as nx
 from collections import Counter
+from pathlib import Path
 from typing import Any
 import pickle
-from pathlib import Path
 import json
+import uuid
 
 class Tokenizer:
-    def __init__(self, target_vocab_size= 1024):
+    def __init__(self, target_vocab_size= 1024, tokenizer_id:uuid.UUID|None=None):
         self.target_vocab_size = target_vocab_size
         self.merge_rank = {}
         self.id_to_token = {0:"<PAD>", 1:"<UNK>", 2: "<EOT>", 3:"</w>", 4:"<|endofdoc|>"}
         self.vocab = {"<PAD>":0,"<UNK>":1, "<EOT>":2, "</w>":3, "<|endofdoc|>":4}
+
+        self.tokenizer_id = tokenizer_id
+        if self.tokenizer_id is None:
+            self.tokenizer_id = uuid.uuid4()
 
     def __eq__(self, value: object) -> bool:
         if not isinstance(value, Tokenizer):
@@ -249,7 +253,7 @@ class Tokenizer:
             self.id_to_token[len_vocab] = merged_best
         self.total_char_raw = total_char
         
-    def encode(self, text: str) -> nx.ArrayLike:
+    def encode(self, text: str) -> list[int]:
         words = [self.word_to_ids(word) for word in text.split()]
 
         for idx, word in enumerate(words):
@@ -279,7 +283,7 @@ class Tokenizer:
 
         return tokens
 
-    def decode(self, thing:Any) -> str:
+    def decode(self, thing:list[int]) -> str:
         decoded = ""
 
         for token_id in thing:
@@ -295,13 +299,15 @@ class Tokenizer:
             "merge_rank":self.merge_rank.copy(),
             "vocab":self.vocab.copy(),
             "id_to_token":self.id_to_token.copy(),
-            "raw_char_size": self.total_char_raw if hasattr(self, "total_char_raw") else None
+            "raw_char_size": self.total_char_raw if hasattr(self, "total_char_raw") else None,
+            "tokenizer_id": self.tokenizer_id if hasattr(self, "tokenizer_id") else uuid.uuid4()
+            
         }
         return vocab
     
     @classmethod
     def from_dict(cls,thing:dict[str,Any]) -> "Tokenizer":
-        tokenizer = cls()
+        tokenizer = cls(tokenizer_id = thing.get("tokenizer_id", None))
 
         tokenizer.vocab = thing["vocab"]
         tokenizer.id_to_token = thing["id_to_token"]
@@ -319,13 +325,16 @@ class Tokenizer:
             for key, val in tokenizer["merge_rank"].items():
                 merge_rank[key] = val
             tokenizer["merge_rank"] = merge_rank
-            with open(f"artifacts/tokenizer/{filename}", "w") as f:
+            with open(Path(f"artifacts/tokenizer/{filename}"), "w") as f:
                 json.dump(tokenizer, f, indent=4)
             return
         
-        with open(f"artifacts/tokenizer/{filename}", "wb") as f:
+        with open(Path(f"artifacts/tokenizer/{filename}"), "wb") as f:
             f.write(b"tokenizer")
             f.write((1).to_bytes(4, "little"))
+            if self.tokenizer_id is not None:
+                f.write(self.tokenizer_id.bytes)
+            
             pickle.dump(tokenizer, f)
     
     @classmethod
@@ -335,6 +344,7 @@ class Tokenizer:
             if magic != b"tokenizer":
                 raise ValueError("unknown file")
             version = int.from_bytes(f.read(4), "little")
+            tokenizer_id = f.read(16)
             loaded = pickle.load(f)
 
         tokenizer = cls.from_dict(loaded)

@@ -14,12 +14,13 @@ if backend == "auto":
         import mlx.core as _nx
         backend = "MLX"
         os.environ["BACKEND"] = "MLX"
-        _nx.random.seed = seed
+        _nx.random.seed(seed)
     except ImportError:
         try:
             import cupy as _nx # type: ignore
             backend = "CuPy"
             os.environ["BACKEND"] = "CuPy"
+            _nx.random.seed(seed)
         except ImportError:
             import numpy as _nx
             backend = "NumPy"
@@ -29,11 +30,12 @@ elif backend == "mlx":
     import mlx.core as _nx
     backend = "MLX"
     os.environ["BACKEND"] = "MLX"
-    _nx.random.seed = seed
+    _nx.random.seed(seed)
 elif backend == "cupy":
     import cupy as _nx # type: ignore
     backend = "CuPy"
     os.environ["BACKEND"] = "CuPy"
+    _nx.random.seed(seed)
 else:
     import numpy as _nx
     backend = "NumPy"
@@ -89,19 +91,21 @@ str_to_dtype = {
     "bool":bool_,
 }
     
-def array(x:Any, dtype=None) -> ArrayLike:
-    if dtype is None:
-        dtype = float32
-    return _nx.array(x, dtype=dtype)
-
-def sum(a:ArrayLike, axis:Any=None, keepdims:bool=False, dtype=None, *, stream=None) -> Any:
-    if dtype is None:
-        dtype = a.dtype
-    if backend == "MLX":
+def array(a:Any, dtype=None) -> ArrayLike:
+    if hasattr(a, "dtype"):
         if dtype is not None:
-            a = a.astype(dtype)
-            return _nx.sum(a, axis=axis, keepdims=keepdims, stream=stream)
+            if a.dtype != dtype:
+                return _nx.array(a, dtype=dtype)
+            return a
+        return a
+    if dtype is not None:
+        return _nx.array(a, dtype=dtype)
+    return _nx.array(a)
 
+def sum(a:ArrayLike,/, axis:Any=None, keepdims:bool=False, dtype=None, *, stream=None) -> Any:
+    a = array(a, dtype)
+    if backend == "MLX":
+        return _nx.sum(a, axis=axis, keepdims=keepdims, stream=stream)
     return _nx.sum(a,axis=axis,keepdims=keepdims,dtype=dtype)
 
 def float_32(x:list | ArrayLike | float) -> Any:
@@ -112,14 +116,14 @@ def float_32(x:list | ArrayLike | float) -> Any:
 def add_at(a:Any, idx:Any, values:Any) -> Any:
     if backend == "MLX":
         return a.at[idx].add(values)
-    if backend == "NumPy":
+    if backend in ("NumPy", "CuPy"):
         if isinstance(idx, slice) or (isinstance(idx, tuple) and any(isinstance(i, slice) for i in idx)):
             a[idx] += values
             return a
         _nx.add.at(a, idx, values)
     return a
 
-def unique(a:ArrayLike, return_counts:bool=False ) -> Any:
+def unique(a:ArrayLike,/, return_counts:bool=False ) -> Any:
     """
     note: always flatten
     """
@@ -143,7 +147,7 @@ def unique(a:ArrayLike, return_counts:bool=False ) -> Any:
     unique_array =  _nx.unique(a, return_counts=return_counts)
     return unique_array
 
-def zeros_like( a:ArrayLike, dtype=None) -> ArrayLike:
+def zeros_like(a:ArrayLike, dtype=None) -> ArrayLike:
     if dtype is not None and dtype != a.dtype:
         a = a.astype(dtype)
     if backend == "MLX":
@@ -179,25 +183,6 @@ def max( x:ArrayLike, axis=None, keepdims:bool=False) -> ArrayLike:
 def min( x:ArrayLike, axis=None, keepdims:bool=False) -> ArrayLike:
     return _nx.min(x,axis=axis, keepdims=keepdims)
 
-def exp(x:ArrayLike, dtype=None) -> ArrayLike:
-    if dtype is not None and dtype != x.dtype:
-        x = x.astype(dtype)
-    return _nx.exp(x)
-
-def clip( a:Any, a_min:Any, a_max:Any, dtype:Any=None) -> ArrayLike:
-    if dtype is not None and dtype != a.dtype:
-        a = a.astype(dtype)
-    if backend == "MLX":
-        return _nx.clip(a, a_min, a_max)
-    return _nx.clip(a,a_min, a_max,dtype=dtype)
-
-def log(x:ArrayLike, *,axis=None, keepdims:bool=False,dtype=None) -> ArrayLike:
-    if dtype is not None and dtype != x.dtype:
-        x = x.astype(dtype)
-    if backend == "MLX":
-        return _nx.log(x, axis=axis,keepdims=keepdims)
-    return _nx.log(x, axis=axis,keepdims=keepdims, dtype=dtype)
-
 def arange(start:Union[int,float], stop:Union[None,int,float]=None, step:Union[None,int,float]=None, *,dtype=None) -> ArrayLike:
     if stop is None:
         return _nx.arange(start, dtype=dtype)
@@ -208,7 +193,7 @@ def arange(start:Union[int,float], stop:Union[None,int,float]=None, step:Union[N
     return _nx.arange(start, stop, step, dtype=dtype)
 
 def indices( x:Any) -> Any:
-    if backend == "NumPy":
+    if backend in ("NumPy", "CuPy"):
         return _nx.indices(x)
     ndims = len(x)
     result = []
@@ -221,20 +206,10 @@ def indices( x:Any) -> Any:
         result.append(idx)
     return _nx.stack(result)
 
-def sqrt(x:Any, dtype=None) -> Any:
-    if backend == "MLX":
-        if hasattr(x, "dtype"): 
-            if dtype is not None and x.dtype != dtype:
-                x = x.astype(dtype)
-        else: 
-            x = _nx.array(x, dtype)
-        return _nx.sqrt(x)
-    return _nx.sqrt(x,dtype=dtype)   
-
 def uniform( low:float=0, high:float=1, size=None,*,dtype=None) -> Any:
-    if dtype is None:
-        dtype = _nx.float32
-    if backend == "NumPy":
+    if backend in ("NumPy", "CuPy"):
+        if dtype is None:
+                dtype = _nx.float32
         if size is None:
             return dtype(rng.uniform(low,high))
         else:
@@ -244,70 +219,153 @@ def uniform( low:float=0, high:float=1, size=None,*,dtype=None) -> Any:
         size = ()
     return _nx.random.uniform(low, high, shape=size, dtype=dtype)
 
+def normal(loc=0.0, scale=1.0, size=None,*,dtype=None) -> Any:
+    if backend in ("NumPy", "CuPy"):
+        if dtype is None:
+            dtype = _nx.float32
+        if size is None:
+            return dtype(rng.normal(loc=loc, scale=scale,))
+        else:
+            return rng.normal(loc=loc, scale=scale, size=size).astype(dtype)
+        
+    if size is None:
+        size = ()
+    return _nx.random.normal(loc=loc, scale=scale, shape=size, dtype=dtype)
+
 def permutation(x:Any, axis=0) -> ArrayLike:
     if isinstance(x,int):
-        if backend == "NumPy":
+        if backend in ("NumPy", "CuPy"):
             return rng.permutation(x)
         return _nx.random.permutation(x)
     else:
-        if backend == "NumPy":
+        if backend in ("NumPy", "CuPy"):
             return rng.permutation(x, axis=axis)
     return _nx.random.permutation(x, axis=axis)
 
 def as_strided(x, shape, strides):
-    if backend == 'NumPy':
+    if backend in ("NumPy", "CuPy"):
         x = _nx.asarray(x)
         itemsize = x.dtype.itemsize
         np_stride = tuple(s * itemsize for s in strides)
-        return _nx.lib.stride_tricks.as_strided(x, shape=shape, strides=np_stride)
-    return _nx.as_strided(x,shape, strides)
-
-def mean(x:ArrayLike, *,axis=None, keepdims:bool=False,dtype=None) -> ArrayLike:
-    if dtype is not None and dtype != x.dtype:
-        x = x.astype(dtype)
-    if backend == "MLX":
-        return _nx.mean(x, axis=axis,keepdims=keepdims)
-    return _nx.mean(x, axis=axis,keepdims=keepdims, dtype=dtype)
-
-def var( x:ArrayLike,*,axis=None,keepdims=False,dtype=None) -> ArrayLike:
-    if dtype is not None and dtype != x.dtype:
-        x = x.astype(dtype)
-    if backend == "MLX":
-        return _nx.var(x, axis=axis,keepdims=keepdims)
-    return _nx.var(x, axis=axis,keepdims=keepdims, dtype=dtype)
+        if backend == "NumPy":
+            return _nx.lib.stride_tricks.as_strided(x, shape=shape, strides=np_stride)
+        return _nx.as_strided(x, shape=shape, strides=np_stride)
+    return _nx.as_strided(x,shape, strides) 
 
 def dot(u:ArrayLike,v:ArrayLike) -> Any:
     return u @ v
 
-def sin(x:Any,dtype=None) -> Any:
-    if dtype is not None and dtype != x.dtype:
-        x = x.astype(dtype)
-    if backend =="MLX":
-        return _nx.sin(x)
-    return _nx.sin(x, dtype=dtype)
-    
-def cos(x:Any,dtype=None) -> Any:
-    if dtype is not None and dtype != x.dtype:
-        x = x.astype(dtype)
-    if backend =="MLX":
-        return _nx.cos(x)
-    return _nx.cos(x, dtype=dtype)
+def exp(a:Any,dtype=None) -> Any:
+    a = array(a, dtype=dtype)
+    if backend == "NumPy":
+        res =  _nx.exp(a, dtype=dtype)
+        if dtype is None:
+            if res.dtype == int64:
+                return res.astype(int32)
+            if res.dtype == float64:
+                return res.astype(float32)
+        return res
+    return _nx.exp(a)
+
+def clip( a:Any, a_min:Any, a_max:Any, dtype:Any=None) -> ArrayLike:
+    a = array(a, dtype=dtype)
+    if backend == "MLX":
+        return _nx.clip(a, a_min, a_max)
+    return _nx.clip(a,a_min, a_max,dtype=dtype)
+
+def log(a:Any,dtype=None) -> Any:
+    a = array(a, dtype=dtype)
+    if backend in ("NumPy", "CuPy"):
+        res =  _nx.log(a, dtype=dtype)
+        if dtype is None:
+            if res.dtype == int64:
+                return res.astype(int32)
+            if res.dtype == float64:
+                return res.astype(float32)
+        return res
+    return _nx.log(a)
+
+def sin(a:Any,dtype=None) -> Any:
+    a = array(a, dtype=dtype)
+    if backend in ("NumPy", "CuPy"):
+        res =  _nx.sin(a, dtype=dtype)
+        if dtype is None:
+            if res.dtype == int64:
+                return res.astype(int32)
+            if res.dtype == float64:
+                return res.astype(float32)
+        return res
+    return _nx.sin(a)
+
+def cos(a:Any,dtype=None) -> Any:
+    a = array(a, dtype=dtype)
+    if backend in ("NumPy", "CuPy"):
+        res =  _nx.cos(a, dtype=dtype)
+        if dtype is None:
+            if res.dtype == int64:
+                return res.astype(int32)
+            if res.dtype == float64:
+                return res.astype(float32)
+        return res
+    return _nx.cos(a)
+
+
+def mean(a:ArrayLike,*,axis=None,keepdims=False,dtype=None) -> ArrayLike:
+    a = array(a, dtype=dtype)
+    if backend in ("NumPy", "CuPy"):
+        res =  _nx.mean(a,axis=axis,keepdims=keepdims, dtype=dtype)
+        if dtype is None:
+            if res.dtype == int64:
+                return res.astype(int32)
+            if res.dtype == float64:
+                return res.astype(float32)
+        return res
+    return _nx.mean(a, axis=axis,keepdims=keepdims)
+
+def var(a:ArrayLike,*,axis=None,keepdims=False,dtype=None) -> ArrayLike:
+    a = array(a, dtype=dtype)
+    if backend in ("NumPy", "CuPy"):
+        res =  _nx.var(a,axis=axis,keepdims=keepdims, dtype=dtype)
+        if dtype is None:
+            if res.dtype == int64:
+                return res.astype(int32)
+            if res.dtype == float64:
+                return res.astype(float32)
+        return res
+    return _nx.var(a, axis=axis,keepdims=keepdims)
+
+def sqrt(a:ArrayLike,*, dtype=None) -> ArrayLike:
+    a = array(a, dtype=dtype)
+    if backend in ("NumPy", "CuPy"):
+        res =  _nx.sqrt(a, dtype=dtype)
+        if dtype is None:
+            if res.dtype == int64:
+                return res.astype(int32)
+            if res.dtype == float64:
+                return res.astype(float32)
+        return res
+    return _nx.sqrt(a) 
 
 def power(a,b, dtype=None) -> Any:
-    if dtype is None:
-        dtype = _nx.float32
-    if backend =="MLX":
-        a_arr = a if hasattr(a, "dtype") else _nx.array(a, dtype)
-        b_arr = b if hasattr(b, "dtype") else _nx.array(b, dtype)
-        if a_arr.dtype != dtype: a_arr = a_arr.astype(dtype)
-        if b_arr.dtype != dtype: b_arr = b_arr.astype(dtype)
-        return _nx.power(a_arr, b_arr)
-    return _nx.power(a,b,dtype=dtype)
+    a = array(a, dtype=dtype)
+    b = array(b, dtype=dtype)
 
-def argpartition(x:ArrayLike, kth, axis=None) -> ArrayLike:
-    return _nx.argpartition(x,kth, axis=axis)
+    if backend in ("NumPy", "CuPy"):
+        res =  _nx.power(a,b,dtype=dtype)
+        if dtype is None:
+            if res.dtype == int64:
+                return res.astype(int32)
+            if res.dtype == float64:
+                return res.astype(float32)
+        return res
+
+    return _nx.power(a, b)
+    
+def argpartition(a:ArrayLike, kth, axis=None) -> ArrayLike:
+    return _nx.argpartition(a, kth, axis=axis)
 
 def random_choice(a:ArrayLike, *, p=None) -> Any:
+    a = array(a)
     if backend == "MLX":
         if p is None:
             p = _nx.full(a.shape, _nx.array(1/a.size, a.dtype)) 
@@ -315,12 +373,13 @@ def random_choice(a:ArrayLike, *, p=None) -> Any:
         r = _nx.random.uniform()
         idx = _nx.argmax(cdf >= r)
         return a[idx]
-    return _nx.random.choice(a, p=p)
+    # return _nx.random.choice(a, p=p)
+    return rng.choice(a, p=p)
 
-def copy(x:Any) -> Any:
+def copy(a:Any) -> Any:
     if backend == "MLX":
-        return _nx.array(x)
-    return x.copy()
+        return array(a)
+    return a.copy()
 
 def eval( *args):
     if backend == "MLX":
@@ -331,10 +390,8 @@ def concatenate(a:list[ArrayLike], axis=None) -> ArrayLike:
     return _nx.concatenate(a,axis=axis)
 
 def cumsum(a:ArrayLike, *,axis=None, dtype=None) -> ArrayLike:
-    if dtype is None:
-        dtype = _nx.float32
+    a = array(a, dtype=dtype)
     if backend == "MLX":
-        a = _nx.array(a, dtype=dtype)
         return _nx.cumsum(a, axis=axis)
     return _nx.cumsum(a, axis=axis, dtype=dtype)
 
@@ -353,7 +410,7 @@ def abs( a:Any) -> Any:
 def stack(a:Any, axis=0)-> Any:
     return _nx.stack(a, axis=axis)
 
-def any( a, *,keepdims:bool=False,axis=None):
+def any( a, *, keepdims:bool=False, axis=None):
     return _nx.any(a, keepdims=keepdims, axis=axis)
 
 def isnan( a):
@@ -373,8 +430,8 @@ def clear_cache():
 def repeat(a, repeats:int, axis:int=None):
     return _nx.repeat(a,repeats, axis=axis)
 
-def logsumexp(a:ArrayLike,*,axis=None,keepdims=False) -> ArrayLike:
-    if backend == "NumPy":
+def logsumexp(a:ArrayLike,/,axis=None,keepdims=False) -> ArrayLike:
+    if backend in ("NumPy", "CuPy"):
         m = _nx.max(a, axis=axis, keepdims=True)
         out = m + _nx.log(
             _nx.sum(_nx.exp(a - m), axis=axis, keepdims=True)
@@ -417,12 +474,12 @@ def einsum(subscripts, *operands):
     return _nx.einsum(subscripts, *operands)
 
 def get_active_memory() -> int:
-    if backend == "NumPy":
+    if backend in ("NumPy", "CuPy"):
         return 0
     return _nx.get_active_memory()
 
 def get_cache_memory() -> int:
-    if backend == "NumPy":
+    if backend in ("NumPy", "CuPy"):
         return 0
     return _nx.get_cache_memory()
 
@@ -444,15 +501,3 @@ def isfinite(a):
 def isinf(a):
     return _nx.isinf(a)
 
-def normal(loc=0.0, scale=1.0, size=None,*,dtype=None) -> Any:
-    if dtype is None:
-        dtype = _nx.float32
-
-    if backend == "NumPy":
-        if size is None:
-            return dtype(rng.normal(loc=loc, scale=scale,))
-        else:
-            return rng.normal(loc=loc, scale=scale, size=size).astype(dtype)
-    if size is None:
-        size = ()
-    return _nx.random.normal(loc=loc, scale=scale, shape=size, dtype=dtype)

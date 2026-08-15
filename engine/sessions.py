@@ -7,6 +7,7 @@ import engine.optimizer as optim
 import engine.optimizer.scheduler as scheduler
 import engine.backend as nx
 from typing import Any,Union
+from pathlib import Path 
 import time
 import pickle
 import copy
@@ -154,7 +155,6 @@ class Session:
             print("[training]              ")
             print(self)   
         epoch = 0
-        batch_size = self.configs["batch_size"]
         best_val_loss = float('inf')
         validate_every = self.configs["validate_every"]
         checkpoint_every = self.configs["checkpoint_every"]
@@ -342,7 +342,7 @@ class Session:
         }
 
         filename = f"session_{filename}.ram2n"
-        with open(f"artifacts/sessions/{filename}", "wb") as f:
+        with open(Path(f"artifacts/sessions/{filename}"), "wb") as f:
            f.write(b"RAM2N")
            f.write((1).to_bytes(4, "little"))
            pickle.dump(session, f)

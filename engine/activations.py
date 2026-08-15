@@ -1,6 +1,5 @@
 import engine.backend as nx
 from typing import Any
-#rectified linear unit
 
 def leaky_relu(x:Any) -> Any:
     """

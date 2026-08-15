@@ -3,7 +3,7 @@ import engine.backend as nx
 import time
 
 
-session = Session.load("artifacts/sessions/session_88832000_param_1_epochs_weights_only_c1bd95f3-25dd-4606-a7cf-363b178a3a8a.ram2n")
+session = Session.load("artifacts/sessions/session_keyboardinterrupt_save_fc2c8683-f566-4bca-aa18-52272d708dbd.ram2n")
 tokenizer = session.tokenizer
 context_size = session.configs["context_size"]
 context = "give me everything."

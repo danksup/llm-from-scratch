@@ -3,7 +3,7 @@ from pathlib import Path
 import time
 
 backend = os.environ["BACKEND"] = "auto"
-seed = os.environ["SEED"] = "1"
+seed = os.environ["SEED"] = "100"
 
 from engine.transformer import Transformer
 from engine.tokenizer import Tokenizer
@@ -33,20 +33,20 @@ tokenizer1 = Tokenizer.load(TOKENIZER_PATH)
 
 session_configs = {
     "epochs":EPOCHS,
-    "max_step":50,
+    "max_step":2000,
     "train_split": VAL,
     "max_val_step":300,
     "eval_every":1, 
     "validate_every":0,
     "context_size": CONTEXT_SIZE,
     "batch_size": BATCH_SIZE,
-    "microbatch_size":16,
+    "microbatch_size":32,
     "optimizer":"adamw",
     "optimizer_args":{
-        "lr": 1e-3,
-        "use_master": False,
-        "scheduler": None,
-        "min_lr": None,
+        "lr": 5e-3,
+        "use_master": True,
+        "scheduler": "cosine_decay",
+        "min_lr": 1e-4,
     },
     "using":os.environ.get("BACKEND"),
     "save":True,
@@ -84,12 +84,10 @@ if __name__ == "__main__":
     session_configs["block_size"] = len(transformer.blocks)
 
     print("loading dataloader ", end="\r")
-    dataloader = DataLoader("data", tokenizer1, session_configs["context_size"], session_configs["batch_size"], session_configs["train_split"])
+    dataloader = DataLoader("artifacts/dataloader", tokenizer1, session_configs["context_size"], session_configs["batch_size"], session_configs["train_split"])
 
     session1 = Session(transformer, tokenizer1, True, session_configs)
     start = time.perf_counter()
     session1.train(dataloader, display_message=True)
     end = time.perf_counter()
     print(f"training finished. time: {end - start:.3f}s")
-
-    # print(session1)

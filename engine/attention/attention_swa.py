@@ -4,9 +4,10 @@ from engine.rope import rope_forward, rope_inverse
 from typing import Any, Callable
 import engine.initializers as initializer
 from engine.rope import precompute_freqs
+from engine.quantization import quantize
 
 class AttentionSWA:
-    def __init__(self,embed_dim:int, n_heads:int, n_kv_heads:int=-1, W=8, dtype:Any=nx.float16, initializer:Callable=initializer.glorot_uniform) -> None:
+    def __init__(self,embed_dim:int, n_heads:int, n_kv_heads:int=-1, W=8, dtype:Any=nx.float16, initializer:Callable=initializer.glorot_uniform, quantized:bool=False) -> None:
         self.n_kv_heads = n_kv_heads
 
         if n_kv_heads < 0:
@@ -37,6 +38,12 @@ class AttentionSWA:
         wo_shape = embed_dim,embed_dim
         self.Wo = initializer(wo_shape, dtype=dtype)
         assert nx.isfinite(self.Wo).all(), f"non-finite detected when initializing attentipn.Wo."
+
+        self.is_quantized = quantized
+        self.scales = None
+        if quantized:
+            self.Wqkv, self.wqkv_scale, _ = quantize(self.Wqkv, nx.int8)
+            self.Wo, self.wo_scale, _ = quantize(self.Wo, nx.int8)
         
         self.dWqkv = None
         self.dWo = None

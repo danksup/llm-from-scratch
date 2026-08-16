@@ -1,5 +1,6 @@
 from pathlib import Path
 from typing import Literal
+import time
 
 colors = {
     "RED": '\033[91m',
@@ -34,3 +35,7 @@ def init_corpus(pathfile:str):
 
 def colorize(text:str, color:Literal["red", "green", "yellow", "blue"], style:Literal[None, "bold", "underline"]=None):
     return (f"{colors[color.upper()]}{styles[style.upper()] if style is not None else styles[style]}{text}{reset}")
+
+def sleep(s=100, msg="mimir"):
+    print(msg)
+    time.sleep(s)

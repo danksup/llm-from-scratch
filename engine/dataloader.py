@@ -38,14 +38,13 @@ class DataLoader:
         self.validation_files = validation_files
 
         if len(tokenizer.vocab) <=  65_535:
-            self.dtype= nx.dtype_to_srt[nx.uint16]
             self.type_code = 'H'
         else:
-            self.dtype= nx.dtype_to_srt[nx.uint32]
             self.type_code = 'I'
 
         self.__test_mode = __test_mode
-        self.__cow_factor = 0.1
+        if __test_mode:
+            self.__cow_factor = 0.1
 
     @staticmethod
     def get_files(filepath:str="data"):
@@ -66,7 +65,7 @@ class DataLoader:
         if file.suffix != ".tokenized":
             raise ValueError("only for tokenized files (with .tokenized)")
         
-        token_size = 2 if self.dtype == "uint16" else 4
+        token_size = 2 if self.type_code == "H" else 4
         header_size = 29
         return  (file.stat().st_size - header_size) // token_size
 
@@ -78,7 +77,7 @@ class DataLoader:
 
         if strict:
             if not self.all_tokenized(files):
-                return -1
+                raise ValueError("only tokenized files are allowed.")
             
         for file in files:
             if file.suffix == ".tokenized":
@@ -203,10 +202,11 @@ class DataLoader:
                         context.extend( chungus[0:need])  
                     else: 
                         context = chungus[0:need]
-                    if self.__test_mode:
-                        yield self.function_that_turns_n_tokens_in_random_sequence_into_the_token_for_the_word_cow_randomly(context)
-                    else:
-                        yield context
+                    # if self.__test_mode:
+                    #     yield self.__function_that_turns_n_tokens_in_random_sequence_into_the_token_for_the_word_cow_randomly(context)
+                    # else:
+                    #     yield context
+                    yield context
                     context = None
                     chungus = chungus[need:]
 
@@ -223,8 +223,8 @@ class DataLoader:
                 continue
             if isinstance(token, array.array):
                 token = token.tolist()
-            context_batches.append(token[:-1]) #type:ignore
-            target_batches.append(token[1:]) #type:ignore
+            context_batches.append(token[:-1]) 
+            target_batches.append(token[1:]) 
 
             if len(context_batches) == self.batch_size:
                 yield context_batches,target_batches
@@ -246,7 +246,6 @@ class DataLoader:
                 item = queue.get()
                 if item is None:
                     break
-                # yield nx.array(item[0], dtype=nx.str_to_dtype[self.dtype]), nx.array(item[1], dtype=nx.str_to_dtype[self.dtype])
                 yield item
         finally:
             if process.is_alive():
@@ -286,13 +285,13 @@ class DataLoader:
     def estimate_step(self, total_tokens,  microbatch_size:int=1):
         return total_tokens // self.context_size // self.batch_size // microbatch_size
 
-    def function_that_turns_n_tokens_in_random_sequence_into_the_token_for_the_word_cow_randomly(self, token):
+    def __function_that_turns_n_tokens_in_random_sequence_into_the_token_for_the_word_cow_randomly(self, token):
         self.__cow_factor = min(getattr(self, "__cow_factor", 0.1), 0.5) 
         if random.random() < self.__cow_factor:
             cow  = self.tokenizer.encode("cow")  
             len_token = len(token)
             if len(token) == len(cow):
-                token = cow
+                return cow
             else:
                 n_cow_base =  max(len_token//8, 1) 
                 considering_cow_factor = n_cow_base + int(n_cow_base * self.__cow_factor)

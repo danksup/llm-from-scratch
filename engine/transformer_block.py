@@ -14,7 +14,7 @@ ATTN_TYPE = {
 }
 
 class TransformerBlock:
-    def __init__(self ,embed_dim, attention:Attention, ff_dim, n_experts=1, cf=1.25, top_k =2, dtype=nx.float16, attn_init=init.glorot_uniform, moe_init=init.glorot_uniform) -> None:
+    def __init__(self ,embed_dim, attention:Attention, ff_dim, n_experts=1, cf=1.25, top_k =2, dtype=nx.float16, attn_init=init.glorot_uniform, moe_init=init.glorot_uniform, quantized:bool=False) -> None:
         self.causal_mask = None
         self.embed_dim = embed_dim
         self.hidden_width = ff_dim
@@ -24,7 +24,7 @@ class TransformerBlock:
 
         self.attention = attention
         self.attention_type = attention.self_type()
-        self.ff = MoE(cf, top_k, n_experts, embed_dim, self.hidden_width, dtype=dtype, initializer=moe_init)
+        self.ff = MoE(cf, top_k, n_experts, embed_dim, self.hidden_width, dtype=dtype, initializer=moe_init, quantized=quantized)
         self.rmsnorm1 = RMSNorm(embed_dim)
         self.rmsnorm2 = RMSNorm(embed_dim)
     
@@ -52,13 +52,7 @@ class TransformerBlock:
 
     @staticmethod
     @nx.compile
-    def _forward(x, causal_mask:Any, attention:str, attn_configs:tuple[Any,...], attn_params:tuple[Any,...], n_experts, cf, top_k:int, Wcombined:Any,router, hidden_width:int, Wout:Any, epsilon:float, gamma1:Any, gamma2:Any, p:float, is_training:bool) -> tuple[Any, Any, Any, Any, Any]:
-        '''
-        flow:
-            input = x shape(B,T,D) -> rmsnorm(x) = rmsnorm_out -> attention(rmsnorm_out) + residual = attn_out
-            \n
-            -> rmsnorm(attn_out) = rmsnorm_out -> swiglu(rmsnorm_out)  -> ff_out + resudial = ff_out shape(B,T,D)
-        '''
+    def _forward(x, causal_mask:Any, attention:str, attn_configs:tuple[Any,...], attn_params:tuple[Any,...], ff_configs, ff_params, epsilon:float, gamma1:Any, gamma2:Any, p:float, is_training:bool, quantized:None|tuple[Any,...]=None) -> tuple[Any, Any, Any, Any, Any]:
         rmsnorm1_out, caches_rmsnorm1 = RMSNorm._forward(x, gamma1,epsilon)
 
         rmsnorm1_out = rmsnorm1_out.astype(x.dtype) 
@@ -70,7 +64,7 @@ class TransformerBlock:
         rmsnorm2_out, caches_rmsnorm2 = RMSNorm._forward(attn_out, gamma2,epsilon)
 
         rmsnorm2_out = rmsnorm2_out.astype(x.dtype) 
-        ff_out, caches_ff, router_loss, normalized_histogram = MoE.forward(rmsnorm2_out, cf, top_k, router,n_experts,hidden_width,Wcombined, Wout)
+        ff_out, caches_ff, router_loss, normalized_histogram = MoE.forward(rmsnorm2_out, ff_configs, ff_params)
         drop_ff_out, mask2 =  Dropout._forward(ff_out, p,is_training)
 
         ff_out = drop_ff_out + attn_out
@@ -82,7 +76,7 @@ class TransformerBlock:
     @staticmethod
     @nx.compile
     def _backward(gradient:Any, mask1:Any, mask2:Any, attention:str, p, caches_attn:tuple[Any,...], caches_ff:tuple[Any,...], caches_rmsnorm1:tuple[Any,...], caches_rmsnorm2:tuple[Any,...], attn_configs:tuple[Any,...], attn_params:tuple[Any,...], gamma1:Any, gamma2:Any, ff_params:tuple, moe_configs) -> tuple[Any, Any, Any, Any, Any, Any, Any, Any]:
-        d_ff_drop = Dropout._backward(gradient, mask2, 0.1) #grad dtype
+        d_ff_drop = Dropout._backward(gradient, mask2, p) #grad dtype
         dx_ff,  dWcombined, dWout, d_router = MoE.backward(d_ff_drop, caches_ff, moe_configs, ff_params) #out:fp32
 
         d_rmsn2,d_gamma2 = RMSNorm._backward(dx_ff, caches_rmsnorm2 ,gamma2)
@@ -102,14 +96,14 @@ class TransformerBlock:
     
     def inference_forward(self, x, max_cache_len, cached_k=None, cached_v=None,  position=0):
         rmsnorm1_out, _ = RMSNorm._forward(x, self.rmsnorm1.gamma, self.rmsnorm1.epsilon)
-        x = x.astype(x.dtype)
+        rmsnorm1_out = rmsnorm1_out.astype(x.dtype)
 
         attn_out, cached_k, cached_v = self.attention.inference_forward(rmsnorm1_out,max_cache_len, self.attention.freqs, cached_k, cached_v, position)
         attn_out = attn_out + x
 
         rmsnorm2_out, _ = RMSNorm._forward(attn_out, self.rmsnorm2.gamma, self.rmsnorm2.epsilon)
 
-        ff_out,_,_,_ = MoE.forward(rmsnorm2_out, self.ff.cf, self.ff.top_k,self.ff.router, self.ff.n_experts, self.ff.hidden_width, self.ff.Wcombined, self.ff.Wout)
+        ff_out,_,_,_ = MoE.forward(rmsnorm2_out, self.ff.configs, (self.ff.Wcombined, self.ff.Wout))
         ff_out = ff_out + attn_out
         
         return ff_out, cached_k, cached_v

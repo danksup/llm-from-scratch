@@ -13,12 +13,11 @@ from engine.tokenizer import Tokenizer
 from engine.dataloader import DataLoader
 from engine.sessions import Session
 import engine.backend as nx
-from helper.singleton import init_corpus
 
 EPOCHS = 1
 EMBED_DIM = 256
-CONTEXT_SIZE = 2048
-BATCH_SIZE = 3
+CONTEXT_SIZE = 1200
+BATCH_SIZE = 4
 BASE_WIDTH = 4 * EMBED_DIM
 N_HEADS = 8
 N_KV_HEADS = max(1, N_HEADS // 2)
@@ -27,16 +26,13 @@ CF = 1.25
 VAL = 1
 TOP_K = 2
 
-#not hooked yet to session
-PATIENCE = 20
-TRESHOLD = 1e-2
-
+CORPUS_PATH = "artifacts/dataloader"
 TOKENIZER_PATH = "artifacts/tokenizer/tokenizer32000_1351277738len.tokenizer"
 tokenizer1 = Tokenizer.load(TOKENIZER_PATH)
 
 session_configs = {
     "epochs":EPOCHS,
-    "max_step":1,
+    "max_step":1000,
     "train_split": VAL,
     "max_val_step":300,
     "eval_every":1, 
@@ -46,10 +42,10 @@ session_configs = {
     "microbatch_size":32,
     "optimizer":"adamw",
     "optimizer_args":{
-        "lr": 5e-3,
+        "lr": 1e-3,
         "use_master": True,
         "scheduler": "cosine_decay",
-        "min_lr": 1e-4,
+        "min_lr": 1e-3,
     },
     "using":os.environ.get("BACKEND"),
     "save":True,
@@ -62,9 +58,10 @@ model_configs = {
     "n_blocks":10,
     "embed_dim":EMBED_DIM,
     "dtype": nx.float16,
-    "gradient_scale":2048,
+    "gradient_scale":16384,
     "vocab_size": len(tokenizer1.vocab),
-    "moe_lambda":0.01,
+    "moe_lambda":0.025,
+    "quantize":False,
     "block_configs":{
         "ff_hidden_width": BASE_WIDTH,
         "ff_n_experts":N_EXPERTS,
@@ -87,10 +84,11 @@ if __name__ == "__main__":
     session_configs["block_size"] = len(transformer.blocks)
 
     print("loading dataloader ", end="\r")
-    dataloader = DataLoader("artifacts/dataloader", tokenizer1, session_configs["context_size"], session_configs["batch_size"], session_configs["train_split"])
+    dataloader = DataLoader(CORPUS_PATH, tokenizer1, session_configs["context_size"], session_configs["batch_size"], session_configs["train_split"])
 
     session1 = Session(transformer, tokenizer1, True, session_configs)
     start = time.perf_counter()
+    nx._nx.disable_compile()
     session1.train(dataloader, display_message=True)
     end = time.perf_counter()
     print(f"training finished. time: {end - start:.3f}s")

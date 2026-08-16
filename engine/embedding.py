@@ -1,15 +1,17 @@
-import random
-import json
 import engine.backend as nx
+from engine.quantization import quantize, dequantize
 from typing import Any
 
-
 class Embedding:
-    def __init__(self, n:int, embed_dim:int, dtype=nx.float16) -> None:
+    def __init__(self, n:int, embed_dim:int, dtype=nx.float16, quantized:bool=False) -> None:
         self.embed_dim = embed_dim
         self.dtype = dtype
         init = 0.02
         self.lookup_table = nx.uniform(low=-init, high=init, size=(n, self.embed_dim), dtype=dtype)
+        
+        self.table_scale = None
+        if quantized:
+            self.lookup_table, self.table_scale, _ = quantize(self.lookup_table, nx.int8)
         assert nx.isfinite(self.lookup_table).all(), f"non-finite detected when initializing embedding."
     
     def __eq__(self, value: object) -> bool:
@@ -19,7 +21,8 @@ class Embedding:
 
     def forward(self, token_list:Any):
         ''' loopup and convert to the vector for each token id'''
-        return self.lookup_table[token_list]
+        embed = self.lookup_table[token_list]
+        return dequantize(embed, self.table_scale, self.dtype)
     
     def to_dict(self) -> dict[str, Any]:
         lookup = {"lookuptable": self.lookup_table.tolist(), "dtype":nx.dtype_to_srt[self.dtype]}

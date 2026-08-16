@@ -8,7 +8,7 @@ import engine.initializers as init
 import engine.backend as nx
 from typing import Any, Literal, Union
 import copy
-
+from helper.singleton import sleep
 
 optimizers = Union[optim.Adam, optim.AdamW, optim.SGD]
 
@@ -22,6 +22,7 @@ default_block_configs = {
     "attn_variant":"gqa",
     "attn_n_heads":16,
     "attn_init":"glorot_uniform",
+    "quantize":False,
 }
 
 ATTN_TYPE = {
@@ -50,7 +51,8 @@ class Transformer:
         assert self.vocab_size is not None, "vocab size can't be None"
         self.embed_dim = configs.get("embed_dim", 128)
         self.dtype = configs.get("dtype", nx.float32)
-        self.embedding = Embedding(self.vocab_size, self.embed_dim, self.dtype)
+        quantized = configs.get("quantize", False)
+        self.embedding = Embedding(self.vocab_size, self.embed_dim, self.dtype, quantized)
         self.gradient_scale = configs.get("gradient_scale", 4096)
         self.moe_lambda = configs.get("moe_lambda", 0.01)
         assert self.gradient_scale > 0, "gradient scale cant be less than 1"
@@ -64,8 +66,8 @@ class Transformer:
             block_overrides = configs.get("block_overrides", {})
             if block_overrides:
                 for value in block_overrides.values():
-                    if "dtype" in value:
-                        raise ValueError('individual block config cant have dtype.')
+                    if any(i in value for i in ["quantize_to_int8", "dtype"]):
+                        raise ValueError('individual block config cant have dtype or quantization configuration.')
                    
             for i in range(n_blocks):
                 override = block_overrides.get(i, {})
@@ -106,26 +108,26 @@ class Transformer:
                     case ("swa", "gqa"):
                         n_kv_heads = overrided["attn_n_kv_heads"] 
                         #def __init__(self,embed_dim:int, n_heads:int, n_kv_heads:int=-1, W=8, dtype:Any=nx.float16, initializer:Callable=initializer.glorot_uniform)
-                        attn = attn_type(embed_dim=D, n_heads=n_heads, n_kv_heads=n_kv_heads, W=W, dtype=self.dtype, initializer=attn_init)
+                        attn = attn_type(embed_dim=D, n_heads=n_heads, n_kv_heads=n_kv_heads, W=W, dtype=self.dtype, initializer=attn_init, quantized=quantized)
                     case ("swa", "mha"):
-                        attn = attn_type.multihead(D, n_heads, W, self.dtype, attn_init)
+                        attn = attn_type.multihead(D, n_heads, W, self.dtype, attn_init, quantized=quantized)
                     case ("swa", "mqa"):
-                        attn = attn_type.multiquery(D, n_heads, W, self.dtype, attn_init)
+                        attn = attn_type.multiquery(D, n_heads, W, self.dtype, attn_init,quantized=quantized)
                     case ("swa", invalid):
                         raise ValueError(f"[block {i}] invalid variant of \"{invalid}\". valid variants: {", ".join(ATTN_VARIANT)}")
                     case ("full", "gqa"):
                         n_kv_heads = overrided["attn_n_kv_heads"] 
-                        attn = attn_type(embed_dim=D, n_heads=n_heads, n_kv_heads=n_kv_heads,  dtype=self.dtype, initializer=attn_init)
+                        attn = attn_type(embed_dim=D, n_heads=n_heads, n_kv_heads=n_kv_heads,  dtype=self.dtype, initializer=attn_init,quantized=quantized)
                     case ("full", "mha"):
-                        attn = attn_type.multihead(embed_dim=D, n_heads=n_heads,  dtype=self.dtype, initializer=attn_init)
+                        attn = attn_type.multihead(embed_dim=D, n_heads=n_heads,  dtype=self.dtype, initializer=attn_init,quantized=quantized)
                     case ("full", "mqa"):
-                        attn = attn_type.multiquery(embed_dim=D, n_heads=n_heads,  dtype=self.dtype, initializer=attn_init)
+                        attn = attn_type.multiquery(embed_dim=D, n_heads=n_heads,  dtype=self.dtype, initializer=attn_init,quantized=quantized)
                     case ("full", invalid):
                         raise ValueError(f"[block {i}] invalid variant of \"{invalid}\". valid variants: {", ".join(ATTN_VARIANT)}")
                     case _:
                         raise ValueError(f"[block {i}] invalid variant of \"{attn_variant}\". valid variants: {", ".join(ATTN_VARIANT)}")
 
-                transformer_block = TransformerBlock(D, attn, H, E, CF, topk, self.dtype, attn_init, ff_init)
+                transformer_block = TransformerBlock(D, attn, H, E, CF, topk, self.dtype, attn_init, ff_init, quantized)
                 self.blocks.append(transformer_block) 
         else:
             self.blocks = blocks
@@ -162,9 +164,6 @@ class Transformer:
             try:
                 output = output.astype(self.dtype)
                 B,T,_ = output.shape
-                Wcombined = block.ff.Wcombined
-                Wout = block.ff.Wout
-                router = block.ff.router
                 epsilon = block.rmsnorm1.epsilon
                 gamma1 = block.rmsnorm1.gamma
                 gamma2 = block.rmsnorm2.gamma
@@ -182,9 +181,9 @@ class Transformer:
                     if block.causal_mask is None or block.causal_mask.shape != (T, T):
                         block.causal_mask = block.attention.compute_mask(T)
                 attn_params = block.attention.Wqkv, block.attention.Wo
-                ff_out ,masks, caches, router_loss, normalized_histogram = block._forward(output, block.causal_mask, attn_str ,block.attention.configs, attn_params, block.n_experts, block.cf, block.ff.top_k,
-                                                                                            Wcombined, router, block.hidden_width, Wout, epsilon, gamma1, gamma2, P, is_training)
-
+                ff_params = block.ff.Wcombined, block.ff.Wout, block.ff.router
+                scales = (block.attention.scales, block.ff.scales)
+                ff_out ,masks, caches, router_loss, normalized_histogram = block._forward(output, block.causal_mask, attn_str ,block.attention.configs, attn_params, block.ff.configs, ff_params, epsilon, gamma1, gamma2, P, is_training, scales)
                 total_router_loss += router_loss
                 output = ff_out
                 all_masks.append(masks)
@@ -283,16 +282,16 @@ class Transformer:
         total_histograms = None
         embed_acc = nx.zeros((self.vocab_size, self.embed_dim), nx.float32)
 
-        for contexts, next_tokens in dataloader.prefetch_batch(dataloader.train_files):   
-            contexts = nx.array(contexts, nx.str_to_dtype[dataloader.dtype])
-            next_tokens = nx.array(next_tokens, nx.str_to_dtype[dataloader.dtype])
+        for contexts, next_tokens in dataloader.prefetch_batch(dataloader.train_files): 
+            contexts = nx.array(contexts, nx.int32)
+            next_tokens = nx.array(next_tokens, nx.int32)
 
             if step >= max_step:
                 break
 
             embedded = self.embedding.forward(contexts)  # shape (batch, context_size, embed_dim)
             batch_scores, last_output, all_masks, all_caches, total_router_loss, histograms = self.forward(embedded)
-
+           
             if total_histograms is None:
                 total_histograms = histograms
             else:
@@ -324,26 +323,24 @@ class Transformer:
             total_loss += loss * next_tokens.size
             count += next_tokens.size
             microstep += 1
-
         
             if microstep % eval_every == 0:
-                to_eval = [loss, total_loss, self.embedding.lookup_table, current_grad, histograms,embedding_gradient, d_table, total_histograms, embed_acc]
+                to_eval = [total_loss, self.embedding.lookup_table, embed_acc, total_histograms]
                 self.eval_networks(to_eval)
 
                 if not nx.isfinite(loss).item():
                     forward_nan = nx.isnan(loss)
                     forward_inf = nx.isinf(loss)
-                    raise FloatingPointError(f"[FORWARD] non finite loss at step {microstep}. isnan: {forward_nan} | isinf: {forward_inf}")
+                    raise FloatingPointError(f"[FORWARD step: {step}] non finite loss at microstep {microstep}. isnan: {forward_nan} | isinf: {forward_inf}")
 
                 if not nx.isfinite(current_grad).all().item():
                     backward_max = nx.max(current_grad)
                     backward_min = nx.min(current_grad)
                     backward_nan = nx.isnan(current_grad).any()
                     backward_inf = nx.isinf(current_grad).any()
-                    raise FloatingPointError(f"[BACKWARD] non-finite gradient at step {microstep}. isnan: {backward_nan} | isinf: {backward_inf}.\nmin value: {backward_min}\nmax value: {backward_max}")
+                    raise FloatingPointError(f"[BACKWARD step: {step}] non-finite gradient at microstep {microstep}. isnan: {backward_nan} | isinf: {backward_inf}.\nmin value: {backward_min}\nmax value: {backward_max}")
                 
             if microstep > 0 and microstep % microbatch_size == 0:
-                step += 1
                 all_network_params = []
                 for i,block in enumerate(self.blocks):
                     dWqkv = block.attention.dWqkv.astype(nx.float32) / self.gradient_scale / microbatch_size
@@ -365,8 +362,9 @@ class Transformer:
                     del block.attention.dWqkv, block.attention.dWo, block.ff.dWcombined, block.ff.dWout, block.ff.d_router, block.rmsnorm1.d_gamma, block.rmsnorm2.d_gamma
                     
                 all_network_params.extend([("embedding",self.embedding.lookup_table.astype(nx.float32), embed_acc / microbatch_size)])
-
+                
                 optimized = optimizer.step_many(all_network_params, max_step, total_epoch)
+                
                 for i,block in enumerate(self.blocks):
                     block.attention.Wqkv = optimized[f"Wqkv_{i}"].astype(self.dtype)
                     block.attention.Wo = optimized[f"Wo_{i}"].astype(self.dtype)
@@ -377,11 +375,15 @@ class Transformer:
                     block.rmsnorm2.gamma = optimized[f"rmsnorm2_gamma_{i}"]
                 self.embedding.lookup_table = optimized["embedding"].astype(self.dtype)
                 embed_acc = nx.zeros_like(embed_acc)
-                
+
+                for i in range(len(total_histograms)):
+                    total_histograms[i] = total_histograms[i] / microbatch_size
+
+                step += 1
+
                 self.eval_networks(include_gradients=False, optimizer=optimizer)
                 
                 yield total_loss.item(), count, total_histograms, step
-                nx.clear_cache()
         
     def validate(self, dataloader:DataLoader, val_step:int|Literal["all"]="all"):
         total_loss = nx.float_32(0.0)
@@ -394,8 +396,8 @@ class Transformer:
         for contexts, next_tokens in dataloader.prefetch_batch(dataloader.validation_files):
             if isinstance(val_step, int) and step_counter >= val_step:
                 break
-            contexts = nx.array(contexts, nx.str_to_dtype[dataloader.dtype])
-            next_tokens = nx.array(next_tokens, nx.str_to_dtype[dataloader.dtype])
+            contexts = nx.array(contexts, nx.int32)
+            next_tokens = nx.array(next_tokens, nx.int32)
             
             embedded = self.embedding.forward(contexts) 
             batch_validation_scores, total_router_loss = self.forward(embedded, False, False)

@@ -55,7 +55,7 @@ logs:
 - prefetching encoded chunk aug 13 2026
 
 ## Ongoing:
-- byte level bpe
+- quantization
 - optimizing/cleanup/docs
 
 ## TODO (not in order):

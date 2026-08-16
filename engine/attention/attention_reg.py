@@ -4,9 +4,10 @@ from engine.rope import rope_forward, rope_inverse
 from typing import Any, Callable
 import engine.initializers as initializer
 from engine.rope import precompute_freqs
+from engine.quantization import quantize
 
 class AttentionFull:
-    def __init__(self,embed_dim:int, n_heads:int, n_kv_heads:int=-1,  dtype:Any=nx.float16,  initializer:Callable=initializer.glorot_uniform) -> None:
+    def __init__(self,embed_dim:int, n_heads:int, n_kv_heads:int=-1,  dtype:Any=nx.float16,  initializer:Callable=initializer.glorot_uniform, quantized:bool=False) -> None:
         self.n_kv_heads = n_kv_heads
 
         if n_kv_heads < 0:
@@ -35,6 +36,13 @@ class AttentionFull:
         self.Wo = initializer(wo_shape, dtype=dtype)
         assert nx.isfinite(self.Wo).all(), f"non-finite detected when initializing attentipn.Wo."
 
+        self.is_quantized = quantized
+        self.scales = None
+        if quantized:
+            self.Wqkv, wqkv_scale, _ = quantize(self.Wqkv, nx.int8)
+            self.Wo, wo_scale, _ = quantize(self.Wo, nx.int8)
+            self.scales = (wqkv_scale, wo_scale)
+
         self.dWqkv = None
         self.dWo = None
 
@@ -44,13 +52,13 @@ class AttentionFull:
         return "full"
 
     @classmethod
-    def multihead(cls, embed_dim, n_heads, dtype, initializer):
-        mha = cls(embed_dim, n_heads=n_heads, n_kv_heads=n_heads, dtype=dtype, initializer=initializer)
+    def multihead(cls, embed_dim, n_heads, dtype, initializer, quantized):
+        mha = cls(embed_dim, n_heads=n_heads, n_kv_heads=n_heads, dtype=dtype, initializer=initializer, quantized=quantized)
         return mha
 
     @classmethod
-    def multiquery(cls, embed_dim, n_heads, dtype, initializer):
-        mqa = cls(embed_dim, n_heads=n_heads, n_kv_heads=1, dtype=dtype, initializer=initializer)
+    def multiquery(cls, embed_dim, n_heads, dtype, initializer, quantized):
+        mqa = cls(embed_dim, n_heads=n_heads, n_kv_heads=1, dtype=dtype, initializer=initializer, quantized=quantized)
         return mqa
 
     @staticmethod

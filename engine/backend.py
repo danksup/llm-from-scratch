@@ -61,6 +61,11 @@ uint8 = _nx.uint8
 bool_ = _nx.bool_
 bfloat16 = _nx.bfloat16 if backend == "MLX" else _nx.float32
 
+unsigned_integer = _nx.unsignedinteger
+signed_integer = _nx.signedinteger
+integer = _nx.integer
+floating = _nx.floating
+
 dtype_to_srt = {
     float64: "float64",
     float32: "float32",
@@ -456,6 +461,15 @@ def ceil(a):
 def floor(a):
     return _nx.floor(a)
 
+def round(a):
+    return _nx.round(a)
+
+def maximum(a, b):
+    return _nx.maximum(a, b)
+
+def minimum(a, b):
+    return _nx.minimum(a, b)
+
 def topk(a, k:int, axis:int = -1, return_element:bool=False):
     top_k = _nx.argpartition(a, kth=-k, axis=axis)[..., -k:]
     if return_element:
@@ -500,4 +514,10 @@ def isfinite(a):
 
 def isinf(a):
     return _nx.isinf(a)
+
+def issubdtype(arg1, arg2):
+    return _nx.issubdtype(arg1, arg2)
+
+def iinfo(dtype):
+    return _nx.iinfo(dtype)
 

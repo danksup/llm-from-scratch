@@ -2,7 +2,7 @@ from engine.transformer import Transformer
 from engine.tokenizer import Tokenizer
 from engine.dataloader import DataLoader
 from engine.activations import softmax
-from helper.singleton import colorize
+from helper.singleton import colorize, sleep
 import engine.optimizer as optim
 import engine.optimizer.scheduler as scheduler
 import engine.backend as nx
@@ -199,6 +199,7 @@ class Session:
                         self.save(f"checkpoint_latest_{self.session_id}")
 
                     print(f"step: {step_counter}                                            ",end="\r" )
+
                 if total_histograms is not None:
                     for i in range(len(total_histograms)):
                         total_histograms[i] /= total_steps
@@ -215,7 +216,8 @@ class Session:
                             val_loss = 'validation is skipped because something is wrong' 
 
                     if hasattr(dataloader, "_DataLoader__cow_factor"):
-                        print(f"epoch {epoch} | step_counter: {total_steps}:  | avg loss: {final_loss} | avg val: {val_loss} | lr: {self.optimizer.lr:.6f} | cow_factor: {dataloader._DataLoader__cow_factor + 0.3} | time: {time_}")#type:ignore
+                        cow_factor = dataloader._DataLoader__cow_factor #type:ignore
+                        print(f"epoch {epoch} | step_counter: {total_steps}:  | avg loss: {final_loss} | avg val: {val_loss} | lr: {self.optimizer.lr:.6f} | {colorize("cow_factor:",'red', 'bold')} {colorize(str(cow_factor), 'red', 'bold')} | time: {time_}")
                     else:
                         print(f"epoch {epoch} | step_counter: {total_steps}:  | avg loss: {final_loss} | avg val: {val_loss} | lr: {self.optimizer.lr:.6f} | time: {time_}")
                     if total_histograms:

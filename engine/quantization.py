@@ -1,7 +1,7 @@
 import engine.backend as nx
 from typing import Any
 
-def quantize(w:Any, dtype, axis:int=-1, keepdims=False):#, type:Literal['symmetric', 'asymetric']):
+def quantize(w:Any, dtype, axis:int=-1, keepdims=True):#, type:Literal['symmetric', 'asymetric']):
     if nx.issubdtype(w.dtype, nx.integer):
         return w
     
@@ -27,4 +27,5 @@ def dequantize(quantized_w, scale:Any, dtype=nx.float32, zero_point:int=0):
         return quantized_w
     
     q_float = quantized_w.astype(dtype)
+   
     return (q_float - zero_point) * scale

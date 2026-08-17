@@ -14,9 +14,8 @@ class RMSNorm:
         gamma = trainable weight. shape (D,)\n
         epsilon = very small value to prevent division by 0
         '''
-        x32 = x.astype(nx.float32) #type:ignore
+        x32 = x.astype(nx.float32) 
         rms = nx.sqrt(nx.mean(x32 * x32, axis=-1, keepdims=True) + epsilon)
-        rms = rms
         normalized = x32 / rms
         rmsnorm = gamma * normalized
         caches = (normalized, rms, x32)

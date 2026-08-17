@@ -53,9 +53,10 @@ logs:
 - fully lazy dataloader aug 10 2026
 - gradient accumulation aug 12 2026
 - prefetching encoded chunk aug 13 2026
+- int8 weight-only quantization aug 17 2026 (no benefit though...)
 
 ## Ongoing:
-- quantization
+- cupy/cuda support
 - optimizing/cleanup/docs
 
 ## TODO (not in order):

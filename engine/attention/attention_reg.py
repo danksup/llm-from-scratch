@@ -4,7 +4,7 @@ from engine.rope import rope_forward, rope_inverse
 from typing import Any, Callable
 import engine.initializers as initializer
 from engine.rope import precompute_freqs
-from engine.quantization import quantize
+from engine.quantization import quantize, dequantize
 
 class AttentionFull:
     def __init__(self,embed_dim:int, n_heads:int, n_kv_heads:int=-1,  dtype:Any=nx.float16,  initializer:Callable=initializer.glorot_uniform, quantized:bool=False) -> None:
@@ -36,8 +36,7 @@ class AttentionFull:
         self.Wo = initializer(wo_shape, dtype=dtype)
         assert nx.isfinite(self.Wo).all(), f"non-finite detected when initializing attentipn.Wo."
 
-        self.is_quantized = quantized
-        self.scales = None
+        self.scales = (None, None)
         if quantized:
             self.Wqkv, wqkv_scale, _ = quantize(self.Wqkv, nx.int8)
             self.Wo, wo_scale, _ = quantize(self.Wo, nx.int8)
@@ -46,13 +45,14 @@ class AttentionFull:
         self.dWqkv = None
         self.dWo = None
 
-
     @staticmethod
     def self_type() -> str:
         return "full"
 
     @classmethod
     def multihead(cls, embed_dim, n_heads, dtype, initializer, quantized):
+        if quantized:
+            pass
         mha = cls(embed_dim, n_heads=n_heads, n_kv_heads=n_heads, dtype=dtype, initializer=initializer, quantized=quantized)
         return mha
 
@@ -62,12 +62,16 @@ class AttentionFull:
         return mqa
 
     @staticmethod
-    def _forward(x:nx.ArrayLike, causal_mask:nx.ArrayLike,  attn_configs:tuple[Any,...], attn_params: tuple[Any,...]) -> tuple[nx.ArrayLike, tuple[nx.ArrayLike,...]]:
+    def _forward(x:nx.ArrayLike, causal_mask:nx.ArrayLike,  attn_configs:tuple[Any,...], attn_params: tuple[Any,...], quantization) -> tuple[nx.ArrayLike, tuple[nx.ArrayLike,...]]:
         #fp_16_x shape = (B,T,D)
         #Wqkv.T (D, D + 2 * n_kv_heads * H)
         #combined (B, T, D + 2 * n_kv_heads * H)
         embed_dim, n_kv_heads, n_heads, n_rep, head_dim, freqs = attn_configs
         Wqkv, Wo = attn_params
+
+        wqkv_scale, wo_scale = quantization
+        Wqkv = dequantize(Wqkv, wqkv_scale, x.dtype)
+        Wo = dequantize(Wo, wo_scale, x.dtype)
 
         combined =  x @ Wqkv.T  # dtype
 
@@ -102,11 +106,15 @@ class AttentionFull:
         return output_projected, cache
     
     @staticmethod
-    def _backward(gradient:nx.ArrayLike, caches:tuple[Any,...], attn_configs:tuple[Any,...], attn_params: tuple[Any,...]) -> tuple[nx.ArrayLike,...]:
+    def _backward(gradient:nx.ArrayLike, caches:tuple[Any,...], attn_configs:tuple[Any,...], attn_params: tuple[Any,...], quantization:tuple[Any,...]|None=None) -> tuple[nx.ArrayLike,...]:
         x, Q, K, V, weights, output_concat = caches
         embed_dim, n_kv_heads, n_heads, n_rep, head_dim, freqs = attn_configs
         Wqkv, Wo = attn_params
 
+        wqkv_scale, wo_scale = quantization #type:ignore
+        Wqkv = dequantize(Wqkv, wqkv_scale, x.dtype)
+        Wo = dequantize(Wo, wo_scale, x.dtype)
+        
         B, T, _ = x.shape
         d_output_concat = gradient @ Wo.T #B,T,D
         d_output = d_output_concat.reshape(B, T, n_heads, head_dim).transpose(0, 2, 1, 3)

@@ -6,6 +6,6 @@ session = Session.load(PATH)
 tokenizer = session.tokenizer
 embedding = session.transformer.embedding
 
-closest_to = "fuck"
+closest_to = "hello"
 print(f"closest to {closest_to}")
 n_closest(closest_to, tokenizer, embedding)

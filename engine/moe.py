@@ -29,8 +29,7 @@ class MoE:
         self.Wout = initializer(wout_shape, dtype = dtype)
         assert nx.isfinite(self.Wout).all(), f"non-finite detected when initializing moe.Wout."
 
-        self.is_quantized = quantized
-        self.scales = None
+        self.scales = (None, None)
         if quantized:
             self.Wcombined, wcombined_scale, _ = quantize(self.Wcombined, nx.int8)
             self.Wout, wout_scale, _ = quantize(self.Wout, nx.int8)
@@ -40,7 +39,7 @@ class MoE:
         self.dWout = None
 
     @staticmethod
-    def forward(x:nx.ArrayLike, ff_configs, ff_params):
+    def forward(x:nx.ArrayLike, ff_configs, ff_params, quantization:tuple[Any,...]|None=None):
         #routing
         # print("moe forward x", x.dtype)
         B, T, D = x.shape 
@@ -49,10 +48,14 @@ class MoE:
         H, _, n_experts, capacity_factor, top_k = ff_configs
         Wcombined, Wout, router = ff_params
 
+        wcombined_scale, wout_scale = quantization  #type:ignore
+        Wcombined = dequantize(Wcombined, wcombined_scale, x.dtype)
+        Wout = dequantize(Wout, wout_scale, x.dtype)
+
         top_k = min(top_k, n_experts)
         capacity = math.ceil(capacity_factor * N * top_k / n_experts)
         flatten_x = x.reshape(-1, D)
-        scores =  flatten_x.astype(nx.float32) @ router #(N, E) #type:ignore
+        scores =  flatten_x.astype(nx.float32) @ router #(N, E)
         router_prob = softmax(scores, -1) #(N, E)
 
         #top-k
@@ -80,7 +83,7 @@ class MoE:
 
         cum_assignment = nx.cumsum(routing_mask, axis=0, dtype=nx.int32)
 
-        slot_idx = cum_assignment[assignment_rows, flatten_top_expert_indices] - 1 #type:ignore #(N,)
+        slot_idx = cum_assignment[assignment_rows, flatten_top_expert_indices] - 1 #(N,)
 
         valid = slot_idx < capacity
 
@@ -111,119 +114,16 @@ class MoE:
         cache = (flatten_x, router_prob, top_expert_indices, top_gates32, flatten_top_expert_indices, assignement_tokens, valid, safe_slot, expert_input, expert_gate, projected, hidden, raw_output, normalized_histogram)
         return final_output, cache, router_loss, normalized_histogram
 
-    @staticmethod
-    def forward_w8a8(x:nx.ArrayLike, ff_configs, ff_params, quantized:tuple[Any,...]):
-        return MoE.__forward_w8ax(x, ff_configs, ff_params, quantized, accumulator_dtype=nx.int32, is_ax=False)
 
     @staticmethod
-    def forward_w8ax(x:nx.ArrayLike, ff_configs, ff_params, quantized:tuple[Any,...]):
-        return MoE.__forward_w8ax(x, ff_configs, ff_params, quantized, accumulator_dtype=nx.float32)
-
-    @staticmethod
-    def __forward_w8ax(x:nx.ArrayLike, ff_configs, ff_params,  quantized:tuple[Any,...], *, accumulator_dtype, is_ax:bool=True):
-        #routing
-        # print("moe forward x", x.dtype)
-        B, T, D = x.shape 
-        N = B * T
-        wcombined_scale, wout_scale = quantized
-
-        H, _, n_experts, capacity_factor, top_k = ff_configs
-        Wcombined, Wout, router = ff_params
-        quantized_dtype = Wcombined.dtype
-
-        top_k = min(top_k, n_experts)
-        capacity = math.ceil(capacity_factor * N * top_k / n_experts)
-        flatten_x = x.reshape(-1, D)
-        scores =  flatten_x.astype(nx.float32) @ router #(N, E) #type:ignore
-        router_prob = softmax(scores, -1) #(N, E)
-
-        #top-k
-        top_expert_indices = nx.topk(router_prob, top_k) #(N, K)
-        row_idx = nx.arange(N, dtype=nx.int32)[:, None]  #(N,1)
-        top_gates = router_prob[row_idx, top_expert_indices] # (N, K)
-        top_gates32 = top_gates / nx.sum(top_gates, axis=-1, keepdims=True, dtype=nx.float32)
-        top_gates = top_gates32.astype(x.dtype)
-
-        flatten_top_expert_indices = top_expert_indices.reshape(-1) #(N*K,)
-        flatten_top_gates = top_gates.reshape(-1) #(N*K,)         
-        assignement_tokens = nx.repeat( nx.arange(N, dtype=nx.int32), top_k) #(N*K,)
-        
-        histogram = nx.zeros(n_experts, dtype=nx.int32)
-        histogram = nx.add_at(histogram, flatten_top_expert_indices, 1) 
-        avg_prob = nx.mean(router_prob, axis=0) #P
-        normalized_histogram = histogram / ( N * top_k) #f
-        router_loss = n_experts * nx.sum(normalized_histogram * avg_prob, dtype=nx.float32) #L, fp32
-
-        #dispatch
-        M = N * top_k
-        assignment_rows = nx.arange(M, dtype=nx.int32)
-        routing_mask = nx.zeros((M,n_experts), nx.int32)
-        routing_mask = nx.add_at(routing_mask, (assignment_rows, flatten_top_expert_indices), 1)
-
-        cum_assignment = nx.cumsum(routing_mask, axis=0, dtype=nx.int32)
-
-        slot_idx = cum_assignment[assignment_rows, flatten_top_expert_indices] - 1 #type:ignore #(N,)
-
-        valid = slot_idx < capacity
-
-        safe_slot = nx.clip(slot_idx, 0, capacity - 1, dtype=nx.int32)
-        expert_gate = nx.zeros((n_experts, capacity), dtype=top_gates.dtype)
-        safe_gates = nx.where(valid, flatten_top_gates, nx.zeros_like(flatten_top_gates))
-        expert_gate = nx.add_at(expert_gate, (flatten_top_expert_indices, safe_slot), safe_gates)
-
-
-        if not is_ax:
-            masked_tokens = flatten_x[assignement_tokens] * valid[:, None]
-            floating_expert_input = nx.zeros((n_experts, capacity, D), dtype=x.dtype)
-            floating_expert_input = nx.add_at(floating_expert_input, (flatten_top_expert_indices, safe_slot), masked_tokens)
-
-            expert_input, expert_input_scale, _ = quantize(floating_expert_input, quantized_dtype)
-
-            projected = expert_input @ Wcombined #(E, capacity, 2H)
-            combined_projected_scale = expert_input_scale * wcombined_scale
-            dequantized_projected = dequantize(projected, combined_projected_scale, x.dtype)
-            gate_half = dequantized_projected[..., :H]
-            value_half = dequantized_projected[..., H:]
-            s = swish(gate_half, x.dtype)
-
-            hidden = s * value_half #(E, capacity, H) 
-
-            quantized_hidden, hidden_scale, _ = quantize(hidden, quantized_dtype)
-            raw_output = quantized_hidden @ Wout #(E, capacity, D) 
-            hidden_raw_scale = hidden_scale * wout_scale
-            raw_output = dequantize(raw_output, hidden_raw_scale, x.dtype)
-            expert_input = dequantize(expert_input, expert_input_scale, x.dtype)
-
-        else:
-            masked_tokens = flatten_x[assignement_tokens] * valid[:, None] 
-            expert_input = nx.zeros((n_experts, capacity, D), dtype=x.dtype)
-            expert_input = nx.add_at(expert_input, (flatten_top_expert_indices, safe_slot), masked_tokens)
-
-            dequantized_wcombined = dequantize(Wcombined, wcombined_scale, x.dtype) 
-            projected = expert_input @ dequantized_wcombined #(E, capacity, 2H)
-            print("projected", projected.dtype)
-            gate_half = projected[..., :H]
-            value_half = projected[..., H:]
-            s = swish(gate_half, x.dtype)
-
-            dequantized_wout = dequantize(Wout, wout_scale, x.dtype) 
-            hidden = s * value_half #(E, capacity, H) 
-            raw_output = hidden @ dequantized_wout #(E, capacity, D) 
-        
-        gated_output = raw_output * expert_gate[..., None]
-        final_output = gated_output[flatten_top_expert_indices, safe_slot]
-        final_output = final_output * valid[..., None]
-        final_output = final_output.reshape(N,top_k,D)
-        final_output = nx.sum(final_output, axis=1, dtype=accumulator_dtype).reshape(B,T,D) #check
-        final_output = final_output.astype(x.dtype)
-
-        cache = (flatten_x, router_prob, top_expert_indices, top_gates32, flatten_top_expert_indices, assignement_tokens, valid, safe_slot, expert_input, expert_gate, projected, hidden, raw_output, normalized_histogram)
-        return final_output, cache, router_loss, normalized_histogram
-
-    @staticmethod
-    def backward(gradient , caches, moe_configs, ff_params):
+    def backward(gradient , caches, moe_configs, ff_params, quantization:tuple[Any,...]|None=None):
         flatten_x, router_prob, top_expert_indices, top_gates32 , flatten_top_expert_indices, assignement_tokens, valid, safe_slot, expert_input, expert_gate, projected, hidden, raw_output, normalized_histogram = caches
         Wout, Wcombined = ff_params
+
+        wcombined_scale, wout_scale = quantization  #type:ignore
+        Wcombined = dequantize(Wcombined, wcombined_scale, gradient.dtype)
+        Wout = dequantize(Wout, wout_scale, gradient.dtype)
+        
         capacity_factor, n_experts, hidden_width, router, LAMBDA = moe_configs
         top_k = top_expert_indices.shape[1]
         B,T,D = gradient.shape

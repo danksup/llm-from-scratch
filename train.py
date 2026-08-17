@@ -32,7 +32,7 @@ tokenizer1 = Tokenizer.load(TOKENIZER_PATH)
 
 session_configs = {
     "epochs":EPOCHS,
-    "max_step":1000,
+    "max_step":1,
     "train_split": VAL,
     "max_val_step":300,
     "eval_every":1, 
@@ -48,17 +48,18 @@ session_configs = {
         "min_lr": 1e-3,
     },
     "using":os.environ.get("BACKEND"),
-    "save":True,
+    "save":False,
     "create_checkpoint":True,
     "checkpoint_every":1000,
-    "weights_only": True
+    "weights_only": True,
+    "disable_compile":False
 }
 
 model_configs = {
     "n_blocks":10,
     "embed_dim":EMBED_DIM,
     "dtype": nx.float16,
-    "gradient_scale":16384,
+    "gradient_scale":4096,
     "vocab_size": len(tokenizer1.vocab),
     "moe_lambda":0.025,
     "quantize":False,
@@ -88,7 +89,7 @@ if __name__ == "__main__":
 
     session1 = Session(transformer, tokenizer1, True, session_configs)
     start = time.perf_counter()
-    nx._nx.disable_compile()
+
     session1.train(dataloader, display_message=True)
     end = time.perf_counter()
     print(f"training finished. time: {end - start:.3f}s")

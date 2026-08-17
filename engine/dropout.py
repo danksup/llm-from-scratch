@@ -22,5 +22,3 @@ class Dropout:
 
         scale = nx.array(1.0 / (1.0 - p), dtype=gradient.dtype)
         return gradient * mask.astype(gradient.dtype) * scale
-    
-

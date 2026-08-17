@@ -30,6 +30,7 @@ DEFAULT_CONFIGS = {
     "save":True,
     "create_checkpoint":False,
     "weights_only": True,
+    "disable_compile":False
 }
 
 OPTIMIZERS = {
@@ -107,6 +108,14 @@ class Session:
             self.configs_str["save"]= colorize("False", "red")
             self.configs_str["create_checkpoint"] = "disabled because save is false"
 
+
+        if "disable_compile" in self.configs_str:
+            if self.configs_str["disable_compile"] and nx.backend == "MLX":
+                self.configs_str["disable_compile"] = colorize("True", "red")
+                nx._nx.disable_compile() #type:ignore
+            else:
+                self.configs_str["disable_compile"] = "not available for current backend"
+    
         if isinstance(init_optimizer, bool) and init_optimizer: 
             optimizer_class = OPTIMIZERS[self.configs["optimizer"].lower()]
             schedule = self.configs["optimizer_args"]["scheduler"]
@@ -114,7 +123,7 @@ class Session:
                 schedule = self.configs["optimizer_args"]["scheduler"].lower()
                 if isinstance(schedule, str):
                     if schedule not in SCHEDULER:
-                        raise ValueError(f"invalid scheduler. valid schedulers: {", ".join(SCHEDULER.keys())}")
+                        raise ValueError(f"invalid scheduler {schedule}. valid schedulers: {", ".join(SCHEDULER.keys())}")
                     self.configs["optimizer_args"]["scheduler"] = SCHEDULER[schedule]
                 
                 if self.configs["optimizer_args"]["min_lr"] is None:
@@ -127,7 +136,7 @@ class Session:
             self.optimizer = init_optimizer
 
     def __str__(self) -> str:
-        t_mess = f"param: {self.count_params()} \n"
+        t_mess = f"param: {self.transformer.count_params()} \n"
         for key,val in self.configs_str.items():
             t_mess += f"{key}: {val}\n"
         t_mess += self.transformer.get_configs_str()
@@ -139,16 +148,6 @@ class Session:
         build from save file using filepath.
         '''
         raise NotImplementedError("not yet")
-    
-    def count_params(self) -> int:
-        """
-        whole architecture number of params
-        """
-        total = 0
-        for i in self.transformer.blocks:
-            total += i.count_param()
-        total += self.transformer.embedding.lookup_table.size
-        return total
 
     def train(self,dataloader:DataLoader,patience:int=10, display_message:bool=True, savefile_name:str=""):
         if display_message:
@@ -228,7 +227,7 @@ class Session:
 
             if self.configs["save"]:
                 infer_only = "_weights_only" if self.configs["weights_only"] else ""
-                filename = f"{self.count_params()}_param_{epoch+1}_epochs{infer_only}_{self.session_id}"
+                filename = f"{self.transformer.count_params()}_param_{epoch+1}_epochs{infer_only}_{self.session_id}"
                 if savefile_name == "":
                     savefile_name = filename
                 self.save(savefile_name)

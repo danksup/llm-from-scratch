@@ -11,7 +11,7 @@ class Embedding:
         
         self.table_scale = None
         if quantized:
-            self.lookup_table, self.table_scale, _ = quantize(self.lookup_table, nx.int8)
+            self.lookup_table, self.table_scale, _ = quantize(self.lookup_table, nx.int8, keepdims=True)
         assert nx.isfinite(self.lookup_table).all(), f"non-finite detected when initializing embedding."
     
     def __eq__(self, value: object) -> bool:
@@ -22,7 +22,10 @@ class Embedding:
     def forward(self, token_list:Any):
         ''' loopup and convert to the vector for each token id'''
         embed = self.lookup_table[token_list]
-        return dequantize(embed, self.table_scale, self.dtype)
+        # print(embed)
+        qtized = dequantize(embed, self.table_scale[token_list], self.dtype) if self.table_scale is not None else embed
+        # print(qtized)
+        return qtized
     
     def to_dict(self) -> dict[str, Any]:
         lookup = {"lookuptable": self.lookup_table.tolist(), "dtype":nx.dtype_to_srt[self.dtype]}

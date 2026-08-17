@@ -11,36 +11,35 @@ assert isinstance(seed, int), "handsome youre a mansion with a view"
 
 if backend == "auto":
     try:
-        import mlx.core as _nx
+        import mlx.core as _nx # type: ignore
         backend = "MLX"
         os.environ["BACKEND"] = "MLX"
-        _nx.random.seed(seed)
     except ImportError:
         try:
             import cupy as _nx # type: ignore
             backend = "CuPy"
             os.environ["BACKEND"] = "CuPy"
-            _nx.random.seed(seed)
         except ImportError:
-            import numpy as _nx
+            import numpy as _nx # type: ignore
             backend = "NumPy"
             os.environ["BACKEND"] = "NumPy"
-            rng = _nx.random.default_rng(seed)
 elif backend == "mlx":
-    import mlx.core as _nx
+    import mlx.core as _nx # type: ignore
     backend = "MLX"
     os.environ["BACKEND"] = "MLX"
-    _nx.random.seed(seed)
 elif backend == "cupy":
     import cupy as _nx # type: ignore
     backend = "CuPy"
     os.environ["BACKEND"] = "CuPy"
-    _nx.random.seed(seed)
 else:
-    import numpy as _nx
+    import numpy as _nx # type: ignore
     backend = "NumPy"
     os.environ["BACKEND"] = "NumPy"
-    rng = _nx.random.default_rng(seed)
+
+if backend in ["MLX", "CuPy"]:
+    _nx.random.seed(seed) # type: ignore
+else:
+    rng = _nx.random.default_rng(seed) # type: ignore
 
 ArrayLike = Any
 e = _nx.e

@@ -3,8 +3,9 @@
 # pyright: reportAttributeAccessIssue=false
 # pyright: reportFunctionMemberAccess=false
 
-from typing import Any, Union,Literal
 import os
+from typing import Any, Literal, Union
+
 backend = os.environ.get("BACKEND", "auto").lower()
 seed = int(os.environ.get("SEED", 1))
 assert isinstance(seed, int), "handsome youre a mansion with a view"
@@ -94,7 +95,7 @@ str_to_dtype = {
     "uint8":uint8,
     "bool":bool_,
 }
-    
+
 def array(a:Any, dtype=None) -> ArrayLike:
     if hasattr(a, "dtype"):
         if dtype is not None:
@@ -135,14 +136,14 @@ def unique(a:ArrayLike,/, return_counts:bool=False ) -> Any:
         flatten:list = _nx.sort(a.reshape(-1)).tolist() #type:ignore
         unique_arr = []
         counts = []
-        
+
         for i in flatten:
             if not unique_arr or i != unique_arr[-1]:
                 unique_arr.append(i)
                 counts.append(1)
             else:
                 counts[-1] += 1
-        
+
         unique_arr = _nx.array(unique_arr, dtype=a.dtype)
         counts = _nx.array(counts, dtype=int32)
         if return_counts:
@@ -231,7 +232,7 @@ def normal(loc=0.0, scale=1.0, size=None,*,dtype=None) -> Any:
             return dtype(rng.normal(loc=loc, scale=scale,))
         else:
             return rng.normal(loc=loc, scale=scale, size=size).astype(dtype)
-        
+
     if size is None:
         size = ()
     return _nx.random.normal(loc=loc, scale=scale, shape=size, dtype=dtype)
@@ -254,7 +255,7 @@ def as_strided(x, shape, strides):
         if backend == "NumPy":
             return _nx.lib.stride_tricks.as_strided(x, shape=shape, strides=np_stride)
         return _nx.as_strided(x, shape=shape, strides=np_stride)
-    return _nx.as_strided(x,shape, strides) 
+    return _nx.as_strided(x,shape, strides)
 
 def dot(u:ArrayLike,v:ArrayLike) -> Any:
     return u @ v
@@ -348,7 +349,7 @@ def sqrt(a:ArrayLike,*, dtype=None) -> ArrayLike:
             if res.dtype == float64:
                 return res.astype(float32)
         return res
-    return _nx.sqrt(a) 
+    return _nx.sqrt(a)
 
 def power(a,b, dtype=None) -> Any:
     a = array(a, dtype=dtype)
@@ -364,7 +365,7 @@ def power(a,b, dtype=None) -> Any:
         return res
 
     return _nx.power(a, b)
-    
+
 def argpartition(a:ArrayLike, kth, axis=None) -> ArrayLike:
     return _nx.argpartition(a, kth, axis=axis)
 
@@ -372,7 +373,7 @@ def random_choice(a:ArrayLike, *, p=None) -> Any:
     a = array(a)
     if backend == "MLX":
         if p is None:
-            p = _nx.full(a.shape, _nx.array(1/a.size, a.dtype)) 
+            p = _nx.full(a.shape, _nx.array(1/a.size, a.dtype))
         cdf = _nx.cumsum(p)
         r = _nx.random.uniform()
         idx = _nx.argmax(cdf >= r)
@@ -519,4 +520,3 @@ def issubdtype(arg1, arg2):
 
 def iinfo(dtype):
     return _nx.iinfo(dtype)
-

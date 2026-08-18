@@ -1,14 +1,15 @@
-import engine.backend as nx
-from engine.activations import softmax, softmax_derivative
-from engine.activations import swish,swish_derivative
-from typing import Any, Callable
-import engine.initializers as initializer
-from engine.quantization import quantize, dequantize, quantized_matmul
 import math
+from typing import Any, Callable
+
+import engine.backend as nx
+import engine.initializers as initializer
+from engine.activations import softmax, softmax_derivative, swish, swish_derivative
+from engine.quantization import dequantize, quantize, quantized_matmul
+
 
 class MoE:
     def __init__(self, capacity_factor, top_k, n_experts, embed_dim, hidden_width, dtype:Any=nx.float16, initializer:Callable=initializer.glorot_uniform, quantized:bool=False) -> None:
-        self.hidden_width = hidden_width 
+        self.hidden_width = hidden_width
         self.embed_dim = embed_dim #D
         self.n_experts = n_experts #E
         self.cf = capacity_factor
@@ -30,6 +31,7 @@ class MoE:
         assert nx.isfinite(self.Wout).all(), f"non-finite detected when initializing moe.Wout."
 
         self.scales = (None, None)
+        self.quantized = quantized
         if quantized:
             self.Wcombined, wcombined_scale, _ = quantize(self.Wcombined, nx.int8)
             self.Wout, wout_scale, _ = quantize(self.Wout, nx.int8)
@@ -42,7 +44,7 @@ class MoE:
     def forward(x:nx.ArrayLike, ff_configs, ff_params, quantization:tuple[Any,...]|None=None):
         #routing
         # print("moe forward x", x.dtype)
-        B, T, D = x.shape 
+        B, T, D = x.shape
         N = B * T
 
         H, _, n_experts, capacity_factor, top_k = ff_configs
@@ -68,9 +70,9 @@ class MoE:
         flatten_top_expert_indices = top_expert_indices.reshape(-1) #(N*K,)
         flatten_top_gates = top_gates.reshape(-1) #(N*K,)
         assignement_tokens = nx.repeat( nx.arange(N, dtype=nx.int32), top_k) #(N*K,)
-        
+
         histogram = nx.zeros(n_experts, dtype=nx.int32)
-        histogram = nx.add_at(histogram, flatten_top_expert_indices, 1) 
+        histogram = nx.add_at(histogram, flatten_top_expert_indices, 1)
         avg_prob = nx.mean(router_prob, axis=0) #P
         normalized_histogram = histogram / ( N * top_k) #f
         router_loss = n_experts * nx.sum(normalized_histogram * avg_prob) #L, fp32
@@ -96,15 +98,15 @@ class MoE:
         safe_gates = nx.where(valid, flatten_top_gates, nx.zeros_like(flatten_top_gates))
         expert_gate = nx.add_at(expert_gate, (flatten_top_expert_indices, safe_slot), safe_gates)
 
-        # projected = expert_input @ Wcombined 
+        # projected = expert_input @ Wcombined
         projected = quantized_matmul(expert_input, Wcombined, wcombined_scale) #(E, capacity, 2H)
         gate_half = projected[..., :H]
         value_half = projected[..., H:]
         s = swish(gate_half, x.dtype)
 
-        hidden = s * value_half #(E, capacity, H) 
-        # raw_output = hidden @ Wout #(E, capacity, D) 
-        raw_output = quantized_matmul(hidden, Wout, wout_scale) #(E, capacity, D) 
+        hidden = s * value_half #(E, capacity, H)
+        # raw_output = hidden @ Wout #(E, capacity, D)
+        raw_output = quantized_matmul(hidden, Wout, wout_scale) #(E, capacity, D)
 
         gated_output = raw_output * expert_gate[..., None]
         final_output = gated_output[flatten_top_expert_indices, safe_slot]
@@ -123,7 +125,7 @@ class MoE:
         Wout, Wcombined = ff_params
 
         wcombined_scale, wout_scale = quantization  #type:ignore
-        
+
         capacity_factor, n_experts, hidden_width, router, LAMBDA = moe_configs
         top_k = top_expert_indices.shape[1]
         B,T,D = gradient.shape
@@ -137,14 +139,14 @@ class MoE:
         del flatten_gradient, assignment_gradient
 
         d_gated_output = nx.zeros((n_experts, capacity, D), dtype=gradient.dtype)
-        
+
         d_gated_output = nx.add_at(d_gated_output, (flatten_top_expert_indices, safe_slot), d_masked_output)
 
         del d_masked_output
 
         d_raw_output = d_gated_output * expert_gate[..., None] #(E, capacity, D) #fp16
         d_expert_gate = nx.sum(d_gated_output * raw_output, axis=-1, dtype=nx.float32,) #(E, capacity)
-       
+
         dWout = hidden.transpose(0, 2, 1) @ d_raw_output
 
         if wout_scale is not None:
@@ -213,26 +215,42 @@ class MoE:
         # print("dxpert", d_x_expert.dtype)
         dx_flat = d_x_expert + d_x_router #(N,D)
 
-        dx = dx_flat.reshape(B,T,D) 
+        dx = dx_flat.reshape(B,T,D)
 
         del dx_flat, top_expert_indices, valid, safe_slot
 
         return dx, dWcombined, dWout, d_router
 
     def to_dict(self) -> dict:
-        return {
-            "moe_configs":(self.cf, self.top_k, self.n_experts, self.hidden_width,self.embed_dim, nx.dtype_to_srt[self.dtype]),
+        moe_dict =  {
+            "moe_configs":(self.cf, self.top_k, self.n_experts, self.hidden_width,self.embed_dim, nx.dtype_to_srt[self.dtype], self.quantized),
             "router": self.router.tolist(),
             "Wcombined":self.Wcombined.tolist(),
             "Wout":self.Wout.tolist(),
         }
-    
+
+        if self.quantized:
+             moe_dict["scales"] = (self.scales[0].tolist(), self.scales[1].tolist()) #type:ignore
+        else:
+             moe_dict["scales"] = self.scales
+
+        return moe_dict
+
     @classmethod
     def from_dict(cls, thing:dict) -> "MoE":
-        capacity_factor, top_k, n_experts, hidden_width, embed_dim, dtype = thing["moe_configs"]
+        capacity_factor, top_k, n_experts, hidden_width, embed_dim, dtype, is_quantized = thing["moe_configs"]
         dtype = nx.str_to_dtype[dtype]
-        moe = cls(capacity_factor, top_k, n_experts, embed_dim, hidden_width, dtype)
-        moe.Wcombined = nx.array(thing["Wcombined"], dtype=moe.dtype)
-        moe.Wout = nx.array(thing["Wout"], dtype=moe.dtype)
-        moe.router = nx.array(thing["router"], dtype=nx.float32)
+        scales = thing["scales"]
+        moe = cls(capacity_factor, top_k, n_experts, embed_dim, hidden_width, dtype, quantized=is_quantized)
+        Wcombined = thing["Wcombined"]
+        Wout = thing["Wout"]
+        moe.router = nx.array(thing["router"], nx.float32)
+
+        if is_quantized:
+             moe.Wcombined = nx.array(Wcombined, dtype=nx.int8)
+             moe.Wout = nx.array(Wout, dtype=nx.int8)
+             moe.scales = (nx.array(scales[0], dtype=dtype), nx.array(scales[1], dtype=dtype))
+        else:
+             moe.Wcombined = nx.array(Wcombined, dtype=dtype)
+             moe.Wout = nx.array(Wout, dtype=dtype)
         return moe

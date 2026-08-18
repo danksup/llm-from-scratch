@@ -1,18 +1,17 @@
-#btw if u found this repo this is like the manual cus im too lazy to make one. 
+#btw if u found this repo this is like the manual cus im too lazy to make one.
 #feel free to play with any values u see here, especially the filepath.
 
 import os
-from pathlib import Path
 import time
 
 backend = os.environ["BACKEND"] = "auto"
 seed = os.environ["SEED"] = "100"
 
-from engine.transformer import Transformer
-from engine.tokenizer import Tokenizer
+import engine.backend as nx
 from engine.dataloader import DataLoader
 from engine.sessions import Session
-import engine.backend as nx
+from engine.tokenizer import Tokenizer
+from engine.transformer import Transformer
 
 EPOCHS = 1
 EMBED_DIM = 256
@@ -32,10 +31,10 @@ tokenizer1 = Tokenizer.load(TOKENIZER_PATH)
 
 session_configs = {
     "epochs":EPOCHS,
-    "max_step":1,
+    "max_step":50,
     "train_split": VAL,
     "max_val_step":300,
-    "eval_every":1, 
+    "eval_every":1,
     "validate_every":0,
     "context_size": CONTEXT_SIZE,
     "batch_size": BATCH_SIZE,
@@ -48,7 +47,7 @@ session_configs = {
         "min_lr": 1e-3,
     },
     "using":os.environ.get("BACKEND"),
-    "save":False,
+    "save":True,
     "create_checkpoint":True,
     "checkpoint_every":1000,
     "weights_only": True,
@@ -62,7 +61,7 @@ model_configs = {
     "gradient_scale":4096,
     "vocab_size": len(tokenizer1.vocab),
     "moe_lambda":0.025,
-    "quantize":True,
+    "quantized":True,
     "block_configs":{
         "ff_hidden_width": BASE_WIDTH,
         "ff_n_experts":N_EXPERTS,

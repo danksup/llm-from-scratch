@@ -12,7 +12,7 @@ class AttentionSWA:
 
         if n_kv_heads < 0:
             n_kv_heads = n_heads
-        
+
         self.n_kv_heads = n_kv_heads
         self.embed_dim = embed_dim
         self.n_heads = n_heads
@@ -25,7 +25,7 @@ class AttentionSWA:
         self.W = W
         self.dtype = dtype
 
-        self.n_rep = self.n_heads // self.n_kv_heads 
+        self.n_rep = self.n_heads // self.n_kv_heads
 
         self.freqs = precompute_freqs(self.head_dim, 16384)
 
@@ -40,18 +40,19 @@ class AttentionSWA:
         assert nx.isfinite(self.Wo).all(), f"non-finite detected when initializing attentipn.Wo."
 
         self.scales = (None, None)
+        self.quantized = quantized
         if quantized:
             self.Wqkv, wqkv_scale, _ = quantize(self.Wqkv, nx.int8)
             self.Wo, wo_scale, _ = quantize(self.Wo, nx.int8)
             self.scales = (wqkv_scale, wo_scale)
-        
+
         self.dWqkv = None
         self.dWo = None
 
     @staticmethod
     def self_type() -> str:
         return "swa"
-    
+
     @classmethod
     def multihead(cls,embed_dim, n_heads, W, dtype, initializer):
         mha = cls(embed_dim, n_heads=n_heads, n_kv_heads=n_heads, W=W, dtype=dtype, initializer=initializer)
@@ -77,7 +78,7 @@ class AttentionSWA:
         Q = combined[..., :embed_dim] #shape: (B, T, D)
         K = combined[..., embed_dim: embed_dim + (n_kv_heads * head_dim)]  #shape: (B, T, n_kv_heads * H)
         V = combined[..., embed_dim + (n_kv_heads * head_dim):] #shape: (B, T, n_kv_heads * H)
-        
+
         B, T, _ = x.shape
         W = min(W, T-1)
         Q = Q.reshape(B, T, n_heads, head_dim).transpose(0,2,1,3) #(B,n_heads,T, Dh)
@@ -122,7 +123,7 @@ class AttentionSWA:
 
         cache = (x, Q, windows_K, windows_V, weights_softmax, output_concat)
         return output_projected, cache
-    
+
     @staticmethod
     def _backward(gradient:nx.ArrayLike, caches:tuple[Any,...], attn_configs:tuple[Any,...], attn_params: tuple[Any,...], quantization) :#-> tuple[nx.ArrayLike,...]:
         x, Q, windows_K, windows_V, weights_softmax, output_concat = caches
@@ -146,13 +147,13 @@ class AttentionSWA:
         d_output_split_6d = d_output_split[:,:,:,:,None,:] #B, n_kv_heads, n_rep, T, 1, Dh
         windows_V_6d = windows_V[:,:,None,:,:,:] #(B, n_kv_head, 1, T, W+1, Dh)
         d_weights = d_output_split_6d @ windows_V_6d.transpose(0,1,2,3,5,4) #B, n_kv_heads, n_rep,T, 1, W+1
-        
+
         d_windows_V = nx.einsum("bkrtw,bkrtd->bktwd", weights, d_output_split) #(B, n_kv_head, T , W+1, Dh)
 
         d_weights = d_weights[:,:,:,:,0,:].astype(nx.float32)
         d_scores = softmax_derivative(weights_softmax, d_weights) / nx.sqrt(head_dim, dtype=nx.float32) #(B, n_kv_heads, n_rep, T, W+1)
         d_scores = d_scores.astype(x.dtype)
-        
+
         del d_output_split, d_output_split_6d, d_weights, windows_V_6d
 
         d_scores_6d = d_scores[:,:,:,:,None,:] #(B, n_kv_heads, n_rep, T, 1,W+1)
@@ -198,24 +199,33 @@ class AttentionSWA:
 
         del x, output_concat, freqs, Wqkv, Wo
         return dx,dWqkv,dWo
-    
-    def inference_forward(self, x, max_cache_len, freqs, cached_k=None, cached_v=None, position = 0):
-        scale = nx.float_32(nx.sqrt(self.head_dim))
-        combined = x @ self.Wqkv.T
-        B, T, _ = x.shape    
 
-        K = combined[..., self.embed_dim: self.embed_dim + (self.n_kv_heads * self.head_dim)] 
+    #TODO:compiled, dtype fix, quantization
+    def inference_forward(self, x, max_cache_len, freqs, cached_k=None, cached_v=None, position = 0, quantization=(None,None)):
+        scale = nx.float_32(nx.sqrt(self.head_dim))
+
+        wqkv_scale, wo_scale = quantization #type:ignore
+
+        if wqkv_scale is not None:
+            wqkv_scale = wqkv_scale.T
+            combined = quantized_matmul(x, self.Wqkv.T, wqkv_scale)
+        else:
+            combined =  x @ self.Wqkv.T  # dtype
+        B, T, _ = x.shape
+
+        K = combined[..., self.embed_dim: self.embed_dim + (self.n_kv_heads * self.head_dim)]
 
         K = K.reshape(B, T, self.n_kv_heads, self.head_dim).transpose(0,2,1,3)
-        K = rope_forward(K, freqs, position) 
+        K = rope_forward(K, freqs, position)
+        K = K.astype(nx.float32)
         if cached_k is not None :
             cached_k = nx.concatenate([cached_k, K], axis = 2)
         else:
             cached_k = K
-       
+
         V = combined[..., self.embed_dim + (self.n_kv_heads * self.head_dim):]
         V = V.reshape(B, T, self.n_kv_heads, self.head_dim).transpose(0,2,1,3)
-        
+
         if cached_v is not None:
             cached_v = nx.concatenate([cached_v, V], axis = 2)
         else:
@@ -225,6 +235,7 @@ class AttentionSWA:
             cached_k = cached_k[:, :, -max_cache_len:, :]
 
             cached_v = cached_v[:, :, -max_cache_len:, :]
+
 
         Q = combined[..., :self.embed_dim]
         Q = Q.reshape(B, T, self.n_heads, self.head_dim).transpose(0,2,1,3)
@@ -239,20 +250,20 @@ class AttentionSWA:
         weights = softmax(scores)
         output = weights @ repeats_cached_v
         output_concat = output.transpose(0, 2, 1, 3).reshape(B, T, self.embed_dim)
-        output_projected = output_concat @ self.Wo
-        
+        output_projected = quantized_matmul(output_concat, self.Wo, wo_scale) #BTD
+
         return output_projected, cached_k, cached_v
-    
+
     @staticmethod
     def compute_mask(W, T):
         window_idx = nx.arange(W + 1).reshape((1, W + 1))
         time_idx = nx.arange(T).reshape((T, 1))
         padded_position = time_idx + window_idx
         return padded_position < W
-    
+
     def to_dict(self) -> dict:
         '''serialize into dict with weights turned into list'''
-        return {
+        attn_dict = {
             "embed_dim":self.embed_dim,
             "n_heads":self.n_heads,
             "n_kv_heads":self.n_kv_heads,
@@ -260,8 +271,17 @@ class AttentionSWA:
             "W":self.W,
             "Wqkv":self.Wqkv.tolist(),
             "Wo":self.Wo.tolist(),
+            "quantized":self.quantized
         }
-    
+
+        if self.quantized:
+             attn_dict["scales"] = (self.scales[0].tolist(), self.scales[1].tolist()) #type:ignore
+        else:
+             attn_dict["scales"] = self.scales
+        return attn_dict
+
+
+
     @classmethod
     def from_dict(cls,thing) -> "AttentionSWA":
         """deserialize"""
@@ -272,9 +292,17 @@ class AttentionSWA:
         Wqkv = thing["Wqkv"]
         Wo = thing["Wo"]
         dtype = nx.str_to_dtype[thing["dtype"]]
+        is_quantized = thing["quantized"]
+        scales = thing["scales"]
 
-        attention = cls(embed_dim,n_heads, n_kv_heads, W, dtype)
-        attention.Wqkv = nx.array(Wqkv, dtype=dtype)
-        attention.Wo = nx.array(Wo, dtype=dtype)
+        attention = cls(embed_dim=embed_dim, n_heads=n_heads, n_kv_heads=n_kv_heads, W=W, dtype=dtype, quantized=is_quantized)
+
+        if is_quantized:
+            attention.Wqkv = nx.array(Wqkv, dtype=nx.int8)
+            attention.Wo = nx.array(Wo, dtype=nx.int8)
+            attention.scales = (nx.array(scales[0], dtype=dtype), nx.array(scales[1], dtype=dtype))
+        else:
+            attention.Wqkv = nx.array(Wqkv, dtype=dtype)
+            attention.Wo = nx.array(Wo, dtype=dtype)
 
         return attention

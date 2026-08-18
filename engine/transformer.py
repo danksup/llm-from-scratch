@@ -1,17 +1,18 @@
-from engine.losses import cross_entropy_gradient, cross_entropy
-from engine.embedding import Embedding
-from engine.dataloader import DataLoader
-import engine.optimizer as optim
-from engine.transformer_block import TransformerBlock
-import engine.attention as attn
-import engine.initializers as init
-import engine.backend as nx
-from typing import Any, Literal, Union
 import copy
-from helper.singleton import sleep
-from engine.quantization import quantize, dequantize
+from typing import Any, Literal
 
-optimizers = Union[optim.Adam, optim.AdamW, optim.SGD]
+from engine import tokenizer
+import engine.attention as attn
+import engine.backend as nx
+import engine.initializers as init
+import engine.optimizer as optim
+from engine.dataloader import DataLoader
+from engine.embedding import Embedding
+from engine.losses import cross_entropy, cross_entropy_gradient
+from engine.quantization import dequantize, quantize, quantized_matmul
+from engine.transformer_block import TransformerBlock
+
+optimizers = optim.Adam | optim.AdamW | optim.SGD
 
 default_block_configs = {
     "ff_hidden_width": 1024,
@@ -43,15 +44,15 @@ INITIALIZERS = {
 
 class Transformer:
     def __init__(self, configs: dict[str, Any] | None = None, blocks:list|None=None):
-        #transformer_block:  
-        # def __init__(self,embed_dim,ff_dim, n_heads, n_kv_heads, n_experts=1, cf=1.25, top_k =2, W=8, dtype=nx.float16) 
+        #transformer_block:
+        # def __init__(self,embed_dim,ff_dim, n_heads, n_kv_heads, n_experts=1, cf=1.25, top_k =2, W=8, dtype=nx.float16)
         self.blocks = []
         configs =  {} if configs is None else configs
         self.vocab_size = configs.get("vocab_size", None)
         assert self.vocab_size is not None, "vocab size can't be None"
         self.embed_dim = configs.get("embed_dim", 128)
         self.dtype = configs.get("dtype", nx.float32)
-        self.quantized = configs.get("quantize", False)
+        self.quantized = configs.get("quantized", False)
         assert isinstance(self.quantized, bool), f"True= int8 weights, rest floats; False = floats; got {self.quantized} of type {type(self.quantized)} instead."
         self.embedding = Embedding(self.vocab_size, self.embed_dim, self.dtype, self.quantized)
         self.gradient_scale = configs.get("gradient_scale", 4096)
@@ -69,7 +70,7 @@ class Transformer:
                 for value in block_overrides.values():
                     if any(i in value for i in ["quantize_to_int8", "dtype"]):
                         raise ValueError('individual block config cant have dtype or quantization configuration.')
-                   
+
             for i in range(n_blocks):
                 override = block_overrides.get(i, {})
                 this = self.block_configs
@@ -81,7 +82,7 @@ class Transformer:
                 attn_type_str = overrided["attn_type"]
                 assert attn_type_str in ATTN_TYPE, f"[block {i}] invalid input: \"{attn_type_str}\" of type {type({attn_type_str})} for attn_type. valid attn_type: {", ".join(ATTN_TYPE.keys())}"
 
-                overrided = overrided | ATTN_TYPE[overrided["attn_type"]] | ATTN_VARIANT[overrided["attn_variant"]] | this  | override 
+                overrided = overrided | ATTN_TYPE[overrided["attn_type"]] | ATTN_VARIANT[overrided["attn_variant"]] | this  | override
                 overrided.pop('attn')
 
                 attn_type = ATTN_TYPE[attn_type_str]["attn"]
@@ -109,7 +110,7 @@ class Transformer:
                 W = overrided.get("attn_windows", None)
                 match (attn_type_str, attn_variant):
                     case ("swa", "gqa"):
-                        n_kv_heads = overrided["attn_n_kv_heads"] 
+                        n_kv_heads = overrided["attn_n_kv_heads"]
                         #def __init__(self,embed_dim:int, n_heads:int, n_kv_heads:int=-1, W=8, dtype:Any=nx.float16, initializer:Callable=initializer.glorot_uniform)
                         attn = attn_type(embed_dim=D, n_heads=n_heads, n_kv_heads=n_kv_heads, W=W, dtype=self.dtype, initializer=attn_init, quantized=self.quantized)
                     case ("swa", "mha"):
@@ -119,7 +120,7 @@ class Transformer:
                     case ("swa", invalid):
                         raise ValueError(f"[block {i}] invalid variant of \"{invalid}\". valid variants: {", ".join(ATTN_VARIANT)}")
                     case ("full", "gqa"):
-                        n_kv_heads = overrided["attn_n_kv_heads"] 
+                        n_kv_heads = overrided["attn_n_kv_heads"]
                         attn = attn_type(embed_dim=D, n_heads=n_heads, n_kv_heads=n_kv_heads,  dtype=self.dtype, initializer=attn_init,quantized=self.quantized)
                     case ("full", "mha"):
                         attn = attn_type.multihead(embed_dim=D, n_heads=n_heads,  dtype=self.dtype, initializer=attn_init,quantized=self.quantized)
@@ -131,29 +132,29 @@ class Transformer:
                         raise ValueError(f"[block {i}] invalid variant of \"{attn_variant}\". valid variants: {", ".join(ATTN_VARIANT)}")
 
                 transformer_block = TransformerBlock(D, attn, H, E, CF, topk, self.dtype, attn_init, ff_init, self.quantized)
-                self.blocks.append(transformer_block) 
+                self.blocks.append(transformer_block)
         else:
             self.blocks = blocks
             if not self.blocks:
                 raise ValueError("lol")
-            
+
             for i, block in enumerate(self.blocks):
                 if block.embed_dim != self.embed_dim:
                     raise ValueError(f"block {i} embed dimension of {block.embed_dim} does not match the transformer's embed dimension of {self.embed_dim}")
-    
+
     def __str__(self) -> str:
         return self.get_configs_str()
 
     def count_params(self) -> int:
         """
-        whole architecture number of (trainable) params 
+        whole architecture number of (trainable) params
         """
         total = 0
         for i in self.blocks:
             total += i.count_param()
         total += self.embedding.lookup_table.size
         return total
-        
+
     def forward(self, inputs:Any, return_cache= True, is_training=True) -> Any:
         '''
         inputs = list of inputs
@@ -170,12 +171,12 @@ class Transformer:
                 epsilon = block.rmsnorm1.epsilon
                 gamma1 = block.rmsnorm1.gamma
                 gamma2 = block.rmsnorm2.gamma
-                
+
                 P = nx.array(0.1, dtype=self.dtype)
                 attn_str = block.attention.self_type()
 
                 if attn_str == "swa":
-                    W = block.attention.W 
+                    W = block.attention.W
                     assert W is not None, f"[block {idx}] W is None"
                     W = min(W, T-1)
                     if block.causal_mask is None or block.causal_mask.shape != (T, W + 1):
@@ -191,7 +192,7 @@ class Transformer:
                 output = ff_out
                 all_masks.append(masks)
                 all_caches.append(caches)
-                histograms[idx] = nx.zeros_like(normalized_histogram) 
+                histograms[idx] = nx.zeros_like(normalized_histogram)
                 histograms[idx] += normalized_histogram
             except TypeError as e:
                 print(f"[block {idx}] TypeError")
@@ -210,7 +211,7 @@ class Transformer:
         if return_cache:
             return scores, last_output, all_masks, all_caches, total_router_loss, histograms
         return scores, total_router_loss
-    
+
     def backward(self, err_signal:Any,  all_masks,all_caches) -> Any:
         '''
         Args:
@@ -232,19 +233,19 @@ class Transformer:
             attn_params = block.attention.Wqkv, block.attention.Wo
             scales = (block.attention.scales, block.ff.scales)
             dx, dWout, dWcombined, d_router, dWqkv, dWo, d_gamma1, d_gamma2 = block._backward(current_grad, mask1=mask1, mask2=mask2, p=P, attention=attn_str,
-                                                                caches_attn=caches_attn, caches_ff=caches_ff, caches_rmsnorm1=caches_rmsnorm1, caches_rmsnorm2=caches_rmsnorm2, 
+                                                                caches_attn=caches_attn, caches_ff=caches_ff, caches_rmsnorm1=caches_rmsnorm1, caches_rmsnorm2=caches_rmsnorm2,
                                                                 attn_configs = attn_configs, attn_params=attn_params, gamma1=block.rmsnorm1.gamma, gamma2=block.rmsnorm2.gamma, ff_params=ff_params, moe_configs=moe_configs, quantization=scales)
 
-            
+
             block.ff.dWout = dWout if getattr(block.ff, "dWout", None) is None else block.ff.dWout + dWout
-            block.ff.dWcombined = dWcombined if getattr(block.ff, "dWcombined", None) is None else block.ff.dWcombined + dWcombined 
-            block.ff.d_router = d_router if getattr(block.ff, "d_router", None) is None else block.ff.d_router + d_router  
+            block.ff.dWcombined = dWcombined if getattr(block.ff, "dWcombined", None) is None else block.ff.dWcombined + dWcombined
+            block.ff.d_router = d_router if getattr(block.ff, "d_router", None) is None else block.ff.d_router + d_router
 
-            block.attention.dWqkv = dWqkv if getattr(block.attention, "dWqkv", None) is None else block.attention.dWqkv + dWqkv   
-            block.attention.dWo = dWo if getattr(block.attention, "dWo", None) is None else block.attention.dWo + dWo    
+            block.attention.dWqkv = dWqkv if getattr(block.attention, "dWqkv", None) is None else block.attention.dWqkv + dWqkv
+            block.attention.dWo = dWo if getattr(block.attention, "dWo", None) is None else block.attention.dWo + dWo
 
-            block.rmsnorm1.d_gamma = d_gamma1 if getattr(block.rmsnorm1, "d_gamma", None) is None else block.rmsnorm1.d_gamma + d_gamma1     
-            block.rmsnorm2.d_gamma = d_gamma2 if getattr(block.rmsnorm2, "d_gamma", None) is None else block.rmsnorm2.d_gamma + d_gamma2  
+            block.rmsnorm1.d_gamma = d_gamma1 if getattr(block.rmsnorm1, "d_gamma", None) is None else block.rmsnorm1.d_gamma + d_gamma1
+            block.rmsnorm2.d_gamma = d_gamma2 if getattr(block.rmsnorm2, "d_gamma", None) is None else block.rmsnorm2.d_gamma + d_gamma2
 
             current_grad = dx
 
@@ -263,7 +264,7 @@ class Transformer:
             to_eval.append(block.ff.router)
             to_eval.append(block.rmsnorm1.gamma)
             to_eval.append(block.rmsnorm2.gamma)
-            
+
             if include_gradients:
                 to_eval.append(block.attention.dWqkv)
                 to_eval.append(block.attention.dWo)
@@ -279,7 +280,7 @@ class Transformer:
                         to_eval.append(optimizer.state)
                     if hasattr(optimizer, "masters"):
                         to_eval.append(optimizer.masters) #type:ignore
-                  
+
         nx.eval(*to_eval)
 
     def non_finite_check(self):
@@ -307,16 +308,16 @@ class Transformer:
                 continue
             texts += f"{text}\n"
         return texts
-                    
+
     def train(self, dataloader:DataLoader, optimizer:optimizers, total_epoch:int, max_step:int=50000, eval_every:int=5, microbatch_size:int=16):
         total_loss = nx.float_32(0.0)
         count = 0
-        microstep = 0 
+        microstep = 0
         step = 0
         total_histograms = None
         embed_acc = nx.zeros((self.vocab_size, self.embed_dim), nx.float32)
 
-        for contexts, next_tokens in dataloader.prefetch_batch(dataloader.train_files): 
+        for contexts, next_tokens in dataloader.prefetch_batch(dataloader.train_files):
             contexts = nx.array(contexts, nx.int32)
             next_tokens = nx.array(next_tokens, nx.int32)
 
@@ -325,13 +326,13 @@ class Transformer:
 
             embedded = self.embedding.forward(contexts)  # shape (batch, context_size, embed_dim)
             batch_scores, last_output, all_masks, all_caches, total_router_loss, histograms = self.forward(embedded)
-           
+
             if total_histograms is None:
                 total_histograms = histograms
             else:
                 for i in range(len(self.blocks)):
                     total_histograms[i] += histograms[i]
-            
+
             loss = cross_entropy(batch_scores, next_tokens)
             loss = nx.mean(loss) + self.moe_lambda * total_router_loss
 
@@ -346,8 +347,8 @@ class Transformer:
                 lookup_table = dequantize(lookup_table, self.embedding.table_scale, self.dtype)
 
             block_gradient =  batch_gradient @ lookup_table #dtype
-            
-            d_table = batch_gradient.reshape(-1, self.vocab_size).T @ last_output.reshape(-1, self.embed_dim) 
+
+            d_table = batch_gradient.reshape(-1, self.vocab_size).T @ last_output.reshape(-1, self.embed_dim)
             d_table = d_table.astype(nx.float32) / self.gradient_scale
 
             current_grad = self.backward(block_gradient, all_masks, all_caches)
@@ -362,7 +363,7 @@ class Transformer:
             total_loss += loss * next_tokens.size
             count += next_tokens.size
             microstep += 1
-        
+
             if microstep % eval_every == 0:
                 to_eval = [total_loss, self.embedding.lookup_table, embed_acc, total_histograms]
                 self.eval_networks(to_eval)
@@ -381,7 +382,7 @@ class Transformer:
                     backward_inf = nx.isinf(current_grad).any()
                     nan_weights = self.non_finite_check()
                     raise FloatingPointError(f"[BACKWARD step: {step}] non-finite gradient at microstep {microstep}. isnan: {backward_nan} | isinf: {backward_inf}.\nmin value: {backward_min}\nmax value: {backward_max}, | non-finite weights: {nan_weights}")
-                
+
             if microstep > 0 and microstep % microbatch_size == 0:
                 all_network_params = []
                 for i,block in enumerate(self.blocks):
@@ -410,9 +411,9 @@ class Transformer:
 
                 lookup_table = dequantize(self.embedding.lookup_table, self.embedding.table_scale)
                 all_network_params.extend([("embedding",lookup_table, embed_acc / microbatch_size)])
-                
+
                 optimized = optimizer.step_many(all_network_params, max_step, total_epoch)
-                
+
                 for i,block in enumerate(self.blocks):
                     if self.quantized:
                         Wqkv = optimized[f"Wqkv_{i}"]
@@ -452,10 +453,10 @@ class Transformer:
                 step += 1
 
                 self.eval_networks(include_gradients=False, optimizer=optimizer)
-                
+
                 yield total_loss.item(), count, total_histograms, step
                 nx.clear_cache()
-        
+
     def validate(self, dataloader:DataLoader, val_step:int|Literal["all"]="all"):
         total_loss = nx.float_32(0.0)
         count = 0
@@ -469,10 +470,10 @@ class Transformer:
                 break
             contexts = nx.array(contexts, nx.int32)
             next_tokens = nx.array(next_tokens, nx.int32)
-            
-            embedded = self.embedding.forward(contexts) 
+
+            embedded = self.embedding.forward(contexts)
             batch_validation_scores, total_router_loss = self.forward(embedded, False, False)
-            
+
             val_loss = cross_entropy(batch_validation_scores, next_tokens)
             val_loss = nx.mean(val_loss) + self.moe_lambda * total_router_loss
             total_loss += val_loss * next_tokens.size
@@ -483,7 +484,7 @@ class Transformer:
 
         if count == 0:
             return None
-        
+
         final_loss = total_loss / count
         return final_loss.item()
 
@@ -496,13 +497,14 @@ class Transformer:
         transformer_configs["vocab_size"] = self.vocab_size
         transformer_configs["embed_dim"] = self.embed_dim
         transformer_configs["dtype"] = nx.dtype_to_srt[self.dtype]
+        transformer_configs["quantized"] =  self.quantized
         a["embedding"] = self.embedding.to_dict()
         blocks = []
         for block in self.blocks:
             blocks.append(block.to_dict())
         a["blocks"] = blocks
         return a
-    
+
     @classmethod
     def from_dict(cls,thing:dict[str, Any]) -> "Transformer":
         configs = thing["transformer_configs"]
@@ -512,12 +514,12 @@ class Transformer:
         for block in raw_blocks:
             a = TransformerBlock.from_dict(block)
             blocks.append(a)
-    
+
         transformer = cls(configs, blocks=blocks)
         transformer.embedding = Embedding.from_dict(thing["embedding"])
-        
+
         return transformer
-       
+
     def inference(self, context:Any, max_cache_len, all_caches = None,  position = 0) -> Any:
         if all_caches is None:
             all_caches = [(None, None) for _ in range(len(self.blocks))]
@@ -528,9 +530,12 @@ class Transformer:
             all_caches[idx] = (cache_k, cache_v)
             output = ff_out
 
-        scores = output @ self.embedding.lookup_table.T
+        if self.quantized:
+            scores = quantized_matmul(output, self.embedding.lookup_table.T, self.embedding.table_scale.T) #type:ignore
+        else:
+            scores = output @ self.embedding.lookup_table.T
         return scores, all_caches
-    
+
     def get_configs_str(self):
         configs = ""
         configs += f"vocab_size: {str(self.vocab_size)}" + "\n"
@@ -551,7 +556,7 @@ class Transformer:
                     ind_con += f"{key}: {val} | "
             ind_con += "\n"
             configs += ind_con
-            
+
         if similar_count == len(self.individual_block_configs):
             configs += "None\n"
         return configs

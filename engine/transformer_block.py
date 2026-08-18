@@ -1,11 +1,13 @@
+from typing import Any, Union
+
+import engine.attention as attn
 import engine.backend as nx
+import engine.initializers as init
+from engine.dropout import Dropout
 from engine.moe import MoE
 from engine.rmsnorm import RMSNorm
-from engine.dropout import Dropout
-import engine.attention as attn
-import engine.initializers as init
-from typing import Any, Union
-Attention = Union[attn.AttentionFull, attn.AttentionSWA]
+
+Attention = attn.AttentionFull | attn.AttentionSWA
 import time
 
 ATTN_TYPE = {
@@ -27,7 +29,7 @@ class TransformerBlock:
         self.ff = MoE(cf, top_k, n_experts, embed_dim, self.hidden_width, dtype=dtype, initializer=moe_init, quantized=quantized)
         self.rmsnorm1 = RMSNorm(embed_dim)
         self.rmsnorm2 = RMSNorm(embed_dim)
-    
+
     def __str__(self) -> str:
         param_count = self.count_param()
         this = {
@@ -38,7 +40,7 @@ class TransformerBlock:
         }
         # this_str = f""
         return str(this)
-    
+
     def count_param(self) -> int:
         total = 0
         total += self.ff.Wcombined.size
@@ -63,12 +65,12 @@ class TransformerBlock:
 
         rmsnorm2_out, caches_rmsnorm2 = RMSNorm._forward(attn_out, gamma2,epsilon)
 
-        rmsnorm2_out = rmsnorm2_out.astype(x.dtype) 
+        rmsnorm2_out = rmsnorm2_out.astype(x.dtype)
         ff_out, caches_ff, router_loss, normalized_histogram = MoE.forward(rmsnorm2_out, ff_configs, ff_params, quantization[1]) #type:ignore
         drop_ff_out, mask2 =  Dropout._forward(ff_out, p,is_training)
 
         ff_out = drop_ff_out + attn_out
-        
+
         masks = (mask1, mask2)
         caches = (caches_attn, caches_ff, caches_rmsnorm1, caches_rmsnorm2)
         return ff_out, masks, caches, router_loss, normalized_histogram
@@ -87,13 +89,14 @@ class TransformerBlock:
         d_attn_drop = Dropout._backward(d_attn_out, mask1, p)
         d_attn, dWqkv, dWo = ATTN_TYPE[attention]._backward(d_attn_drop, caches_attn, attn_configs, attn_params, quantization[0]) #type:ignore
 
-        d_attn = d_attn.astype(nx.float32) 
+        d_attn = d_attn.astype(nx.float32)
         d_rmsn1, d_gamma1 = RMSNorm._backward(d_attn,caches_rmsnorm1,gamma1)
 
         dx = d_rmsn1 + d_attn_out
 
         return dx, dWout, dWcombined, d_router, dWqkv,dWo, d_gamma1, d_gamma2
-    
+
+    #TODO:compiled, dtype fix, quantization
     def inference_forward(self, x, max_cache_len, cached_k=None, cached_v=None,  position=0):
         rmsnorm1_out, _ = RMSNorm._forward(x, self.rmsnorm1.gamma, self.rmsnorm1.epsilon)
         rmsnorm1_out = rmsnorm1_out.astype(x.dtype)
@@ -103,9 +106,9 @@ class TransformerBlock:
 
         rmsnorm2_out, _ = RMSNorm._forward(attn_out, self.rmsnorm2.gamma, self.rmsnorm2.epsilon)
 
-        ff_out,_,_,_ = MoE.forward(rmsnorm2_out, self.ff.configs, (self.ff.Wcombined, self.ff.Wout))
+        ff_out,_,_,_ = MoE.forward(rmsnorm2_out, self.ff.configs, (self.ff.Wcombined, self.ff.Wout, self.ff.router), self.ff.scales)
         ff_out = ff_out + attn_out
-        
+
         return ff_out, cached_k, cached_v
 
     def to_dict(self) -> dict:
@@ -121,8 +124,8 @@ class TransformerBlock:
             "ff":self.ff.to_dict(),
             "rmsnorm1":self.rmsnorm1.to_dict(),
             "rmsnorm2":self.rmsnorm2.to_dict(),
-        } 
-    
+        }
+
     @classmethod
     def from_dict(cls,thing:dict) -> "TransformerBlock":
         configs = thing["block_configs"]
@@ -134,5 +137,3 @@ class TransformerBlock:
         transformer_block.rmsnorm1 = RMSNorm.from_dict(thing["rmsnorm1"])
         transformer_block.rmsnorm2 = RMSNorm.from_dict(thing["rmsnorm2"])
         return transformer_block
-
-  

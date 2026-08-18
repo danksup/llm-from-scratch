@@ -1,18 +1,19 @@
-from engine.transformer import Transformer
-from engine.tokenizer import Tokenizer
-from engine.dataloader import DataLoader
-from engine.activations import softmax
-from helper.singleton import colorize, sleep
-import engine.optimizer as optim
-import engine.optimizer.scheduler as scheduler
-import engine.backend as nx
-from typing import Any,Union
-from pathlib import Path 
-import time
-import pickle
 import copy
-import warnings
+import pickle
+import time
 import uuid
+import warnings
+from pathlib import Path
+from typing import Any, Union
+
+import engine.backend as nx
+import engine.optimizer as optim
+from engine.activations import softmax
+from engine.dataloader import DataLoader
+from engine.optimizer import scheduler
+from engine.tokenizer import Tokenizer
+from engine.transformer import Transformer
+from helper.singleton import colorize, sleep
 
 optimizers = Union[optim.Adam, optim.AdamW, optim.SGD]
 OPTIMIZER_TYPES = (optim.Adam,optim.AdamW,optim.SGD,)
@@ -109,14 +110,14 @@ class Session:
             self.configs_str["create_checkpoint"] = "disabled because save is false"
 
         if "disable_compile" in self.configs_str:
-            if nx.backend == "MLX": 
+            if nx.backend == "MLX":
                 if self.configs_str["disable_compile"] :
                     self.configs_str["disable_compile"] = colorize("True", "red")
                     nx._nx.disable_compile() #type:ignore
             else:
                 self.configs_str["disable_compile"] = "not available for current backend"
-    
-        if isinstance(init_optimizer, bool) and init_optimizer: 
+
+        if isinstance(init_optimizer, bool) and init_optimizer:
             optimizer_class = OPTIMIZERS[self.configs["optimizer"].lower()]
             schedule = self.configs["optimizer_args"]["scheduler"]
             if schedule is not None:
@@ -125,11 +126,11 @@ class Session:
                     if schedule not in SCHEDULER:
                         raise ValueError(f"invalid scheduler {schedule}. valid schedulers: {", ".join(SCHEDULER.keys())}")
                     self.configs["optimizer_args"]["scheduler"] = SCHEDULER[schedule]
-                
+
                 if self.configs["optimizer_args"]["min_lr"] is None:
                     self.configs["optimizer_args"]["min_lr"] = self.configs["optimizer_args"]["lr"] / 1e2
                     self.configs_str["optimizer_args"]["min_lr"] = self.configs["optimizer_args"]["lr"] / 1e2
-            else: 
+            else:
                 self.configs["optimizer_args"].pop("min_lr")
             self.optimizer = optimizer_class(**self.configs["optimizer_args"])
         elif isinstance(init_optimizer, OPTIMIZER_TYPES):
@@ -152,7 +153,7 @@ class Session:
     def train(self,dataloader:DataLoader,patience:int=10, display_message:bool=True, savefile_name:str=""):
         if display_message:
             print("[training]              ")
-            print(self)   
+            print(self)
         epoch = 0
         best_val_loss = float('inf')
         validate_every = self.configs["validate_every"]
@@ -163,7 +164,7 @@ class Session:
                 epoch = i
                 assert self.optimizer, "optimizer doesnt exist"
                 train = self.transformer.train(dataloader, self.optimizer, self.configs["epochs"], max_step=self.configs["max_step"], eval_every=self.configs["eval_every"], microbatch_size=self.configs["microbatch_size"])
-                
+
                 final_loss = 0.0
                 total_histograms = None
                 total_steps = 0
@@ -202,7 +203,7 @@ class Session:
                 if total_histograms is not None:
                     for i in range(len(total_histograms)):
                         total_histograms[i] /= total_steps
-                end = time.perf_counter()   
+                end = time.perf_counter()
                 time_ = end-start
 
                 display_every = max(1, self.configs["epochs"] // 10)
@@ -210,9 +211,9 @@ class Session:
                 if display_message and( i % display_every == 0 or i == self.configs["epochs"] - 1):
                     if val_loss is None:
                         if not dataloader.validation_files:
-                            val_loss = 'no validation' 
+                            val_loss = 'no validation'
                         else:
-                            val_loss = 'validation is skipped because something is wrong' 
+                            val_loss = 'validation is skipped because something is wrong'
 
                     if hasattr(dataloader, "_DataLoader__cow_factor"):
                         cow_factor = dataloader._DataLoader__cow_factor #type:ignore
@@ -255,7 +256,7 @@ class Session:
             if self.configs["save"] and self.configs["create_checkpoint"]:
                 self.save(f"RuntimeError_save_{self.session_id}")
             raise
-    
+
     def inference(self, context:Any, temperature=0.8, top_k=3, top_p=0.9, n=100, mem_size=16, penalty:float=.05) -> Any:
         all_caches = None
         position = 0
@@ -301,7 +302,7 @@ class Session:
             logits = logits.at[..., mem_unique].subtract(mem_count * penalty)
             # logits[...,mem_unique] -= mem_count * penalty
 
-        probs = softmax(logits[0, -1]/temperature) 
+        probs = softmax(logits[0, -1]/temperature)
         # print(logits.shape)
 
         #top k
@@ -315,7 +316,7 @@ class Session:
         sorted_indices = top_indices[sorted_order]
         cum = nx.cumsum(sorted_probs)
         mask = cum <= top_p
-    
+
         cutoff = int(nx.sum(mask))
         cutoff = min(cutoff + 1, len(sorted_probs))
         mask[0] = True
@@ -347,7 +348,7 @@ class Session:
            f.write(b"RAM2N")
            f.write((1).to_bytes(4, "little"))
            pickle.dump(session, f)
-    
+
     @classmethod
     def load(cls, filepath:str) -> "Session":
         """
@@ -366,13 +367,13 @@ class Session:
         optimizer_class = OPTIMIZERS[configs["optimizer"]]
         optimizer = optimizer_class.from_dict(session["optimizer"])
         session_id = session["session_id"]
-        
+
         return  cls(transformer, tokenizer, optimizer, configs=configs, session_id=session_id)
-    
+
     @classmethod
     def create_checkpoint(cls, to_checkpoint:"Session",) -> "Session":
         transformer_checkpoint = Transformer.create_checkpoint(to_checkpoint.transformer)
         tokenizer_checkpoint = Tokenizer.from_dict(to_checkpoint.tokenizer.to_dict())
-        optimizer = to_checkpoint.optimizer.from_dict(to_checkpoint.optimizer.to_dict(to_checkpoint.configs["weights_only"]))        
+        optimizer = to_checkpoint.optimizer.from_dict(to_checkpoint.optimizer.to_dict(to_checkpoint.configs["weights_only"]))
         checkpoint = cls(transformer=transformer_checkpoint, tokenizer = tokenizer_checkpoint, init_optimizer=optimizer)
         return checkpoint

@@ -1,10 +1,11 @@
-import engine.backend as nx
 from typing import Any
+import engine.backend as nx
+
 
 def quantize(w:Any, dtype, axis:int=-1, keepdims=True):#, type:Literal['symmetric', 'asymetric']):
     if nx.issubdtype(w.dtype, nx.integer):
         return w
-    
+
     info = nx.iinfo(dtype)
     q_min = info.min
     q_max = info.max
@@ -25,9 +26,9 @@ def quantize(w:Any, dtype, axis:int=-1, keepdims=True):#, type:Literal['symmetri
 def dequantize(quantized_w, scale:Any, dtype=nx.float32, zero_point:int=0):
     if nx.issubdtype(quantized_w.dtype, nx.floating) or scale is None:
         return quantized_w
-    
+
     q_float = quantized_w.astype(dtype)
-   
+
     return (q_float - zero_point) * scale
 
 def quantized_matmul(a, quantized_w, scale):

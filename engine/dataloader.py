@@ -1,10 +1,12 @@
-from engine.tokenizer import Tokenizer
-import engine.backend as nx
-from typing import Any, Iterator,Literal
-import random
-from pathlib import Path
-from multiprocessing import Process, Queue
 import array
+import random
+from multiprocessing import Process, Queue
+from pathlib import Path
+from typing import Any, Iterator, Literal
+
+import engine.backend as nx
+from engine.tokenizer import Tokenizer
+
 
 class DataLoader:
     def __init__(self, filepath:str, tokenizer:Tokenizer, context_size:int=1024, batch_size:int=10, train_split:float|Literal['all']=0.9, *, __test_mode:bool = False) -> None:
@@ -23,14 +25,14 @@ class DataLoader:
 
         assert isinstance(train_split, (float,int)) or train_split == "all", f"provide either float or \"all\" for train_split argument. got {train_split} of type {type(train_split)} instead"
 
-        if isinstance(train_split, (float,int)): 
+        if isinstance(train_split, (float,int)):
             assert 0 < train_split <= 1.0, f"provide a value within (0,1] for train split. got {train_split} instead"
 
         if train_split == "all":
             train_split = 1.0
 
         train_files, validation_files = self.split_files(filepath, train_split)
-        
+
         assert len(train_files) > 0, f"train_split ({train_split}) is too small. 0 files were allocated for training."
 
         self.train_files = train_files
@@ -49,7 +51,7 @@ class DataLoader:
     def get_files(filepath:str="data"):
         path = Path(filepath)
         files = []
-        
+
         for file in path.iterdir():
             if file.is_file() and file.suffix in [".txt", ".tokenized"]:
                 files.append(file)
@@ -63,21 +65,21 @@ class DataLoader:
     def get_tokenized_size(self, file:Path):
         if file.suffix != ".tokenized":
             raise ValueError("only for tokenized files (with .tokenized)")
-        
+
         token_size = 2 if self.type_code == "H" else 4
         header_size = 29
         return  (file.stat().st_size - header_size) // token_size
 
     def get_token_sizes(self, files:list[Path]|None= None, strict:bool=False):
         total_tokens = 0
-        
+
         if files is None:
             files = self.train_files + self.validation_files
 
         if strict:
             if not self.all_tokenized(files):
                 raise ValueError("only tokenized files are allowed.")
-            
+
         for file in files:
             if file.suffix == ".tokenized":
                 total_tokens += self.get_tokenized_size(file)
@@ -110,14 +112,14 @@ class DataLoader:
             if distance_take < distance_no:
                 if i == sorted_sizes[-1] and split_value < 1.0:
                     validate_files.append(files[i])
-                    break   
-                train_files.append(files[i])  
+                    break
+                train_files.append(files[i])
                 cum = take
-            else: 
+            else:
                 validate_files.append(files[i])
 
         return train_files, validate_files
-        
+
     @staticmethod
     def stream_file(files:list[Path], permutation:list[int]) -> Iterator[Path]:
         for idx in permutation:
@@ -144,7 +146,7 @@ class DataLoader:
                                 break
                     yield chunk
 
-        elif file.suffix == ".tokenized":                
+        elif file.suffix == ".tokenized":
             with open(file, "rb") as f:
                 magic = f.read(9)
                 if magic != b"tokenized":
@@ -180,7 +182,7 @@ class DataLoader:
                     leftover_temp_context = None
 
                 if isinstance(chungus, str):
-                    chungus = self.tokenizer.encode(chungus)  
+                    chungus = self.tokenizer.encode(chungus)
 
                 if context is not None and len(chungus) < needed_T:
                     context.extend(chungus)
@@ -194,12 +196,12 @@ class DataLoader:
                     else:
                         chungus = context
                         context = None
-                
+
                 while len(chungus) >= needed_T:
                     need = needed_T - len(context) if context is not None else needed_T
                     if context is not None:
-                        context.extend( chungus[0:need])  
-                    else: 
+                        context.extend( chungus[0:need])
+                    else:
                         context = chungus[0:need]
                     # if self.__test_mode:
                     #     yield self.__function_that_turns_n_tokens_in_random_sequence_into_the_token_for_the_word_cow_randomly(context)
@@ -218,12 +220,12 @@ class DataLoader:
         permutation = [i for i in range(len(files))]
         random.shuffle(permutation)
         for token in self.stream_token(files, permutation, chunk_size=chunk_size):
-            if token is None: 
+            if token is None:
                 continue
             if isinstance(token, array.array):
                 token = token.tolist()
-            context_batches.append(token[:-1]) 
-            target_batches.append(token[1:]) 
+            context_batches.append(token[:-1])
+            target_batches.append(token[1:])
 
             if len(context_batches) == self.batch_size:
                 yield context_batches,target_batches
@@ -285,14 +287,14 @@ class DataLoader:
         return total_tokens // self.context_size // self.batch_size // microbatch_size
 
     def __function_that_turns_n_tokens_in_random_sequence_into_the_token_for_the_word_cow_randomly(self, token):
-        self.__cow_factor = min(getattr(self, "__cow_factor", 0.1), 0.5) 
+        self.__cow_factor = min(getattr(self, "__cow_factor", 0.1), 0.5)
         if random.random() < self.__cow_factor:
-            cow  = self.tokenizer.encode("cow")  
+            cow  = self.tokenizer.encode("cow")
             len_token = len(token)
             if len(token) == len(cow):
                 return cow
             else:
-                n_cow_base =  max(len_token//8, 1) 
+                n_cow_base =  max(len_token//8, 1)
                 considering_cow_factor = n_cow_base + int(n_cow_base * self.__cow_factor)
                 how_much = random.randint(0, considering_cow_factor)
                 cow_length = len(cow)
@@ -302,12 +304,12 @@ class DataLoader:
 
                 for _ in range(how_much):
                     random_place = random.randint(0, len_token - 1 - cow_length)
-                    
+
                     if token[random_place:random_place+cow_length] == cow and (token[random_place - cow_length:random_place] != cow if random_place > (cow_length-1) else True):
                         self.__cow_factor += 0.05
                     else:
                         for cow_piece in range(cow_length):
-                            token[random_place+cow_piece] = cow[cow_piece] 
+                            token[random_place+cow_piece] = cow[cow_piece]
         else:
             self.__cow_factor += 0.01
         return token

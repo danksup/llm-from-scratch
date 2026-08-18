@@ -1,5 +1,6 @@
-import engine.backend as nx
 from typing import Any
+import engine.backend as nx
+
 
 class RMSNorm:
     def __init__(self, embed_dim:int, epsilon:float=1e-5) -> None:
@@ -14,13 +15,13 @@ class RMSNorm:
         gamma = trainable weight. shape (D,)\n
         epsilon = very small value to prevent division by 0
         '''
-        x32 = x.astype(nx.float32) 
+        x32 = x.astype(nx.float32)
         rms = nx.sqrt(nx.mean(x32 * x32, axis=-1, keepdims=True) + epsilon)
         normalized = x32 / rms
         rmsnorm = gamma * normalized
         caches = (normalized, rms, x32)
         return rmsnorm, caches
-    
+
     @staticmethod
     def _backward(gradient:nx.ArrayLike, caches:tuple[Any,...], gamma:nx.ArrayLike) -> tuple[nx.ArrayLike,...]:
         normalized, rms, x32  = caches
@@ -31,14 +32,14 @@ class RMSNorm:
         dx = (dx_norm - (normalized / d) * sum_term) / rms
 
         return dx, d_gamma
-    
+
     def to_dict(self)-> dict[str, Any]:
         return {
             "gamma":self.gamma.tolist(),
         }
-    
+
     @classmethod
-    def from_dict(cls, thing:dict[str, Any]) -> "RMSNorm": 
+    def from_dict(cls, thing:dict[str, Any]) -> "RMSNorm":
         rmsnorm = cls(len(thing["gamma"]))
         rmsnorm.gamma = nx.array(thing["gamma"],dtype=nx.float32)
 

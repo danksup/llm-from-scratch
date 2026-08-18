@@ -1,9 +1,10 @@
+import json
+import pickle
+import uuid
 from collections import Counter
 from pathlib import Path
 from typing import Any
-import pickle
-import json
-import uuid
+
 
 class Tokenizer:
     def __init__(self, target_vocab_size= 1024, tokenizer_id:uuid.UUID|None=None):
@@ -51,7 +52,7 @@ class Tokenizer:
         tokenized.append(self.vocab["</w>"])
         return tokenized
 
-    @staticmethod 
+    @staticmethod
     def get_word_counts(tokenized_words:list[list[int]]) -> dict[tuple[int,...],int]:
         """
         count the frequency of each tokenized word in a list
@@ -61,15 +62,15 @@ class Tokenizer:
             tword = tuple(tokenized_word)
             counter[tword] = counter.get(tword, 0) + 1
         return counter
-    
+
     @staticmethod
     def get_pairs(tokenized_word:tuple[int, ...] | list[int]):
         '''
-        yield adjacent pairs of a tokenized word. idk why lazily. maybe because of old implementation, then i didnt bother or forgot to change this. 
+        yield adjacent pairs of a tokenized word. idk why lazily. maybe because of old implementation, then i didnt bother or forgot to change this.
         '''
         for i in range(len(tokenized_word) - 1):
             yield (tokenized_word[i], tokenized_word[i + 1])
-    
+
     @staticmethod
     def get_pair_counts( word_counts:dict[tuple[int,...],int]) -> Counter[tuple[int,int]]:
         """
@@ -94,10 +95,10 @@ class Tokenizer:
     def build_pair_index(word_counts:dict[tuple[int,...],int]) -> tuple[Counter[tuple[int,int]], dict[tuple[int,int],set[tuple[int,...]]]]:
         '''
         for each key of tokenized word in `word_count`, get the adjacent pairs.\n
-        for each adjacent pairs, 
+        for each adjacent pairs,
             count the frequency of the pair using `Counter()`
             get all words that have the pair
-        
+
         ex:
             word_counts = {(3,4,8,8,7,5):1,(3,4,9,7,5):1}
             then `get_pairs` will be (3,4),(4,8),(8,8),(8,7),(7,5),(3,4),(4,9),(9,7) combined
@@ -109,7 +110,7 @@ class Tokenizer:
                 Counter[(7,5)] = 2,
             and `pair_to_words` will be:
                 {(3,4): set((3,4,8,8,7,5),(3,4,9,7,5)), (4,8): set((3,4,8,8,7,5)),... }
-        
+
         returns both `counts:Counter` and `pair_to_words:dict`
         '''
         counts = Counter()
@@ -120,7 +121,7 @@ class Tokenizer:
                 if pair not in pair_to_words:
                     pair_to_words[pair] = set()
                 pair_to_words[pair].add(word)
-        
+
         return counts, pair_to_words
 
     @staticmethod
@@ -142,7 +143,7 @@ class Tokenizer:
 
             if not pair_to_words[pair]:
                 pair_to_words.pop(pair)
-    
+
     @staticmethod
     def add_word(word:tuple[int,...], freq:int, pair_counts:Counter[tuple[int,...]], pair_to_words:dict[tuple[int,...],set[tuple[int,...]]]):
         """
@@ -150,7 +151,7 @@ class Tokenizer:
         because we add a word, we need to update the pair frequencies based on the frequency of the tokenized word. this mutates the `pair_counts` dict.
         """
         word_pairs = list(Tokenizer.get_pairs(word))
-        
+
         for pair in word_pairs:
             pair_counts[pair] += freq
 
@@ -159,7 +160,7 @@ class Tokenizer:
                 pair_to_words[pair] = set()
 
             pair_to_words[pair].add(word)
-    
+
     @staticmethod
     def merge(word:list[int] | tuple[int,...], best_pair, new_id) -> list[int]:
         '''
@@ -218,7 +219,7 @@ class Tokenizer:
         global_word_count = {}
         total_char = 0
         for batch in self.stream_corpus(filepath, batch_size):
-            total_char += len(batch) 
+            total_char += len(batch)
             self.init_vocab(batch)
             words = [self.word_to_ids(word) for word in batch.split()]
 
@@ -231,7 +232,7 @@ class Tokenizer:
                     global_word_count[key] = global_word_count.get(key, 0) + val
 
         pair_counts, pair_to_words = self.build_pair_index(global_word_count)
-        while len(self.vocab) < self.target_vocab_size:     
+        while len(self.vocab) < self.target_vocab_size:
             if not pair_counts:
                 break
             best_pair = pair_counts.most_common(1)[0][0]
@@ -252,7 +253,7 @@ class Tokenizer:
             self.vocab[merged_best] = len_vocab
             self.id_to_token[len_vocab] = merged_best
         self.total_char_raw = total_char
-        
+
     def encode(self, text: str) -> list[int]:
         words = [self.word_to_ids(word) for word in text.split()]
 
@@ -293,7 +294,7 @@ class Tokenizer:
 
         decoded = decoded.replace("</w>", " ")
         return decoded
-    
+
     def to_dict(self) -> dict[str,dict[Any,Any]]:
         vocab = {
             "merge_rank":self.merge_rank.copy(),
@@ -301,10 +302,10 @@ class Tokenizer:
             "id_to_token":self.id_to_token.copy(),
             "raw_char_size": self.total_char_raw if hasattr(self, "total_char_raw") else None,
             "tokenizer_id": self.tokenizer_id if hasattr(self, "tokenizer_id") else uuid.uuid4()
-            
+
         }
         return vocab
-    
+
     @classmethod
     def from_dict(cls,thing:dict[str,Any]) -> "Tokenizer":
         tokenizer = cls(tokenizer_id = thing.get("tokenizer_id", None))
@@ -315,7 +316,7 @@ class Tokenizer:
         tokenizer.total_char_raw = thing.get("raw_char_size", None)
 
         return tokenizer
-    
+
     def save(self, filename:str, to_json=False):
         tokenizer = self.to_dict()
         filename = f"tokenizer{filename}.tokenizer"
@@ -328,15 +329,15 @@ class Tokenizer:
             with open(Path(f"artifacts/tokenizer/{filename}"), "w") as f:
                 json.dump(tokenizer, f, indent=4)
             return
-        
+
         with open(Path(f"artifacts/tokenizer/{filename}"), "wb") as f:
             f.write(b"tokenizer")
             f.write((1).to_bytes(4, "little"))
             if self.tokenizer_id is not None:
                 f.write(self.tokenizer_id.bytes)
-            
+
             pickle.dump(tokenizer, f)
-    
+
     @classmethod
     def load(cls, filepath:str) -> "Tokenizer":
         with open(filepath, "rb") as f:

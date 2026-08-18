@@ -1,6 +1,8 @@
-import engine.backend as nx
 from typing import Any
+
+import engine.backend as nx
 from engine.activations import softmax
+
 
 @nx.compile
 def cross_entropy(logits:Any, target_idx):

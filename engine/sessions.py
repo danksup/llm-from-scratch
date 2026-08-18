@@ -108,11 +108,11 @@ class Session:
             self.configs_str["save"]= colorize("False", "red")
             self.configs_str["create_checkpoint"] = "disabled because save is false"
 
-
         if "disable_compile" in self.configs_str:
-            if self.configs_str["disable_compile"] and nx.backend == "MLX":
-                self.configs_str["disable_compile"] = colorize("True", "red")
-                nx._nx.disable_compile() #type:ignore
+            if nx.backend == "MLX": 
+                if self.configs_str["disable_compile"] :
+                    self.configs_str["disable_compile"] = colorize("True", "red")
+                    nx._nx.disable_compile() #type:ignore
             else:
                 self.configs_str["disable_compile"] = "not available for current backend"
     

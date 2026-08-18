@@ -3,7 +3,7 @@ from engine.activations import softmax, softmax_derivative
 from engine.activations import swish,swish_derivative
 from typing import Any, Callable
 import engine.initializers as initializer
-from engine.quantization import quantize, dequantize
+from engine.quantization import quantize, dequantize, quantized_matmul
 import math
 
 class MoE:
@@ -49,8 +49,8 @@ class MoE:
         Wcombined, Wout, router = ff_params
 
         wcombined_scale, wout_scale = quantization  #type:ignore
-        Wcombined = dequantize(Wcombined, wcombined_scale, x.dtype)
-        Wout = dequantize(Wout, wout_scale, x.dtype)
+        # Wcombined = dequantize(Wcombined, wcombined_scale, x.dtype)
+        # Wout = dequantize(Wout, wout_scale, x.dtype)
 
         top_k = min(top_k, n_experts)
         capacity = math.ceil(capacity_factor * N * top_k / n_experts)
@@ -96,13 +96,15 @@ class MoE:
         safe_gates = nx.where(valid, flatten_top_gates, nx.zeros_like(flatten_top_gates))
         expert_gate = nx.add_at(expert_gate, (flatten_top_expert_indices, safe_slot), safe_gates)
 
-        projected = expert_input @ Wcombined #(E, capacity, 2H)
+        # projected = expert_input @ Wcombined 
+        projected = quantized_matmul(expert_input, Wcombined, wcombined_scale) #(E, capacity, 2H)
         gate_half = projected[..., :H]
         value_half = projected[..., H:]
         s = swish(gate_half, x.dtype)
 
         hidden = s * value_half #(E, capacity, H) 
-        raw_output = hidden @ Wout #(E, capacity, D) 
+        # raw_output = hidden @ Wout #(E, capacity, D) 
+        raw_output = quantized_matmul(hidden, Wout, wout_scale) #(E, capacity, D) 
 
         gated_output = raw_output * expert_gate[..., None]
         final_output = gated_output[flatten_top_expert_indices, safe_slot]
@@ -121,8 +123,6 @@ class MoE:
         Wout, Wcombined = ff_params
 
         wcombined_scale, wout_scale = quantization  #type:ignore
-        Wcombined = dequantize(Wcombined, wcombined_scale, gradient.dtype)
-        Wout = dequantize(Wout, wout_scale, gradient.dtype)
         
         capacity_factor, n_experts, hidden_width, router, LAMBDA = moe_configs
         top_k = top_expert_indices.shape[1]
@@ -137,23 +137,21 @@ class MoE:
         del flatten_gradient, assignment_gradient
 
         d_gated_output = nx.zeros((n_experts, capacity, D), dtype=gradient.dtype)
-        # start = time.perf_counter()
+        
         d_gated_output = nx.add_at(d_gated_output, (flatten_top_expert_indices, safe_slot), d_masked_output)
-        # nx.eval(d_gated_output)
-        # end = time.perf_counter()
-        # print("d_gated_output", end-start)
-        del d_masked_output
 
+        del d_masked_output
 
         d_raw_output = d_gated_output * expert_gate[..., None] #(E, capacity, D) #fp16
         d_expert_gate = nx.sum(d_gated_output * raw_output, axis=-1, dtype=nx.float32,) #(E, capacity)
        
         dWout = hidden.transpose(0, 2, 1) @ d_raw_output
-        # start = time.perf_counter()
-        d_hidden = d_raw_output @ Wout.transpose(0, 2, 1) #(E,C,H) fp16
-        # nx.eval(d_hidden)
-        # end = time.perf_counter()
-        # print("d_hidden", end-start)
+
+        if wout_scale is not None:
+            wout_scale = wout_scale.transpose(0, 2, 1)
+            d_hidden = quantized_matmul(d_raw_output, Wout.transpose(0, 2, 1), wout_scale)  #(E,C,H) fp16
+        else:
+            d_hidden = d_raw_output @ Wout.transpose(0, 2, 1)
 
         del hidden, d_gated_output, Wout
 
@@ -166,18 +164,13 @@ class MoE:
 
         del projected, d_hidden, gate_half, value_half, d_gate_half, d_value_half
 
-        # start = time.perf_counter()
-        #expertinput = (E, C, D)
         dWcombined = expert_input.transpose(0, 2, 1) @ d_projected #(E,D,2H) fp16
-        # nx.eval(dWcombined)
-        # end = time.perf_counter()
-        # print("dWcombined", end-start)
 
-        # start = time.perf_counter()
-        d_expert_input = d_projected @ Wcombined.transpose(0,2,1) #(E, C, D) fp16
-        # nx.eval(d_expert_input)
-        # end = time.perf_counter()
-        # print("d_expert_input", end-start)
+        if wcombined_scale is not None:
+            wcombined_scale = wcombined_scale.transpose(0, 2, 1)
+            d_expert_input = quantized_matmul(d_projected, Wcombined.transpose(0,2,1), wcombined_scale)
+        else:
+            d_expert_input = d_projected @ Wcombined.transpose(0,2,1) #(E, C, D) fp16
 
         d_x_expert = d_expert_input[flatten_top_expert_indices, safe_slot]
         d_x_expert *= valid[...,None]
@@ -195,12 +188,10 @@ class MoE:
         d_selected_prob = (d_chosen_gate - coupling)/gate_sum #(N,K)
         d_selected_prob = d_selected_prob.reshape(-1,)
 
-
         d_router_prob = nx.zeros((N,n_experts), dtype=d_selected_prob.dtype) #fp32
         d_router_prob[assignement_tokens, flatten_top_expert_indices] = d_selected_prob
 
         del coupling, gate_sum, token_rows, selected_prob, top_gates32, d_chosen_gate,d_selected_prob, assignement_tokens, flatten_top_expert_indices
-
 
         d_avg_prob = n_experts * normalized_histogram
         d_router_prob += LAMBDA * (d_avg_prob / N)

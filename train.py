@@ -62,7 +62,7 @@ model_configs = {
     "gradient_scale":4096,
     "vocab_size": len(tokenizer1.vocab),
     "moe_lambda":0.025,
-    "quantize":False,
+    "quantize":True,
     "block_configs":{
         "ff_hidden_width": BASE_WIDTH,
         "ff_n_experts":N_EXPERTS,

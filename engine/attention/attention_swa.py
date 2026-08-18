@@ -4,7 +4,7 @@ from engine.rope import rope_forward, rope_inverse
 from typing import Any, Callable
 import engine.initializers as initializer
 from engine.rope import precompute_freqs
-from engine.quantization import quantize, dequantize
+from engine.quantization import quantize, dequantize, quantized_matmul
 
 class AttentionSWA:
     def __init__(self,embed_dim:int, n_heads:int, n_kv_heads:int=-1, W=8, dtype:Any=nx.float16, initializer:Callable=initializer.glorot_uniform, quantized:bool=False) -> None:
@@ -67,10 +67,12 @@ class AttentionSWA:
         Wqkv, Wo = params
 
         wqkv_scale, wo_scale = quantization
-        Wqkv = dequantize(Wqkv, wqkv_scale)
-        Wo = dequantize(Wo, wo_scale)
-        
-        combined = x @ Wqkv.T 
+
+        if wqkv_scale is not None:
+            wqkv_scale = wqkv_scale.T
+            combined = quantized_matmul(x, Wqkv.T, wqkv_scale)
+        else:
+            combined = x @ Wqkv.T
 
         Q = combined[..., :embed_dim] #shape: (B, T, D)
         K = combined[..., embed_dim: embed_dim + (n_kv_heads * head_dim)]  #shape: (B, T, n_kv_heads * H)
@@ -97,56 +99,39 @@ class AttentionSWA:
 
         Q = Q.reshape(B, n_kv_heads, n_rep, T, head_dim)
 
-        # start = time.perf_counter()
         Q_6d = Q[:,:,:,:,None,:] #(B, n_kv_heads, n_rep, T,1, Dh)
         windows_K_6d = windows_K[:,:,None,:,:,:] #(B, n_kv_head, 1, T, W+1, Dh)
         scores = Q_6d @ windows_K_6d.transpose(0,1,2,3,5,4) #B, n_kv_heads, n_rep, T, 1, W+1 #dtype
 
-        # nx.eval(scores)  
-        # end = time.perf_counter()
-        # print(f"scores {end-start:.5f}")
-
-        # start = time.perf_counter()
-        # print("swa scores unscaled",scores.dtype)
         scores = scores[:,:,:,:,0,:].reshape(B, -1, T, W+1)
         scores = scores.astype(nx.float32) /  nx.sqrt(head_dim, dtype=nx.float32)
         scores = nx.where(causal_mask, -nx.inf, scores)
         weights_softmax = softmax(scores) #(B, n_heads, T, W+1) #fp32
-        # print("weights softmax", weights.dtype)
 
         weights = weights_softmax.astype(x.dtype)
         weights = weights.reshape(B, n_kv_heads, n_rep, T, W+1)
-        # print("weights after cast", weights.dtype)
 
-        # nx.eval(weights)  
-        # end = time.perf_counter()
-        # print(f"scores {end-start:.5f}")
-
-        # start = time.perf_counter()
         weights_6d = weights[:,:,:,:,None,:]     #(B, n_kv_head, n_rep, T, 1, W+1)
         windows_V_6d = windows_V[:,:,None,:,:,:] #(B, n_kv_head, 1, T, W+1, Dh)
-        # output = nx.einsum("bkrtw,bktwd->bkrtd", weights, windows_V) #(B, n_kv_heads, n_rep, T, Dh)
+
         output = weights_6d @ windows_V_6d #(B,K,R,T,1,D)
-        # nx.eval(output)  
-        # end = time.perf_counter()
-        # print(f"output {end-start:.5f}")
-        
+
         output = output[:,:,:,:,0,:]
         output_concat = output.transpose(0, 3, 1, 2, 4).reshape(B, T, embed_dim)
-        output_projected = output_concat @ Wo #B,T,D #dtype
-        # print("output projected" , output_projected.dtype)
-        # print("x forward", x.dtype)
-        # print("wink forward", windows_K.dtype)
-        # print("winv forward", windows_V.dtype)
-        # print("weights forward", weights.dtype)
+        output_projected = quantized_matmul(output_concat, Wo, wo_scale) #B,T,D #dtype
+
         cache = (x, Q, windows_K, windows_V, weights_softmax, output_concat)
         return output_projected, cache
     
     @staticmethod
-    def _backward(gradient:nx.ArrayLike, caches:tuple[Any,...], attn_configs:tuple[Any,...], attn_params: tuple[Any,...]) :#-> tuple[nx.ArrayLike,...]:
+    def _backward(gradient:nx.ArrayLike, caches:tuple[Any,...], attn_configs:tuple[Any,...], attn_params: tuple[Any,...], quantization) :#-> tuple[nx.ArrayLike,...]:
         x, Q, windows_K, windows_V, weights_softmax, output_concat = caches
         embed_dim, n_kv_heads, n_heads, n_rep, head_dim, W, freqs = attn_configs
         Wqkv, Wo = attn_params
+
+        wqkv_scale, wo_scale = quantization
+        Wqkv = dequantize(Wqkv, wqkv_scale, x.dtype)
+        Wo = dequantize(Wo, wo_scale, x.dtype)
 
         B, T, D = x.shape
         W = min(W, T-1)
@@ -154,28 +139,15 @@ class AttentionSWA:
         weights_softmax = weights_softmax.reshape(B, n_kv_heads, n_rep, T, W+1)
         weights = weights_softmax.astype(x.dtype)
         d_output_concat = nx.einsum("btd,fd->btf",gradient, Wo) #(B,T,D)
-        # print("doutput", d_output_concat.dtype)
-        # print("wo", Wo.dtype)
+
         d_output = d_output_concat.reshape(B, T, n_heads, head_dim).transpose(0, 2, 1, 3) #(B, n_heads, T,  Dh)
         d_output_split = d_output.reshape(B, n_kv_heads,n_rep,T, head_dim)
-        # print("d_output_split",d_output_split.dtype)
-        # start = time.perf_counter()
+
         d_output_split_6d = d_output_split[:,:,:,:,None,:] #B, n_kv_heads, n_rep, T, 1, Dh
         windows_V_6d = windows_V[:,:,None,:,:,:] #(B, n_kv_head, 1, T, W+1, Dh)
         d_weights = d_output_split_6d @ windows_V_6d.transpose(0,1,2,3,5,4) #B, n_kv_heads, n_rep,T, 1, W+1
         
-        # print("dweights",d_weights.dtype)
-        # print("winv",windows_V.dtype)
-
-        # nx.eval(d_weights)  
-        # end = time.perf_counter()
-        # print(f"d_weights {end-start:.5f}")
-
-        # start = time.perf_counter()
         d_windows_V = nx.einsum("bkrtw,bkrtd->bktwd", weights, d_output_split) #(B, n_kv_head, T , W+1, Dh)
-        # nx.eval(d_windows_V)  
-        # end = time.perf_counter()
-        # print(f"d_windows_V {end-start:.5f}")
 
         d_weights = d_weights[:,:,:,:,0,:].astype(nx.float32)
         d_scores = softmax_derivative(weights_softmax, d_weights) / nx.sqrt(head_dim, dtype=nx.float32) #(B, n_kv_heads, n_rep, T, W+1)
@@ -183,34 +155,21 @@ class AttentionSWA:
         
         del d_output_split, d_output_split_6d, d_weights, windows_V_6d
 
-        # start = time.perf_counter()
         d_scores_6d = d_scores[:,:,:,:,None,:] #(B, n_kv_heads, n_rep, T, 1,W+1)
         windows_K_6d = windows_K[:,:,None,:,:,:] #(B, n_kv_head, 1, T, W+1, Dh)
         dQ = d_scores_6d @ windows_K_6d
-        # nx.eval(dQ)  
-        # end = time.perf_counter()
-        # print(f"dQ {end-start:.5f}")
 
         dQ = dQ.reshape(B, -1, T, head_dim)
 
-        # start = time.perf_counter()
         d_windows_K = nx.einsum("bkrtw,bkrtd->bktwd", d_scores, Q) #(B,n_kv_heads,T, W+1, Dh)
-        # nx.eval(d_windows_K)  
-        # end = time.perf_counter()
-        # print(f"d_windows_K {end-start:.5f}")
 
         del Q, d_scores, d_scores_6d, windows_K_6d,  windows_K
 
-        # start = time.perf_counter()
         d_padded_K = nx.zeros((B, n_kv_heads, T+W, head_dim), dtype=d_windows_K.dtype)
         d_padded_V = nx.zeros((B, n_kv_heads, T+W, head_dim), dtype=d_windows_V.dtype)
         for slot in range(W + 1):
             d_padded_K[:, :, slot:slot + T, :] += d_windows_K[:, :, :, slot, :]
             d_padded_V[:, :, slot:slot + T, :] += d_windows_V[:, :, :, slot, :]
-        
-        # nx.eval(d_padded_K, d_padded_V)  
-        # end = time.perf_counter()
-        # print(f"padded loop {end-start:.5f}")
 
         dK = d_padded_K[:, :, W:, :]
         dV = d_padded_V[:, :, W:, :]
@@ -224,27 +183,19 @@ class AttentionSWA:
         dK = dK.transpose(0, 2, 1, 3).reshape(B, T, n_kv_heads * head_dim)
         dV = dV.transpose(0, 2, 1, 3).reshape(B, T,  n_kv_heads * head_dim)
 
-        # print("dq after rope", dQ.dtype)
-        # print("dv", dV.dtype)
-        # print("dk", dK.dtype)
-
         dQKV = nx.concatenate([dQ, dK,dV], axis=-1) #(B,T, D + 2 * (n_kv_heads * Dh))
         DQKV = dQKV.reshape(-1, embed_dim + 2 * (n_kv_heads * head_dim))
         del dQ, dK, dV
 
         X = x.reshape(-1, embed_dim)
         dWqkv = DQKV.T @ X
-        # print("dwqkv",dWqkv.dtype)
-        # print("x", X.dtype)
-        # dWqkv = dWqkv.astype(nx.float32)
 
         H = output_concat.reshape(-1, embed_dim)
         G = gradient.reshape(-1, embed_dim)
 
         dWo = H.T @ G
         dx = dQKV @ Wqkv
-        # print("dwo", dWo.dtype)
-        # print("dx", dx.dtype
+
         del x, output_concat, freqs, Wqkv, Wo
         return dx,dWqkv,dWo
     

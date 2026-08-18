@@ -4,7 +4,7 @@ from engine.rope import rope_forward, rope_inverse
 from typing import Any, Callable
 import engine.initializers as initializer
 from engine.rope import precompute_freqs
-from engine.quantization import quantize, dequantize
+from engine.quantization import quantize, dequantize, quantized_matmul
 
 class AttentionFull:
     def __init__(self,embed_dim:int, n_heads:int, n_kv_heads:int=-1,  dtype:Any=nx.float16,  initializer:Callable=initializer.glorot_uniform, quantized:bool=False) -> None:
@@ -70,10 +70,12 @@ class AttentionFull:
         Wqkv, Wo = attn_params
 
         wqkv_scale, wo_scale = quantization
-        Wqkv = dequantize(Wqkv, wqkv_scale, x.dtype)
-        Wo = dequantize(Wo, wo_scale, x.dtype)
 
-        combined =  x @ Wqkv.T  # dtype
+        if wqkv_scale is not None:
+            wqkv_scale = wqkv_scale.T
+            combined = quantized_matmul(x, Wqkv.T, wqkv_scale)
+        else:
+            combined =  x @ Wqkv.T  # dtype
 
         Q = combined[..., :embed_dim] #(B, T, D)
         K = combined[..., embed_dim: embed_dim + (n_kv_heads * head_dim)]  #(B, T, n_kv_heads * H)
@@ -85,14 +87,13 @@ class AttentionFull:
         V = V.reshape(B, T, n_kv_heads, head_dim).transpose(0,2,1,3)
         Q = rope_forward(Q, freqs)
         K = rope_forward(K, freqs)
-        # print("qrope", Q.dtype)
 
         Q = Q.reshape(B,n_kv_heads, n_rep, T, head_dim)
         scores = nx.einsum("bkrQh,bkKh->bkrQK",Q, K) #(B, n_kv_heads, n_rep, Tq, Tk)
-        # print("scores pre", scores.dtype)
+        
         scores = scores.astype(nx.float32) / nx.sqrt(head_dim, dtype=nx.float32) #type:ignore
         scores = nx.where(causal_mask, -1e9, scores)
-        # print("scores post", scores.dtype)
+        
         weights = softmax(scores)
         weights = weights.astype(x.dtype)
 
@@ -100,8 +101,8 @@ class AttentionFull:
         
         output = output.reshape(B, -1, T, head_dim)
         output_concat = output.transpose(0, 2, 1, 3).reshape(B, T, embed_dim)
-        output_projected = output_concat @ Wo #BTD
-        # print("proj", output_projected.dtype)
+        output_projected = quantized_matmul(output_concat, Wo, wo_scale) #BTD
+
         cache =  (x, Q, K, V, weights, output_concat)
         return output_projected, cache
     
@@ -112,11 +113,15 @@ class AttentionFull:
         Wqkv, Wo = attn_params
 
         wqkv_scale, wo_scale = quantization #type:ignore
-        Wqkv = dequantize(Wqkv, wqkv_scale, x.dtype)
-        Wo = dequantize(Wo, wo_scale, x.dtype)
         
         B, T, _ = x.shape
-        d_output_concat = gradient @ Wo.T #B,T,D
+
+        if wo_scale is not None:
+            wo_scale = wo_scale.T
+            d_output_concat = quantized_matmul(gradient, Wo.T, wo_scale) #B,T,D
+        else:
+            d_output_concat = gradient @ Wo.T
+
         d_output = d_output_concat.reshape(B, T, n_heads, head_dim).transpose(0, 2, 1, 3)
         d_output = d_output.reshape(B, n_kv_heads, n_rep, T, head_dim)
 
@@ -153,7 +158,7 @@ class AttentionFull:
         G = gradient.reshape(-1, embed_dim)
 
         dWo = H.T @ G
-        dx = dQKV @ Wqkv
+        dx = quantized_matmul(dQKV, Wqkv, wqkv_scale)
 
         # print("dx", dx.dtype)
         del x, output_concat, freqs, Wqkv, Wo

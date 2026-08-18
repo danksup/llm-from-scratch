@@ -56,6 +56,7 @@ logs:
 - int8 weight-only quantization aug 17 2026 (no benefit though...)
 
 ## Ongoing:
+- quantized matmul
 - cupy/cuda support
 - optimizing/cleanup/docs
 

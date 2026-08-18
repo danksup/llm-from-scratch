@@ -205,6 +205,7 @@ class Transformer:
         if self.quantized:
             lookup_table = dequantize(lookup_table, self.embedding.table_scale, self.dtype)
         scores = last_output @ lookup_table.T
+        del lookup_table
 
         if return_cache:
             return scores, last_output, all_masks, all_caches, total_router_loss, histograms
@@ -440,6 +441,7 @@ class Transformer:
                 if self.quantized:
                     embedding = optimized[f"embedding"]
                     self.embedding.lookup_table, self.embedding.table_scale, _ = quantize(embedding, nx.int8)
+                    del embedding
                 else:
                     self.embedding.lookup_table = optimized["embedding"].astype(self.dtype)
                 embed_acc = nx.zeros_like(embed_acc)

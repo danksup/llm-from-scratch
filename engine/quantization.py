@@ -23,9 +23,13 @@ def quantize(w:Any, dtype, axis:int=-1, keepdims=True):#, type:Literal['symmetri
     return quantized_w, scale, zero_point
 
 def dequantize(quantized_w, scale:Any, dtype=nx.float32, zero_point:int=0):
-    if nx.issubdtype(quantized_w.dtype, nx.floating):
+    if nx.issubdtype(quantized_w.dtype, nx.floating) or scale is None:
         return quantized_w
     
     q_float = quantized_w.astype(dtype)
    
     return (q_float - zero_point) * scale
+
+def quantized_matmul(a, quantized_w, scale):
+    dequant_q = dequantize(quantized_w, scale, a.dtype)
+    return a @ dequant_q

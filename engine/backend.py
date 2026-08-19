@@ -523,7 +523,7 @@ def iinfo(dtype):
 
 def quantize(w, /) -> tuple[Any,...]:
     if backend.upper() == "MLX":
-        return _nx.quantize(w, mode="affine")
+        return _nx.quantize(w, bits=8, mode="affine")
     else:
         info = _nx.iinfo(int8)
         q_min = info.min
@@ -543,7 +543,7 @@ def dequantize(w,/,scales,biases, dtype=float32):
     if scales is None:
         return w
     if backend.upper()  == "MLX":
-        return _nx.dequantize(w, scales=scales,biases=biases, mode='affine', dtype=dtype)
+        return _nx.dequantize(w, scales=scales,biases=biases,bits=8, mode='affine', dtype=dtype)
     q_float = w.astype(dtype)
     return (q_float - biases) * scales
 
@@ -555,7 +555,7 @@ def quantized_matmul(x,w,/, scales, biases, transpose=False):
 
     if backend.upper() == "MLX":
         if transpose:
-            return _nx.quantized_matmul(x, w, scales=scales,biases=biases, mode='affine', transpose=True)
+            return _nx.quantized_matmul(x, w, scales=scales,biases=biases,bits=8, mode='affine', transpose=True)
         else:
             dequant_q = dequantize(w, scales=scales, biases=biases, dtype=x.dtype)
             return x @ dequant_q

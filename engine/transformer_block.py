@@ -29,6 +29,7 @@ class TransformerBlock:
         self.ff = MoE(cf, top_k, n_experts, embed_dim, self.hidden_width, dtype=dtype, initializer=moe_init, quantized=quantized)
         self.rmsnorm1 = RMSNorm(embed_dim)
         self.rmsnorm2 = RMSNorm(embed_dim)
+        self.quantized = quantized
 
     def __str__(self) -> str:
         param_count = self.count_param()
@@ -43,11 +44,18 @@ class TransformerBlock:
 
     def count_param(self) -> int:
         total = 0
-        total += self.ff.Wcombined.size
-        total += self.ff.Wout.size
+        if self.quantized and nx.backend == "MLX":
+            total += self.ff.Wcombined.size * 4
+            total += self.ff.Wout.size * 4
+            total += self.attention.Wqkv.size * 4
+            total += self.attention.Wo.size * 4
+        else:
+            total += self.ff.Wcombined.size
+            total += self.ff.Wout.size
+            total += self.attention.Wqkv.size
+            total += self.attention.Wo.size
+
         total += self.ff.router.size
-        total += self.attention.Wqkv.size
-        total += self.attention.Wo.size
         total += self.rmsnorm1.gamma.size
         total += self.rmsnorm2.gamma.size
         return total

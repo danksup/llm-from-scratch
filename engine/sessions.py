@@ -228,7 +228,8 @@ class Session:
 
             if self.configs["save"]:
                 infer_only = "_weights_only" if self.configs["weights_only"] else ""
-                filename = f"{self.transformer.count_params()}_param_{epoch+1}_epochs{infer_only}_{self.session_id}"
+                quantized = "_quantized" if self.transformer.quantized else ""
+                filename = f"{self.transformer.count_params()}_param_{epoch+1}_epochs{infer_only}{quantized}_{self.session_id}"
                 if savefile_name == "":
                     savefile_name = filename
                 self.save(savefile_name)

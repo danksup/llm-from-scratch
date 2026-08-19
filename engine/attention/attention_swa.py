@@ -201,7 +201,7 @@ class AttentionSWA:
         return dx,dWqkv,dWo
 
     #TODO:compiled, dtype fix, quantization
-    def inference_forward(self, x, max_cache_len, freqs, cached_k=None, cached_v=None, position = 0, quantization=(None,None)):
+    def inference_forward(self, x, max_cache_len, freqs, quantization, cached_k=None, cached_v=None, position = 0):
         scale = nx.float_32(nx.sqrt(self.head_dim))
 
         wqkv_scale, wo_scale = quantization #type:ignore

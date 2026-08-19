@@ -98,13 +98,15 @@ class TransformerBlock:
 
     #TODO:compiled, dtype fix, quantization
     def inference_forward(self, x, max_cache_len, cached_k=None, cached_v=None,  position=0):
+        # print("x", x.dtype)
         rmsnorm1_out, _ = RMSNorm._forward(x, self.rmsnorm1.gamma, self.rmsnorm1.epsilon)
         rmsnorm1_out = rmsnorm1_out.astype(x.dtype)
 
-        attn_out, cached_k, cached_v = self.attention.inference_forward(rmsnorm1_out,max_cache_len, self.attention.freqs, cached_k, cached_v, position)
+        attn_out, cached_k, cached_v = self.attention.inference_forward(x=rmsnorm1_out, max_cache_len=max_cache_len,freqs= self.attention.freqs, quantization=self.attention.scales, cached_k=cached_k, cached_v= cached_v, position=position)
         attn_out = attn_out + x
 
         rmsnorm2_out, _ = RMSNorm._forward(attn_out, self.rmsnorm2.gamma, self.rmsnorm2.epsilon)
+        rmsnorm2_out = rmsnorm2_out.astype(x.dtype)
 
         ff_out,_,_,_ = MoE.forward(rmsnorm2_out, self.ff.configs, (self.ff.Wcombined, self.ff.Wout, self.ff.router), self.ff.scales)
         ff_out = ff_out + attn_out

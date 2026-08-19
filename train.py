@@ -20,7 +20,7 @@ BATCH_SIZE = 4
 BASE_WIDTH = 4 * EMBED_DIM
 N_HEADS = 8
 N_KV_HEADS = max(1, N_HEADS // 2)
-N_EXPERTS = 10
+N_EXPERTS = 16
 CF = 1.25
 VAL = 1
 TOP_K = 2
@@ -31,7 +31,7 @@ tokenizer1 = Tokenizer.load(TOKENIZER_PATH)
 
 session_configs = {
     "epochs":EPOCHS,
-    "max_step":50,
+    "max_step":500,
     "train_split": VAL,
     "max_val_step":300,
     "eval_every":1,

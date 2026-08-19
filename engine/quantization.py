@@ -33,4 +33,5 @@ def dequantize(quantized_w, scale:Any, dtype=nx.float32, zero_point:int=0):
 
 def quantized_matmul(a, quantized_w, scale):
     dequant_q = dequantize(quantized_w, scale, a.dtype)
-    return a @ dequant_q
+    res = a @ dequant_q
+    return res

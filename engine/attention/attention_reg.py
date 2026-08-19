@@ -166,9 +166,7 @@ class AttentionFull:
         return dx,dWqkv,dWo
 
     #TODO:compiled, dtype fix, quantization
-    def inference_forward(self, x, max_cache_len, freqs, cached_k=None, cached_v=None, position = 0, quantization=(None,None)):
-        scale = nx.float_32(nx.sqrt(self.head_dim))
-
+    def inference_forward(self, x, max_cache_len, freqs, quantization, cached_k=None, cached_v=None, position = 0):
         wqkv_scale, wo_scale = quantization #type:ignore
 
         if wqkv_scale is not None:
@@ -182,7 +180,7 @@ class AttentionFull:
 
         K = K.reshape(B, T, self.n_kv_heads, self.head_dim).transpose(0,2,1,3)
         K = rope_forward(K, freqs, position)
-        K = K.astype(nx.float32)
+
         if cached_k is not None :
             cached_k = nx.concatenate([cached_k, K], axis = 2)
         else:
@@ -206,13 +204,12 @@ class AttentionFull:
         Q = Q.reshape(B, T, self.n_heads, self.head_dim).transpose(0,2,1,3)
         Q = rope_forward(Q, freqs, position)
 
-        Q = Q.astype(nx.float32)
-
         repeats_cached_k = nx.repeat(cached_k, self.n_rep, axis=1 )
         repeats_cached_v = nx.repeat(cached_v, self.n_rep, axis=1 )
 
-        scores = (Q @ repeats_cached_k.transpose(0,1,3,2)) / scale
+        scores = (Q @ repeats_cached_k.transpose(0,1,3,2)).astype(nx.float32) / nx.float_32(nx.sqrt(self.head_dim))
         weights = softmax(scores)
+        weights = weights.astype(x.dtype)
         output = weights @ repeats_cached_v
         output_concat = output.transpose(0, 2, 1, 3).reshape(B, T, self.embed_dim)
         output_projected = quantized_matmul(output_concat, self.Wo, wo_scale) #BTD

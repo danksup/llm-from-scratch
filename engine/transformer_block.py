@@ -111,7 +111,7 @@ class TransformerBlock:
         rmsnorm1_out = rmsnorm1_out.astype(x.dtype)
 
         attn_quant_params = self.attention.scales + self.attention.biases
-        attn_out, cached_k, cached_v = self.attention.inference_forward(x=rmsnorm1_out, max_cache_len=max_cache_len,freqs= self.attention.freqs, quantization=self.attention.scales, cached_k=cached_k, cached_v= cached_v, position=position)
+        attn_out, cached_k, cached_v = self.attention.inference_forward(x=rmsnorm1_out, max_cache_len=max_cache_len,freqs= self.attention.freqs, quantization=attn_quant_params, cached_k=cached_k, cached_v= cached_v, position=position)
         attn_out = attn_out + x
 
         rmsnorm2_out, _ = RMSNorm._forward(attn_out, self.rmsnorm2.gamma, self.rmsnorm2.epsilon)

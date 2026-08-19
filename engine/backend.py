@@ -540,27 +540,31 @@ def quantize(w, /) -> tuple[Any,...]:
         return quantized_w, scale, zero_point
 
 def dequantize(w,/,scales,biases, dtype=float32):
-    if scales is None:
+    if issubdtype(w.dtype, floating) or scales is None:
         return w
     if backend.upper()  == "MLX":
         return _nx.dequantize(w, scales=scales,biases=biases,bits=8, mode='affine', dtype=dtype)
     q_float = w.astype(dtype)
     return (q_float - biases) * scales
 
-def quantized_matmul(x,w,/, scales, biases, transpose=False):
-    if scales is None:
+def quantized_matmul(x,w,/, scales, biases, transpose:bool|tuple=False):
+    if issubdtype(w.dtype, floating) or scales is None:
         if transpose:
-            return x @ w.T
+            if isinstance(transpose,bool):
+                return x @ w.T
+            else:
+                return x @ w.transpose(transpose)
         return x @ w
 
     if backend.upper() == "MLX":
         if transpose:
-            return _nx.quantized_matmul(x, w, scales=scales,biases=biases,bits=8, mode='affine', transpose=True)
-        else:
-            dequant_q = dequantize(w, scales=scales, biases=biases, dtype=x.dtype)
-            return x @ dequant_q
+            transpose = True
+        return _nx.quantized_matmul(x, w, scales=scales,biases=biases,bits=8, mode='affine', transpose=transpose)
     else:
         dequant_q = dequantize(w, scales=scales,biases=biases, dtype=x.dtype)
         if transpose:
-            return x @ dequant_q.T
+            if isinstance(transpose, bool):
+                return x @ dequant_q.T
+            else:
+                return x @ dequant_q.transpose(transpose)
         return x @ dequant_q

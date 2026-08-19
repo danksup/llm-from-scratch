@@ -53,10 +53,10 @@ logs:
 - fully lazy dataloader aug 10 2026
 - gradient accumulation aug 12 2026
 - prefetching encoded chunk aug 13 2026
-- int8 weight-only quantization aug 17 2026 (no benefit though...)
+- int8 weight-only quantization aug 17 2026 
 
 ## Ongoing:
-- quantized matmul
+- mlx backend to be able to use the fallback quantization
 - cupy/cuda support
 - optimizing/cleanup/docs
 

@@ -4,6 +4,7 @@ import engine.backend as nx
 
 class Embedding:
     def __init__(self, n:int, embed_dim:int, dtype=nx.float16, quantized:bool=False) -> None:
+        self.n = n
         self.embed_dim = embed_dim
         self.dtype = dtype
         init = 0.02
@@ -32,11 +33,13 @@ class Embedding:
         return embed
 
     def to_dict(self) -> dict[str, Any]:
-        lookup = {"lookuptable": self.lookup_table.tolist(), "quantized":self.quantized, "dtype":nx.dtype_to_srt[self.dtype]}
-        if self.table_scale is not None:
-            lookup["table_scale"] = self.table_scale.tolist()
+        lookup = {"n":self.n, "embed_dim":self.embed_dim, "lookuptable": self.lookup_table.tolist(), "quantized":self.quantized, "dtype":nx.dtype_to_srt[self.dtype]}
+        if self.quantized:
+            lookup["table_scale"] = self.table_scale.tolist() #type:ignore
+            lookup["bias"] = self.bias.tolist() #type:ignore
         else:
             lookup["table_scale"] = self.table_scale
+            lookup["bias"] = self.bias
         return lookup
 
     @classmethod
@@ -45,14 +48,17 @@ class Embedding:
         dtype = nx.str_to_dtype[thing["dtype"]]
         lookup_table = thing["lookuptable"]
         scale = thing["table_scale"]
-        embedding = cls(len(lookup_table), len(lookup_table[0]), dtype, is_quantized)
+        bias = thing["bias"]
+        embedding = cls(thing["n"],thing["embed_dim"], dtype, is_quantized)
 
         if is_quantized:
-            lookup_table = nx.array(lookup_table, dtype=nx.int8)
-            scale = nx.array(scale, dtype=dtype)
-            embedding.lookup_table = lookup_table
+            if nx.backend == "MLX":
+                embedding.lookup_table = nx.array(lookup_table, dtype=nx.uint32)
+            else:
+                embedding.lookup_table  = nx.array(lookup_table, dtype=nx.int8)
+            embedding.table_scale = nx.array(scale, dtype=dtype)
+            embedding.bias = nx.array(bias, dtype=dtype)
         else:
-            lookup_table = nx.array(lookup_table, dtype=dtype)
-            embedding.lookup_table = lookup_table
+            embedding.lookup_table =  nx.array(lookup_table, dtype=dtype)
 
         return embedding

@@ -4,14 +4,14 @@
 import os
 import time
 
-backend = os.environ["BACKEND"] = "auto"
-seed = os.environ["SEED"] = "100"
-
 import engine.backend as nx
 from engine.dataloader import DataLoader
 from engine.sessions import Session
 from engine.tokenizer import Tokenizer
 from engine.transformer import Transformer
+
+nx.backend = "MLX"
+nx.seed = 1
 
 EPOCHS = 1
 EMBED_DIM = 256
@@ -31,7 +31,7 @@ tokenizer1 = Tokenizer.load(TOKENIZER_PATH)
 
 session_configs = {
     "epochs":EPOCHS,
-    "max_step":10,
+    "max_step":20,
     "train_split": VAL,
     "max_val_step":300,
     "eval_every":1,

@@ -151,7 +151,7 @@ class MoE:
         dWout = hidden.transpose(0, 2, 1) @ d_raw_output
 
         if wout_scale is not None:
-            d_hidden = nx.quantized_matmul(d_raw_output, Wout, wout_scale,biases=wout_bias, transpose=True)  #(E,C,H) fp16
+            d_hidden = nx.quantized_matmul(d_raw_output, Wout, wout_scale,biases=wout_bias, transpose=(0,2,1))  #(E,C,H) fp16
         else:
             d_hidden = d_raw_output @ Wout.transpose(0, 2, 1)
 
@@ -169,7 +169,7 @@ class MoE:
         dWcombined = expert_input.transpose(0, 2, 1) @ d_projected #(E,D,2H) fp16
 
         if wcombined_scale is not None:
-            d_expert_input = nx.quantized_matmul(d_projected, Wcombined, wcombined_scale,biases=wcombined_bias, transpose=True)
+            d_expert_input = nx.quantized_matmul(d_projected, Wcombined, wcombined_scale,biases=wcombined_bias, transpose=(0,2,1))
         else:
             d_expert_input = d_projected @ Wcombined.transpose(0,2,1) #(E, C, D) fp16
 

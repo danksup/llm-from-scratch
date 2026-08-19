@@ -531,7 +531,7 @@ class Transformer:
             output = ff_out
 
         if self.quantized:
-            #TODO this becomes nan, tho the lookup table and the scale themselves arent
+            #TODO this becomes nan, tho the lookup table and the scale themselves arent (fixed)
             scores = quantized_matmul(output, self.embedding.lookup_table.T, self.embedding.table_scale.T) #type:ignore
         else:
             scores = output @ self.embedding.lookup_table.T

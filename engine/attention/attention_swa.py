@@ -39,11 +39,14 @@ class AttentionSWA:
         assert nx.isfinite(self.Wo).all(), f"non-finite detected when initializing attentipn.Wo."
 
         self.scales = (None, None)
+        self.biases = (None,None)
         self.quantized = quantized
         if quantized:
-            self.Wqkv, wqkv_scale, _ = nx.quantize(self.Wqkv)
-            self.Wo, wo_scale, _ = nx.quantize(self.Wo)
+            self.Wqkv, wqkv_scale, wqkv_bias = nx.quantize(self.Wqkv)
+            self.Wo, wo_scale, wo_bias = nx.quantize(self.Wo)
             self.scales = (wqkv_scale, wo_scale)
+            self.biases = (wqkv_bias, wo_bias)
+
 
         self.dWqkv = None
         self.dWo = None
@@ -66,10 +69,10 @@ class AttentionSWA:
         embed_dim, n_kv_heads, n_heads, n_rep, head_dim, W, freqs = configs
         Wqkv, Wo = params
 
-        wqkv_scale, wo_scale = quantization
+        wqkv_scale, wo_scale, wqkv_bias, wo_bias = quantization
 
         if wqkv_scale is not None:
-            combined = nx.quantized_matmul(x, Wqkv, wqkv_scale, transpose=True)
+            combined = nx.quantized_matmul(x, Wqkv, wqkv_scale,wqkv_bias, transpose=True)
         else:
             combined = x @ Wqkv.T
 
@@ -117,7 +120,7 @@ class AttentionSWA:
 
         output = output[:,:,:,:,0,:]
         output_concat = output.transpose(0, 3, 1, 2, 4).reshape(B, T, embed_dim)
-        output_projected = nx.quantized_matmul(output_concat, Wo, wo_scale) #B,T,D #dtype
+        output_projected = nx.quantized_matmul(output_concat, Wo, wo_scale, wo_bias) #B,T,D #dtype
 
         cache = (x, Q, windows_K, windows_V, weights_softmax, output_concat)
         return output_projected, cache
@@ -128,9 +131,10 @@ class AttentionSWA:
         embed_dim, n_kv_heads, n_heads, n_rep, head_dim, W, freqs = attn_configs
         Wqkv, Wo = attn_params
 
-        wqkv_scale, wo_scale = quantization
-        Wqkv = nx.dequantize(Wqkv, wqkv_scale, x.dtype)
-        Wo = nx.dequantize(Wo, wo_scale, x.dtype)
+        wqkv_scale, wo_scale, wqkv_bias, wo_bias = quantization
+
+        Wqkv = nx.dequantize(Wqkv, wqkv_scale,wqkv_bias, x.dtype)
+        Wo = nx.dequantize(Wo, wo_scale,wo_bias, x.dtype)
 
         B, T, D = x.shape
         W = min(W, T-1)
@@ -202,10 +206,10 @@ class AttentionSWA:
     def inference_forward(self, x, max_cache_len, freqs, quantization, cached_k=None, cached_v=None, position = 0):
         scale = nx.float_32(nx.sqrt(self.head_dim))
 
-        wqkv_scale, wo_scale = quantization #type:ignore
+        wqkv_scale, wo_scale, wqkv_bias, wo_bias = quantization #type:ignore
 
         if wqkv_scale is not None:
-            combined = nx.quantized_matmul(x, self.Wqkv, wqkv_scale, transpose=True)
+            combined = nx.quantized_matmul(x, self.Wqkv, wqkv_scale, wqkv_bias, transpose=True)
         else:
             combined =  x @ self.Wqkv.T  # dtype
         B, T, _ = x.shape
@@ -247,7 +251,7 @@ class AttentionSWA:
         weights = softmax(scores)
         output = weights @ repeats_cached_v
         output_concat = output.transpose(0, 2, 1, 3).reshape(B, T, self.embed_dim)
-        output_projected = nx.quantized_matmul(output_concat, self.Wo, wo_scale) #BTD
+        output_projected = nx.quantized_matmul(output_concat, self.Wo, wo_scale, wo_bias) #BTD
 
         return output_projected, cached_k, cached_v
 
@@ -273,8 +277,10 @@ class AttentionSWA:
 
         if self.quantized:
              attn_dict["scales"] = (self.scales[0].tolist(), self.scales[1].tolist()) #type:ignore
+             attn_dict["biases"] = (self.biases[0].tolist(), self.biases[1].tolist()) #type:ignore
         else:
              attn_dict["scales"] = self.scales
+             attn_dict["biases"] = self.biases
         return attn_dict
 
 
@@ -291,13 +297,20 @@ class AttentionSWA:
         dtype = nx.str_to_dtype[thing["dtype"]]
         is_quantized = thing["quantized"]
         scales = thing["scales"]
+        biases = thing["biases"]
 
         attention = cls(embed_dim=embed_dim, n_heads=n_heads, n_kv_heads=n_kv_heads, W=W, dtype=dtype, quantized=is_quantized)
 
         if is_quantized:
-            attention.Wqkv = nx.array(Wqkv, dtype=nx.int8)
-            attention.Wo = nx.array(Wo, dtype=nx.int8)
+            if nx.backend == "MLX":
+                attention.Wqkv = nx.array(Wqkv, dtype=nx.uint32)
+                attention.Wo = nx.array(Wo, dtype=nx.uint32)
+            else:
+                attention.Wqkv = nx.array(Wqkv, dtype=nx.int8)
+                attention.Wo = nx.array(Wo, dtype=nx.int8)
+
             attention.scales = (nx.array(scales[0], dtype=dtype), nx.array(scales[1], dtype=dtype))
+            attention.biases = (nx.array(biases[0], dtype=dtype), nx.array(biases[1], dtype=dtype))
         else:
             attention.Wqkv = nx.array(Wqkv, dtype=dtype)
             attention.Wo = nx.array(Wo, dtype=dtype)

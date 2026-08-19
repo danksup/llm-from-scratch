@@ -522,8 +522,8 @@ def iinfo(dtype):
     return _nx.iinfo(dtype)
 
 def quantize(w, /) -> tuple[Any,...]:
-    if backend == "MLX":
-        return _nx.quantize(w, mode="mxfp8") + [None]
+    if backend.upper() == "MLX":
+        return _nx.quantize(w, mode="affine")
     else:
         info = _nx.iinfo(int8)
         q_min = info.min
@@ -532,32 +532,35 @@ def quantize(w, /) -> tuple[Any,...]:
         max_abs = _nx.maximum(_nx.max(_nx.abs(w), axis=-1,keepdims=True), 1e-9)
         scale = max_abs / q_max
 
-        zero_point = 0
+        zero_point = _nx.zeros_like(scale)
 
         quantized_w = _nx.round(w / scale  + zero_point)
         quantized_w = _nx.clip(quantized_w, q_min, q_max).astype(int8)
 
         return quantized_w, scale, zero_point
 
-def dequantize(w,/,scales, dtype=float32):
+def dequantize(w,/,scales,biases, dtype=float32):
     if scales is None:
         return w
-    if backend == "MLX":
-        return _nx.dequantize(w, scales=scales, mode='mxfp8', dtype=dtype)
+    if backend.upper()  == "MLX":
+        return _nx.dequantize(w, scales=scales,biases=biases, mode='affine', dtype=dtype)
     q_float = w.astype(dtype)
-    return q_float * scales
+    return (q_float - biases) * scales
 
-def quantized_matmul(x,w,/, scales, transpose=False):
-    if backend == "MLX":
+def quantized_matmul(x,w,/, scales, biases, transpose=False):
+    if scales is None:
         if transpose:
-            return _nx.quantized_matmul(x, w, scales=scales, mode='mxfp8', transpose=True)
+            return x @ w.T
+        return x @ w
+
+    if backend.upper() == "MLX":
+        if transpose:
+            return _nx.quantized_matmul(x, w, scales=scales,biases=biases, mode='affine', transpose=True)
         else:
-            dequant_q = dequantize(w, scales, x.dtype)
+            dequant_q = dequantize(w, scales=scales, biases=biases, dtype=x.dtype)
             return x @ dequant_q
-
     else:
-        dequant_q = dequantize(w, scales, x.dtype)
+        dequant_q = dequantize(w, scales=scales,biases=biases, dtype=x.dtype)
         if transpose:
-            w = w.T
-            return x @ dequant_q
+            return x @ dequant_q.T
         return x @ dequant_q

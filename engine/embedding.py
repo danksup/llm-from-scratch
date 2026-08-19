@@ -1,5 +1,4 @@
 from typing import Any
-from uuid import NAMESPACE_X500
 
 import engine.backend as nx
 
@@ -12,8 +11,9 @@ class Embedding:
 
         self.table_scale = None
         self.quantized = quantized
+        self.bias = None
         if quantized:
-            self.lookup_table, self.table_scale, _ = nx.quantize(self.lookup_table)
+            self.lookup_table, self.table_scale, self.bias = nx.quantize(self.lookup_table)
         assert nx.isfinite(self.lookup_table).all(), f"non-finite detected when initializing embedding."
 
     def __eq__(self, value: object) -> bool:
@@ -25,9 +25,11 @@ class Embedding:
         ''' loopup and convert to the vector for each token id'''
         embed = self.lookup_table[token_list]
         # print(embed)
-        qtized = nx.dequantize(embed, scales=self.table_scale[token_list],dtype=self.dtype) if self.table_scale is not None else embed
-        # print(qtized)
-        return qtized
+        if self.quantized:
+            qtized = nx.dequantize(embed, scales=self.table_scale[token_list], biases=self.bias[token_list], dtype=self.dtype) if self.table_scale is not None else embed #type:ignore
+            # print(qtized)
+            return qtized
+        return embed
 
     def to_dict(self) -> dict[str, Any]:
         lookup = {"lookuptable": self.lookup_table.tolist(), "quantized":self.quantized, "dtype":nx.dtype_to_srt[self.dtype]}

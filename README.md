@@ -64,7 +64,6 @@ logs:
 - moe noise
 - moe router z loss
 - inference optimization 
-- inference quantization
 - conversation memory
   
 #### Maybe:

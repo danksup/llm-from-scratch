@@ -9,7 +9,6 @@ import engine.optimizer as optim
 from engine.dataloader import DataLoader
 from engine.embedding import Embedding
 from engine.losses import cross_entropy, cross_entropy_gradient
-from engine.quantization import dequantize, quantize, quantized_matmul
 from engine.transformer_block import TransformerBlock
 
 optimizers = optim.Adam | optim.AdamW | optim.SGD
@@ -204,7 +203,7 @@ class Transformer:
         last_output = output.astype(self.dtype)
         lookup_table = self.embedding.lookup_table
         if self.quantized:
-            lookup_table = dequantize(lookup_table, self.embedding.table_scale, self.dtype)
+            lookup_table = nx.dequantize(lookup_table, self.embedding.table_scale, self.dtype)
         scores = last_output @ lookup_table.T
         del lookup_table
 
@@ -344,7 +343,7 @@ class Transformer:
 
             lookup_table = self.embedding.lookup_table
             if self.quantized:
-                lookup_table = dequantize(lookup_table, self.embedding.table_scale, self.dtype)
+                lookup_table = nx.dequantize(lookup_table, self.embedding.table_scale, self.dtype)
 
             block_gradient =  batch_gradient @ lookup_table #dtype
 
@@ -354,7 +353,7 @@ class Transformer:
             current_grad = self.backward(block_gradient, all_masks, all_caches)
             current_grad = current_grad.astype(nx.float32) / self.gradient_scale
 
-            embedding_gradient = nx.zeros_like(self.embedding.lookup_table, dtype=nx.float32)
+            embedding_gradient = nx.zeros_like(lookup_table, dtype=nx.float32)
             embedding_gradient = nx.add_at(embedding_gradient, contexts, current_grad)
 
             total_embedding_gradient = embedding_gradient + d_table
@@ -393,10 +392,10 @@ class Transformer:
                     d_router = block.ff.d_router.astype(nx.float32) / self.gradient_scale / microbatch_size
                     d_gamma1 = block.rmsnorm1.d_gamma.astype(nx.float32) / self.gradient_scale / microbatch_size
                     d_gamma2 = block.rmsnorm2.d_gamma.astype(nx.float32) / self.gradient_scale / microbatch_size
-                    Wqkv = dequantize(block.attention.Wqkv, block.attention.scales[0])
-                    Wo = dequantize(block.attention.Wo, block.attention.scales[1])
-                    Wcombined = dequantize(block.ff.Wcombined, block.ff.scales[0])
-                    Wout = dequantize(block.ff.Wout, block.ff.scales[1])
+                    Wqkv = nx.dequantize(block.attention.Wqkv, block.attention.scales[0])
+                    Wo = nx.dequantize(block.attention.Wo, block.attention.scales[1])
+                    Wcombined = nx.dequantize(block.ff.Wcombined, block.ff.scales[0])
+                    Wout = nx.dequantize(block.ff.Wout, block.ff.scales[1])
                     all_network_params.extend(
                         [(f"Wqkv_{i}", Wqkv, dWqkv),
                         (f"Wo_{i}", Wo, dWo),
@@ -409,7 +408,7 @@ class Transformer:
                     del dWqkv, dWo, dWcombined, dWout, d_router, d_gamma1, d_gamma2
                     del block.attention.dWqkv, block.attention.dWo, block.ff.dWcombined, block.ff.dWout, block.ff.d_router, block.rmsnorm1.d_gamma, block.rmsnorm2.d_gamma
 
-                lookup_table = dequantize(self.embedding.lookup_table, self.embedding.table_scale)
+                lookup_table = nx.dequantize(self.embedding.lookup_table, self.embedding.table_scale)
                 all_network_params.extend([("embedding",lookup_table, embed_acc / microbatch_size)])
 
                 optimized = optimizer.step_many(all_network_params, max_step, total_epoch)
@@ -417,15 +416,15 @@ class Transformer:
                 for i,block in enumerate(self.blocks):
                     if self.quantized:
                         Wqkv = optimized[f"Wqkv_{i}"]
-                        block.attention.Wqkv, wqkv_scale, _ = quantize(Wqkv, nx.int8)
+                        block.attention.Wqkv, wqkv_scale, _ = nx.quantize(Wqkv)
                         Wo = optimized[f"Wo_{i}"]
-                        block.attention.Wo, wo_scale, _ = quantize(Wo, nx.int8)
+                        block.attention.Wo, wo_scale, _ = nx.quantize(Wo)
                         block.attention.scale = (wqkv_scale, wo_scale)
 
                         Wcombined = optimized[f"ff_wcombined_{i}"]
-                        block.ff.Wcombined, wcombined_scale, _ = quantize(Wcombined, nx.int8)
+                        block.ff.Wcombined, wcombined_scale, _ = nx.quantize(Wcombined)
                         Wout = optimized[f"ff_wout_{i}"]
-                        block.ff.Wout, wout_scale, _ = quantize(Wout, nx.int8)
+                        block.ff.Wout, wout_scale, _ = nx.quantize(Wout)
                         block.ff.scale = (wcombined_scale, wout_scale)
 
                         del Wqkv,Wo,Wcombined,Wout
@@ -441,7 +440,7 @@ class Transformer:
 
                 if self.quantized:
                     embedding = optimized[f"embedding"]
-                    self.embedding.lookup_table, self.embedding.table_scale, _ = quantize(embedding, nx.int8)
+                    self.embedding.lookup_table, self.embedding.table_scale, _ = nx.quantize(embedding)
                     del embedding
                 else:
                     self.embedding.lookup_table = optimized["embedding"].astype(self.dtype)
@@ -532,7 +531,7 @@ class Transformer:
 
         if self.quantized:
             #TODO this becomes nan, tho the lookup table and the scale themselves arent (fixed)
-            scores = quantized_matmul(output, self.embedding.lookup_table.T, self.embedding.table_scale.T) #type:ignore
+            scores = nx.quantized_matmul(output, self.embedding.lookup_table, self.embedding.table_scale, transpose=True) #type:ignore
         else:
             scores = output @ self.embedding.lookup_table.T
 

@@ -31,7 +31,7 @@ tokenizer1 = Tokenizer.load(TOKENIZER_PATH)
 
 session_configs = {
     "epochs":EPOCHS,
-    "max_step":500,
+    "max_step":1,
     "train_split": VAL,
     "max_val_step":300,
     "eval_every":1,
@@ -60,8 +60,8 @@ model_configs = {
     "dtype": nx.float16,
     "gradient_scale":4096,
     "vocab_size": len(tokenizer1.vocab),
-    "moe_lambda":0.025,
-    "quantized":True,
+    "moe_lambda":0.01,
+    "quantized":False,
     "block_configs":{
         "ff_hidden_width": BASE_WIDTH,
         "ff_n_experts":N_EXPERTS,

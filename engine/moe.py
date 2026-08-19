@@ -4,7 +4,6 @@ from typing import Any, Callable
 import engine.backend as nx
 import engine.initializers as initializer
 from engine.activations import softmax, softmax_derivative, swish, swish_derivative
-from engine.quantization import dequantize, quantize, quantized_matmul
 
 
 class MoE:
@@ -33,8 +32,8 @@ class MoE:
         self.scales = (None, None)
         self.quantized = quantized
         if quantized:
-            self.Wcombined, wcombined_scale, _ = quantize(self.Wcombined, nx.int8)
-            self.Wout, wout_scale, _ = quantize(self.Wout, nx.int8)
+            self.Wcombined, wcombined_scale, _ = nx.quantize(self.Wcombined)
+            self.Wout, wout_scale, _ = nx.quantize(self.Wout)
             self.scales = (wcombined_scale, wout_scale)
 
         self.dWcombined = None
@@ -99,14 +98,14 @@ class MoE:
         expert_gate = nx.add_at(expert_gate, (flatten_top_expert_indices, safe_slot), safe_gates)
 
         # projected = expert_input @ Wcombined
-        projected = quantized_matmul(expert_input, Wcombined, wcombined_scale) #(E, capacity, 2H)
+        projected = nx.quantized_matmul(expert_input, Wcombined, scales=wcombined_scale) #(E, capacity, 2H)
         gate_half = projected[..., :H]
         value_half = projected[..., H:]
         s = swish(gate_half, x.dtype)
 
         hidden = s * value_half #(E, capacity, H)
         # raw_output = hidden @ Wout #(E, capacity, D)
-        raw_output = quantized_matmul(hidden, Wout, wout_scale) #(E, capacity, D)
+        raw_output = nx.quantized_matmul(hidden, Wout, scales=wout_scale) #(E, capacity, D)
 
         gated_output = raw_output * expert_gate[..., None]
         final_output = gated_output[flatten_top_expert_indices, safe_slot]
@@ -150,8 +149,7 @@ class MoE:
         dWout = hidden.transpose(0, 2, 1) @ d_raw_output
 
         if wout_scale is not None:
-            wout_scale = wout_scale.transpose(0, 2, 1)
-            d_hidden = quantized_matmul(d_raw_output, Wout.transpose(0, 2, 1), wout_scale)  #(E,C,H) fp16
+            d_hidden = nx.quantized_matmul(d_raw_output, Wout, wout_scale, transpose=True)  #(E,C,H) fp16
         else:
             d_hidden = d_raw_output @ Wout.transpose(0, 2, 1)
 
@@ -169,8 +167,7 @@ class MoE:
         dWcombined = expert_input.transpose(0, 2, 1) @ d_projected #(E,D,2H) fp16
 
         if wcombined_scale is not None:
-            wcombined_scale = wcombined_scale.transpose(0, 2, 1)
-            d_expert_input = quantized_matmul(d_projected, Wcombined.transpose(0,2,1), wcombined_scale)
+            d_expert_input = nx.quantized_matmul(d_projected, Wcombined, wcombined_scale, transpose=True)
         else:
             d_expert_input = d_projected @ Wcombined.transpose(0,2,1) #(E, C, D) fp16
 

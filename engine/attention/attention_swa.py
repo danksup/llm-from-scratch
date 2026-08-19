@@ -4,7 +4,6 @@ from engine.rope import rope_forward, rope_inverse
 from typing import Any, Callable
 import engine.initializers as initializer
 from engine.rope import precompute_freqs
-from engine.quantization import quantize, dequantize, quantized_matmul
 
 class AttentionSWA:
     def __init__(self,embed_dim:int, n_heads:int, n_kv_heads:int=-1, W=8, dtype:Any=nx.float16, initializer:Callable=initializer.glorot_uniform, quantized:bool=False) -> None:
@@ -42,8 +41,8 @@ class AttentionSWA:
         self.scales = (None, None)
         self.quantized = quantized
         if quantized:
-            self.Wqkv, wqkv_scale, _ = quantize(self.Wqkv, nx.int8)
-            self.Wo, wo_scale, _ = quantize(self.Wo, nx.int8)
+            self.Wqkv, wqkv_scale, _ = nx.quantize(self.Wqkv)
+            self.Wo, wo_scale, _ = nx.quantize(self.Wo)
             self.scales = (wqkv_scale, wo_scale)
 
         self.dWqkv = None
@@ -70,8 +69,7 @@ class AttentionSWA:
         wqkv_scale, wo_scale = quantization
 
         if wqkv_scale is not None:
-            wqkv_scale = wqkv_scale.T
-            combined = quantized_matmul(x, Wqkv.T, wqkv_scale)
+            combined = nx.quantized_matmul(x, Wqkv, wqkv_scale, transpose=True)
         else:
             combined = x @ Wqkv.T
 
@@ -119,7 +117,7 @@ class AttentionSWA:
 
         output = output[:,:,:,:,0,:]
         output_concat = output.transpose(0, 3, 1, 2, 4).reshape(B, T, embed_dim)
-        output_projected = quantized_matmul(output_concat, Wo, wo_scale) #B,T,D #dtype
+        output_projected = nx.quantized_matmul(output_concat, Wo, wo_scale) #B,T,D #dtype
 
         cache = (x, Q, windows_K, windows_V, weights_softmax, output_concat)
         return output_projected, cache
@@ -131,8 +129,8 @@ class AttentionSWA:
         Wqkv, Wo = attn_params
 
         wqkv_scale, wo_scale = quantization
-        Wqkv = dequantize(Wqkv, wqkv_scale, x.dtype)
-        Wo = dequantize(Wo, wo_scale, x.dtype)
+        Wqkv = nx.dequantize(Wqkv, wqkv_scale, x.dtype)
+        Wo = nx.dequantize(Wo, wo_scale, x.dtype)
 
         B, T, D = x.shape
         W = min(W, T-1)
@@ -207,8 +205,7 @@ class AttentionSWA:
         wqkv_scale, wo_scale = quantization #type:ignore
 
         if wqkv_scale is not None:
-            wqkv_scale = wqkv_scale.T
-            combined = quantized_matmul(x, self.Wqkv.T, wqkv_scale)
+            combined = nx.quantized_matmul(x, self.Wqkv, wqkv_scale, transpose=True)
         else:
             combined =  x @ self.Wqkv.T  # dtype
         B, T, _ = x.shape
@@ -250,7 +247,7 @@ class AttentionSWA:
         weights = softmax(scores)
         output = weights @ repeats_cached_v
         output_concat = output.transpose(0, 2, 1, 3).reshape(B, T, self.embed_dim)
-        output_projected = quantized_matmul(output_concat, self.Wo, wo_scale) #BTD
+        output_projected = nx.quantized_matmul(output_concat, self.Wo, wo_scale) #BTD
 
         return output_projected, cached_k, cached_v
 

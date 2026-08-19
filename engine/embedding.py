@@ -2,8 +2,6 @@ from typing import Any
 from uuid import NAMESPACE_X500
 
 import engine.backend as nx
-from engine.quantization import dequantize, quantize
-
 
 class Embedding:
     def __init__(self, n:int, embed_dim:int, dtype=nx.float16, quantized:bool=False) -> None:
@@ -15,7 +13,7 @@ class Embedding:
         self.table_scale = None
         self.quantized = quantized
         if quantized:
-            self.lookup_table, self.table_scale, _ = quantize(self.lookup_table, nx.int8, keepdims=True)
+            self.lookup_table, self.table_scale, _ = nx.quantize(self.lookup_table)
         assert nx.isfinite(self.lookup_table).all(), f"non-finite detected when initializing embedding."
 
     def __eq__(self, value: object) -> bool:
@@ -27,7 +25,7 @@ class Embedding:
         ''' loopup and convert to the vector for each token id'''
         embed = self.lookup_table[token_list]
         # print(embed)
-        qtized = dequantize(embed, self.table_scale[token_list], self.dtype) if self.table_scale is not None else embed
+        qtized = nx.dequantize(embed, scales=self.table_scale[token_list],dtype=self.dtype) if self.table_scale is not None else embed
         # print(qtized)
         return qtized
 

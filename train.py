@@ -18,12 +18,12 @@ EMBED_DIM = 256
 CONTEXT_SIZE = 1200
 BATCH_SIZE = 4
 BASE_WIDTH = 4 * EMBED_DIM
-N_HEADS = 8
+N_HEADS = 4
 N_KV_HEADS = max(1, N_HEADS // 2)
-N_EXPERTS = 16
+N_EXPERTS = 1
 CF = 1.25
 VAL = 1
-TOP_K = 2
+TOP_K = 1
 
 CORPUS_PATH = "artifacts/dataloader"
 TOKENIZER_PATH = "artifacts/tokenizer/tokenizer32000_1351277738len.tokenizer"

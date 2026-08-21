@@ -19,13 +19,14 @@ optimizers = Union[optim.Adam, optim.AdamW, optim.SGD]
 OPTIMIZER_TYPES = (optim.Adam,optim.AdamW,optim.SGD,)
 
 DEFAULT_CONFIGS = {
-    "epochs": 100,
-    "max_step":50000,
+    "epochs": 1,
+    "max_step":5000,
     "max_val_step":"all",
     "eval_every":5,
-    "validate_every":5000,
-    "context_size": 64,
-    "batch_size": 32,
+    "validate_every":1000,
+    "context_size": 256,
+    "batch_size": 5,
+    "microbatch_size":32,
     "optimizer":"adamw",
     "train_split":.9,
     "save":True,
@@ -202,7 +203,7 @@ class Session:
 
                 if total_histograms is not None:
                     for i in range(len(total_histograms)):
-                        total_histograms[i] /= total_steps
+                        total_histograms[i] /= total_steps * self.configs["microbatch_size"]
                 end = time.perf_counter()
                 time_ = end-start
 

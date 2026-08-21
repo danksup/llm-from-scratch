@@ -449,7 +449,7 @@ class Transformer:
                 embed_acc = nx.zeros_like(embed_acc)
 
                 for i in range(len(total_histograms)):
-                    total_histograms[i] = total_histograms[i] / microbatch_size
+                    total_histograms[i] = total_histograms[i]
 
                 step += 1
 
@@ -546,6 +546,7 @@ class Transformer:
         configs += f"gradient_scale: {str(self.gradient_scale)}" + "\n"
         configs += "precision: full (float32)\n" if self.dtype == nx.float32 else f"precision: mixed precision ({self.dtype})\n"
         configs += f"quantized: {str(self.quantized)}" + "\n"
+        configs += f"moe_lambda: {str(self.moe_lambda)}" + "\n"
         configs += f"block configs: {self.block_configs}\n"
         configs += "individual block configs (only difference is shown): \n"
         similar_count = 0

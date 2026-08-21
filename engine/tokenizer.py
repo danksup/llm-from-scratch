@@ -4,7 +4,7 @@ import uuid
 from collections import Counter
 from pathlib import Path
 from typing import Any
-
+import ast
 
 class Tokenizer:
     def __init__(self, target_vocab_size= 1024, tokenizer_id:uuid.UUID|None=None):
@@ -318,36 +318,58 @@ class Tokenizer:
         return tokenizer
 
     def save(self, filename:str, to_json=False):
-        tokenizer = self.to_dict()
-        filename = f"tokenizer{filename}.tokenizer"
+        tokenizer:Any = self.to_dict()
+        filename = f"tokenizer{filename}"
 
         if to_json:
             merge_rank = {}
             for key, val in tokenizer["merge_rank"].items():
-                merge_rank[key] = val
+                merge_rank[str(key)] = val
             tokenizer["merge_rank"] = merge_rank
-            with open(Path(f"artifacts/tokenizer/{filename}"), "w") as f:
+            tokenizer["tokenizer_id"] = str(self.tokenizer_id)
+            with open(Path(f"artifacts/tokenizer/{filename}.json"), "w") as f:
                 json.dump(tokenizer, f, indent=4)
             return
 
-        with open(Path(f"artifacts/tokenizer/{filename}"), "wb") as f:
+        with open(Path(f"artifacts/tokenizer/{filename}.tokenizer"), "wb") as f:
             f.write(b"tokenizer")
             f.write((1).to_bytes(4, "little"))
-            if self.tokenizer_id is not None:
-                f.write(self.tokenizer_id.bytes)
+            f.write(self.tokenizer_id.bytes) #type:ignore
 
             pickle.dump(tokenizer, f)
 
     @classmethod
     def load(cls, filepath:str) -> "Tokenizer":
-        with open(filepath, "rb") as f:
-            magic = f.read(9)
-            if magic != b"tokenizer":
-                raise ValueError("unknown file")
-            version = int.from_bytes(f.read(4), "little")
-            tokenizer_id = f.read(16)
-            loaded = pickle.load(f)
+        path = Path(filepath)
 
-        tokenizer = cls.from_dict(loaded)
+        if path.suffix == ".tokenized":
+            with open(path, "rb") as f:
+                magic = f.read(9)
+                if magic != b"tokenizer":
+                    raise ValueError("unknown file")
+                version = int.from_bytes(f.read(4), "little")
+                tokenizer_id = f.read(16)
+                loaded = pickle.load(f)
 
-        return tokenizer
+            tokenizer = cls.from_dict(loaded)
+            return tokenizer
+
+        elif path.suffix == ".json":
+            with open(path, "r") as f:
+                loaded = json.load(f)
+
+                merge_rank = {}
+                for key,val in loaded["merge_rank"].items():
+                    merge_rank[ast.literal_eval(key)] = val
+                loaded["merge_rank"] = merge_rank
+
+                id_to_token = {}
+                for key,val in loaded["id_to_token"].items():
+                    id_to_token[int(key)] = val
+                loaded["id_to_token"] = id_to_token
+
+            tokenizer = cls.from_dict(loaded)
+            return tokenizer
+        
+        else:
+            raise ValueError("no")

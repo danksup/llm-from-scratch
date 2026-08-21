@@ -521,8 +521,8 @@ def issubdtype(arg1, arg2):
 def iinfo(dtype):
     return _nx.iinfo(dtype)
 
-def quantize(w, /) -> tuple[Any,...]:
-    if backend.upper() == "MLX":
+def quantize(w, /, *, regular:bool="False") -> tuple[Any,...]:
+    if backend.upper() == "MLX" and not regular:
         return _nx.quantize(w, bits=8, mode="affine")
     else:
         info = _nx.iinfo(int8)
@@ -539,15 +539,15 @@ def quantize(w, /) -> tuple[Any,...]:
 
         return quantized_w, scale, zero_point
 
-def dequantize(w,/,scales,biases, dtype=float32):
+def dequantize(w,/,scales,biases, dtype=float32, *, regular:bool="False"):
     if issubdtype(w.dtype, floating) or scales is None:
         return w
-    if backend.upper()  == "MLX":
+    if backend.upper()  == "MLX" and not regular:
         return _nx.dequantize(w, scales=scales,biases=biases,bits=8, mode='affine', dtype=dtype)
     q_float = w.astype(dtype)
     return (q_float - biases) * scales
 
-def quantized_matmul(x,w,/, scales, biases, transpose:bool|tuple=False):
+def quantized_matmul(x,w,/, scales, biases, transpose:bool|tuple=False, *, regular:bool="False"):
     if issubdtype(w.dtype, floating) or scales is None:
         if transpose:
             if isinstance(transpose,bool):
@@ -556,7 +556,7 @@ def quantized_matmul(x,w,/, scales, biases, transpose:bool|tuple=False):
                 return x @ w.transpose(transpose)
         return x @ w
 
-    if backend.upper() == "MLX":
+    if backend.upper() == "MLX" and not regular:
         if transpose:
             transpose = True
         return _nx.quantized_matmul(x, w, scales=scales,biases=biases,bits=8, mode='affine', transpose=transpose)

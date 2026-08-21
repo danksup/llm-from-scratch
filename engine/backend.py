@@ -524,20 +524,19 @@ def iinfo(dtype):
 def quantize(w, /, *, regular:bool=False) -> tuple[Any,...]:
     if backend.upper() == "MLX" and not regular:
         return _nx.quantize(w, bits=8, mode="affine")
-    else:
-        info = _nx.iinfo(int8)
-        q_min = info.min
-        q_max = info.max
+    info = _nx.iinfo(int8)
+    q_min = info.min
+    q_max = info.max
 
-        max_abs = _nx.maximum(_nx.max(_nx.abs(w), axis=-1,keepdims=True), 1e-9)
-        scale = max_abs / q_max
+    max_abs = _nx.maximum(_nx.max(_nx.abs(w), axis=-1,keepdims=True), 1e-9)
+    scale = max_abs / q_max
 
-        zero_point = _nx.zeros_like(scale)
+    zero_point = _nx.zeros_like(scale)
 
-        quantized_w = _nx.round(w / scale  + zero_point)
-        quantized_w = _nx.clip(quantized_w, q_min, q_max).astype(int8)
+    quantized_w = _nx.round(w / scale  + zero_point)
+    quantized_w = _nx.clip(quantized_w, q_min, q_max).astype(int8)
 
-        return quantized_w, scale, zero_point
+    return quantized_w, scale, zero_point
 
 def dequantize(w,/,scales,biases, dtype=float32, *, regular:bool=False):
     if issubdtype(w.dtype, floating) or scales is None:
@@ -560,11 +559,10 @@ def quantized_matmul(x,w,/, scales, biases, transpose:bool|tuple=False, *, regul
         if transpose:
             transpose = True
         return _nx.quantized_matmul(x, w, scales=scales,biases=biases,bits=8, mode='affine', transpose=transpose)
-    else:
-        dequant_q = dequantize(w, scales=scales,biases=biases, dtype=x.dtype)
-        if transpose:
-            if isinstance(transpose, bool):
-                return x @ dequant_q.T
-            else:
-                return x @ dequant_q.transpose(transpose)
-        return x @ dequant_q
+    dequant_q = dequantize(w, scales=scales,biases=biases, dtype=x.dtype)
+    if transpose:
+        if isinstance(transpose, bool):
+            return x @ dequant_q.T
+        else:
+            return x @ dequant_q.transpose(transpose)
+    return x @ dequant_q

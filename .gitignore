@@ -17,6 +17,9 @@ artifacts/sessions/*
 artifacts/dataloader/*
 !artifacts/dataloader/.gitkeep
 
+artifacts/tokenizer/*.json
+!artifacts/tokenizer/*.tokenizer
+
 test/*
 
 *.DS_Store

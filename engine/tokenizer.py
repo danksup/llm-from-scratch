@@ -342,7 +342,7 @@ class Tokenizer:
     def load(cls, filepath:str) -> "Tokenizer":
         path = Path(filepath)
 
-        if path.suffix == ".tokenized":
+        if path.suffix == ".tokenizer":
             with open(path, "rb") as f:
                 magic = f.read(9)
                 if magic != b"tokenizer":

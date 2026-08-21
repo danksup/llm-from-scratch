@@ -559,7 +559,8 @@ def quantized_matmul(x,w,/, scales, biases, transpose:bool|tuple=False, *, regul
         if transpose:
             transpose = True
         return _nx.quantized_matmul(x, w, scales=scales,biases=biases,bits=8, mode='affine', transpose=transpose)
-    dequant_q = dequantize(w, scales=scales,biases=biases, dtype=x.dtype)
+    
+    dequant_q = dequantize(w, scales=scales,biases=biases, dtype=x.dtype, regular=regular)
     if transpose:
         if isinstance(transpose, bool):
             return x @ dequant_q.T

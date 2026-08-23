@@ -57,6 +57,7 @@ logs:
 
 ## Ongoing:
 - mlx backend to be able to use the fallback quantization
+- byte-level BPE
 - cupy/cuda support
 - optimizing/cleanup/docs
 

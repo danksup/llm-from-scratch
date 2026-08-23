@@ -2,6 +2,8 @@
 #feel free to play with any values u see here, especially the filepath.
 
 import os
+os.environ["BACKEND"] = "mlx"
+
 import time
 
 import engine.backend as nx
@@ -10,17 +12,16 @@ from engine.sessions import Session
 from engine.tokenizer import Tokenizer
 from engine.transformer import Transformer
 
-nx.backend = "MLX"
-nx.seed = 1
+nx.set_seed(1245)
 
 EPOCHS = 1
 EMBED_DIM = 256
 CONTEXT_SIZE = 1200
-BATCH_SIZE = 4
+BATCH_SIZE = 5
 BASE_WIDTH = 4 * EMBED_DIM
 N_HEADS = 4
 N_KV_HEADS = max(1, N_HEADS // 2)
-N_EXPERTS = 1
+N_EXPERTS = 10
 CF = 1.25
 VAL = 1
 TOP_K = 1
@@ -31,7 +32,7 @@ tokenizer1 = Tokenizer.load(TOKENIZER_PATH)
 
 session_configs = {
     "epochs":EPOCHS,
-    "max_step":20,
+    "max_step":5,
     "train_split": VAL,
     "max_val_step":300,
     "eval_every":1,
@@ -47,11 +48,13 @@ session_configs = {
         "min_lr": 1e-3,
     },
     "using":os.environ.get("BACKEND"),
-    "save":True,
+    "save":False,
     "create_checkpoint":True,
     "checkpoint_every":1000,
     "weights_only": True,
-    "disable_compile":False
+    "backend": {
+        "mlx_disable_compile":False,
+    }
 }
 
 model_configs = {
@@ -61,7 +64,8 @@ model_configs = {
     "gradient_scale":4096,
     "vocab_size": len(tokenizer1.vocab),
     "moe_lambda":0.01,
-    "quantized":True,
+    "quantized":"symmetric", #here can be True, symmetric, False
+    "check_non_finite":False,
     "block_configs":{
         "ff_hidden_width": BASE_WIDTH,
         "ff_n_experts":N_EXPERTS,

@@ -288,9 +288,9 @@ class Tokenizer:
         decoded = ""
 
         for token_id in thing:
-            if int(token_id) == self.vocab["<PAD>"]:
+            if token_id == self.vocab["<PAD>"]:
                 continue
-            decoded += self.id_to_token[int(token_id)]
+            decoded += self.id_to_token[token_id]
 
         decoded = decoded.replace("</w>", " ")
         return decoded
@@ -324,7 +324,7 @@ class Tokenizer:
         if to_json:
             merge_rank = {}
             for key, val in tokenizer["merge_rank"].items():
-                merge_rank[str(key)] = val
+                merge_rank[str(list(key)).replace(" ","")] = val
             tokenizer["merge_rank"] = merge_rank
             tokenizer["tokenizer_id"] = str(self.tokenizer_id)
             with open(Path(f"artifacts/tokenizer/{filename}.json"), "w") as f:
@@ -360,7 +360,7 @@ class Tokenizer:
 
                 merge_rank = {}
                 for key,val in loaded["merge_rank"].items():
-                    merge_rank[ast.literal_eval(key)] = val
+                    merge_rank[tuple(ast.literal_eval(key))] = val
                 loaded["merge_rank"] = merge_rank
 
                 id_to_token = {}
@@ -370,6 +370,6 @@ class Tokenizer:
 
             tokenizer = cls.from_dict(loaded)
             return tokenizer
-        
+
         else:
             raise ValueError("no")

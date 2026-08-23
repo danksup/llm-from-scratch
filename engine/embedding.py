@@ -3,7 +3,7 @@ from typing import Any
 import engine.backend as nx
 
 class Embedding:
-    def __init__(self, n:int, embed_dim:int, dtype=nx.float16, quantized:bool=False) -> None:
+    def __init__(self, n:int, embed_dim:int, dtype=nx.float16, quantized:bool|str=False, *, use_symmetric=False) -> None:
         self.n = n
         self.embed_dim = embed_dim
         self.dtype = dtype
@@ -12,9 +12,10 @@ class Embedding:
 
         self.table_scale = None
         self.quantized = quantized
+        self.use_symmetric = use_symmetric
         self.bias = None
         if quantized:
-            self.lookup_table, self.table_scale, self.bias = nx.quantize(self.lookup_table)
+            self.lookup_table, self.table_scale, self.bias = nx.quantize(self.lookup_table, regular=use_symmetric)
         assert nx.isfinite(self.lookup_table).all(), f"non-finite detected when initializing embedding."
 
     def __eq__(self, value: object) -> bool:
@@ -27,23 +28,29 @@ class Embedding:
         embed = self.lookup_table[token_list]
         # print(embed)
         if self.quantized:
-            qtized = nx.dequantize(embed, scales=self.table_scale[token_list], biases=self.bias[token_list], dtype=self.dtype) if self.table_scale is not None else embed #type:ignore
+            qtized = nx.dequantize(embed, scales=self.table_scale[token_list], biases=self.bias[token_list], dtype=self.dtype, regular=self.use_symmetric) if self.table_scale is not None else embed #type:ignore
             # print(qtized)
             return qtized
         return embed
 
-    def to_dict(self) -> dict[str, Any]:
+    def to_dict(self, *, as_symmetric=False) -> dict[str, Any]:
         lookup = {"n":self.n, "embed_dim":self.embed_dim, "lookuptable": self.lookup_table.tolist(), "quantized":self.quantized, "dtype":nx.dtype_to_srt[self.dtype]}
         if self.quantized:
-            lookup["table_scale"] = self.table_scale.tolist() #type:ignore
-            lookup["bias"] = self.bias.tolist() #type:ignore
+            if as_symmetric:
+                lookup_table, table_scale, bias = nx.quantize(nx.dequantize(self.lookup_table, self.table_scale, self.bias, self.dtype), regular=as_symmetric)
+                lookup["table_scale"] = table_scale.tolist() #type:ignore
+                lookup["bias"] = bias.tolist() #type:ignore
+                lookup["lookuptable"] = lookup_table.tolist()
+            else:
+                lookup["table_scale"] = self.table_scale.tolist() #type:ignore
+                lookup["bias"] = self.bias.tolist() #type:ignore
         else:
             lookup["table_scale"] = self.table_scale
             lookup["bias"] = self.bias
         return lookup
 
     @classmethod
-    def from_dict(cls, thing:dict[str, Any]) -> "Embedding":
+    def from_dict(cls, thing:dict[str, Any],  *, use_symmetric=False) -> "Embedding":
         is_quantized = thing["quantized"]
         dtype = nx.str_to_dtype[thing["dtype"]]
         lookup_table = thing["lookuptable"]
@@ -52,7 +59,7 @@ class Embedding:
         embedding = cls(thing["n"],thing["embed_dim"], dtype, is_quantized)
 
         if is_quantized:
-            if nx.backend == "MLX":
+            if nx.backend == "MLX" and not use_symmetric:
                 embedding.lookup_table = nx.array(lookup_table, dtype=nx.uint32)
             else:
                 embedding.lookup_table  = nx.array(lookup_table, dtype=nx.int8)

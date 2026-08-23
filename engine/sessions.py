@@ -21,7 +21,7 @@ OPTIMIZER_TYPES = (optim.Adam,optim.AdamW,optim.SGD,)
 DEFAULT_CONFIGS = {
     "epochs": 1,
     "max_step":5000,
-    "max_val_step":"all",
+    "max_val_step":None,
     "eval_every":5,
     "validate_every":1000,
     "context_size": 256,
@@ -31,8 +31,8 @@ DEFAULT_CONFIGS = {
     "train_split":.9,
     "save":True,
     "create_checkpoint":False,
+    "checkpoint_every":1000,
     "weights_only": True,
-    "disable_compile":False
 }
 
 OPTIMIZERS = {
@@ -78,6 +78,15 @@ DEFAULT_OPTIMIZER_ARGS = {
         },
 }
 
+BACKEND_SPECIFICS = {
+    "MLX":{
+        "mlx_disable_compile":False,
+        "mlx_save_quantized_weights_as_symmetric":True
+    },
+    "CuPy": {},
+    "NumPy": {}
+}
+
 class Session:
     def __init__(self, transformer:Transformer, tokenizer:Tokenizer, init_optimizer:bool | optimizers = True, configs:dict | None = None, *, session_id=None):
         self.session_id = session_id
@@ -94,6 +103,18 @@ class Session:
         config_optimizer = self.configs["optimizer"].lower()
         assert config_optimizer in OPTIMIZERS, f"invalid optimizer \"{config_optimizer}\". valid optimizers: {", ".join(OPTIMIZERS.keys())}"
         self.configs["optimizer_args"] = DEFAULT_OPTIMIZER_ARGS[config_optimizer] | configs.get("optimizer_args", {})
+        self.configs["backend"] = BACKEND_SPECIFICS[nx.backend] | configs.get("backend", {})
+
+        delete_keys = []
+        for k,v in self.configs["backend"].items():
+            if not k.startswith(nx.backend.lower()):
+                delete_keys.append(k)
+        for key in delete_keys:
+            del self.configs["backend"][key]
+
+        if not nx.backend == "MLX" and self.transformer.quantized:
+            self.transformer.symmetric_quant = True
+
         if transformer.dtype == nx.float32 and self.configs["optimizer_args"]["use_master"]:
             warnings.warn("master is disabled when using full precision", Warning)
             self.configs["optimizer_args"]["use_master"] = False
@@ -110,13 +131,10 @@ class Session:
             self.configs_str["save"]= colorize("False", "red")
             self.configs_str["create_checkpoint"] = "disabled because save is false"
 
-        if "disable_compile" in self.configs_str:
-            if nx.backend == "MLX":
-                if self.configs_str["disable_compile"] :
-                    self.configs_str["disable_compile"] = colorize("True", "red")
-                    nx._nx.disable_compile() #type:ignore
-            else:
-                self.configs_str["disable_compile"] = "not available for current backend"
+        if nx.backend == "MLX":
+            if self.configs["backend"]["mlx_disable_compile"]:
+                nx._nx.disable_compile() #type:ignore
+                self.configs_str["backend"]["mlx_disable_compile"] = colorize("True", "red")
 
         if isinstance(init_optimizer, bool) and init_optimizer:
             optimizer_class = OPTIMIZERS[self.configs["optimizer"].lower()]
@@ -140,7 +158,15 @@ class Session:
     def __str__(self) -> str:
         t_mess = f"param: {self.transformer.count_params()} \n"
         for key,val in self.configs_str.items():
-            t_mess += f"{key}: {val}\n"
+            if isinstance(val, dict):
+                a = f"{key}: "
+                b = ""
+                for v_key, v_val in val.items():
+                    b += f"{v_key}: {str(v_val)} | "
+                a += b
+                t_mess += a + "\n"
+            else:
+                t_mess += f"{key}: {val}\n"
         t_mess += self.transformer.get_configs_str()
         return t_mess
 
@@ -331,19 +357,25 @@ class Session:
         keep_probs /= nx.sum(keep_probs)
         return nx.random_choice(keep_indices, p=keep_probs)
 
+    def to_dict(self) -> dict:
+        convert_to_symmetric = nx.backend == "MLX" and self.configs["backend"]["mlx_save_quantized_weights_as_symmetric"] and not self.transformer.symmetric_quant
+        session = {
+            "configs":self.configs,
+            "transformer":self.transformer.to_dict(as_symmetric=convert_to_symmetric),
+            "tokenizer":self.tokenizer.to_dict(),
+            "optimizer":self.optimizer.to_dict(config_only=self.configs["weights_only"]),
+            "session_id":self.session_id
+        }
+
+        return session
+
     def save(self, filename:str, save_artifacts:bool=False):
         '''
         Args:
             filename: the name the save file will have. session_{filename}.json
             save_artifacts: also save artifacts seperately (not implemented yet)
         '''
-        session = {
-            "configs":self.configs,
-            "transformer":self.transformer.to_dict(),
-            "tokenizer":self.tokenizer.to_dict(),
-            "optimizer":self.optimizer.to_dict(config_only=self.configs["weights_only"]),
-            "session_id":self.session_id
-        }
+        session = self.to_dict()
 
         filename = f"session_{filename}.ram2n"
         with open(Path(f"artifacts/sessions/{filename}"), "wb") as f:

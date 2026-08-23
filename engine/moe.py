@@ -4,10 +4,10 @@ from typing import Any, Callable
 import engine.backend as nx
 import engine.initializers as initializer
 from engine.activations import softmax, softmax_derivative, swish, swish_derivative
-
+from helper.singleton import sleep
 
 class MoE:
-    def __init__(self, capacity_factor, top_k, n_experts, embed_dim, hidden_width, dtype:Any=nx.float16, initializer:Callable=initializer.glorot_uniform, quantized:bool=False) -> None:
+    def __init__(self, capacity_factor, top_k, n_experts, embed_dim, hidden_width, dtype:Any=nx.float16, initializer:Callable=initializer.glorot_uniform, quantized:bool|str=False, *, as_symmetric:bool=False) -> None:
         self.hidden_width = hidden_width
         self.embed_dim = embed_dim #D
         self.n_experts = n_experts #E
@@ -33,8 +33,8 @@ class MoE:
         self.biases = (None, None)
         self.quantized = quantized
         if quantized:
-            self.Wcombined, wcombined_scale, wcombined_biases = nx.quantize(self.Wcombined)
-            self.Wout, wout_scale, wout_biases = nx.quantize(self.Wout)
+            self.Wcombined, wcombined_scale, wcombined_biases = nx.quantize(self.Wcombined, regular=as_symmetric)
+            self.Wout, wout_scale, wout_biases = nx.quantize(self.Wout, regular=as_symmetric)
             self.scales = (wcombined_scale, wout_scale)
             self.biases = (wcombined_biases, wout_biases)
 
@@ -42,7 +42,7 @@ class MoE:
         self.dWout = None
 
     @staticmethod
-    def forward(x:nx.ArrayLike, ff_configs, ff_params, quantization:tuple[Any,...]|None=None):
+    def forward(x:nx.ArrayLike, ff_configs, ff_params, quantization:tuple[Any,...]|None=None, *, use_symmetric:bool=False):
         #routing
         # print("moe forward x", x.dtype)
         B, T, D = x.shape
@@ -100,14 +100,14 @@ class MoE:
         expert_gate = nx.add_at(expert_gate, (flatten_top_expert_indices, safe_slot), safe_gates)
 
         # projected = expert_input @ Wcombined
-        projected = nx.quantized_matmul(expert_input, Wcombined, scales=wcombined_scale, biases=wcombined_bias) #(E, capacity, 2H)
+        projected = nx.quantized_matmul(expert_input, Wcombined, scales=wcombined_scale, biases=wcombined_bias, regular=use_symmetric) #(E, capacity, 2H)
         gate_half = projected[..., :H]
         value_half = projected[..., H:]
         s = swish(gate_half, x.dtype)
 
         hidden = s * value_half #(E, capacity, H)
         # raw_output = hidden @ Wout #(E, capacity, D)
-        raw_output = nx.quantized_matmul(hidden, Wout, scales=wout_scale, biases=wout_bias) #(E, capacity, D)
+        raw_output = nx.quantized_matmul(hidden, Wout, scales=wout_scale, biases=wout_bias, regular=use_symmetric) #(E, capacity, D)
 
         gated_output = raw_output * expert_gate[..., None]
         final_output = gated_output[flatten_top_expert_indices, safe_slot]
@@ -121,7 +121,7 @@ class MoE:
 
 
     @staticmethod
-    def backward(gradient , caches, moe_configs, ff_params, quantization:tuple[Any,...]|None=None):
+    def backward(gradient , caches, moe_configs, ff_params, quantization:tuple[Any,...]|None=None, *, use_symmetric:bool=False):
         flatten_x, router_prob, top_expert_indices, top_gates32 , flatten_top_expert_indices, assignement_tokens, valid, safe_slot, expert_input, expert_gate, projected, hidden, raw_output, normalized_histogram = caches
         Wout, Wcombined = ff_params
 
@@ -151,7 +151,7 @@ class MoE:
         dWout = hidden.transpose(0, 2, 1) @ d_raw_output
 
         if wout_scale is not None:
-            d_hidden = nx.quantized_matmul(d_raw_output, Wout, wout_scale,biases=wout_bias, transpose=(0,2,1))  #(E,C,H) fp16
+            d_hidden = nx.quantized_matmul(d_raw_output, Wout, wout_scale,biases=wout_bias, transpose=(0,2,1), regular=use_symmetric)  #(E,C,H) fp16
         else:
             d_hidden = d_raw_output @ Wout.transpose(0, 2, 1)
 
@@ -169,7 +169,7 @@ class MoE:
         dWcombined = expert_input.transpose(0, 2, 1) @ d_projected #(E,D,2H) fp16
 
         if wcombined_scale is not None:
-            d_expert_input = nx.quantized_matmul(d_projected, Wcombined, wcombined_scale,biases=wcombined_bias, transpose=(0,2,1))
+            d_expert_input = nx.quantized_matmul(d_projected, Wcombined, wcombined_scale,biases=wcombined_bias, transpose=(0,2,1), regular=use_symmetric)
         else:
             d_expert_input = d_projected @ Wcombined.transpose(0,2,1) #(E, C, D) fp16
 
@@ -220,7 +220,7 @@ class MoE:
 
         return dx, dWcombined, dWout, d_router
 
-    def to_dict(self) -> dict:
+    def to_dict(self, *, as_symmetric=False) -> dict:
         moe_dict =  {
             "moe_configs":(self.cf, self.top_k, self.n_experts, self.hidden_width,self.embed_dim, nx.dtype_to_srt[self.dtype], self.quantized),
             "router": self.router.tolist(),
@@ -229,8 +229,16 @@ class MoE:
         }
 
         if self.quantized:
-            moe_dict["scales"] = (self.scales[0].tolist(), self.scales[1].tolist()) #type:ignore
-            moe_dict["biases"] = (self.biases[0].tolist(), self.biases[1].tolist()) #type:ignore
+            if as_symmetric:
+                Wcombined, wcombined_scale, wcombined_bias = nx.quantize( nx.dequantize(self.Wcombined, self.scales[0], self.biases[0], self.dtype), regular=True)
+                Wout, wout_scale, wout_bias = nx.quantize(nx.dequantize(self.Wout, self.scales[1], self.biases[1], self.dtype), regular=True)
+                moe_dict["Wcombined"] = Wcombined.tolist()
+                moe_dict["Wout"] = Wout.tolist()
+                moe_dict["scales"] = (wcombined_scale.tolist(), wout_scale.tolist()) 
+                moe_dict["biases"] = (wcombined_bias.tolist(), wout_bias.tolist()) 
+            else:
+                moe_dict["scales"] = (self.scales[0].tolist(), self.scales[1].tolist()) #type:ignore
+                moe_dict["biases"] = (self.biases[0].tolist(), self.biases[1].tolist()) #type:ignore
         else:
             moe_dict["scales"] = self.scales
             moe_dict["biases"] = self.biases
@@ -238,7 +246,7 @@ class MoE:
         return moe_dict
 
     @classmethod
-    def from_dict(cls, thing:dict) -> "MoE":
+    def from_dict(cls, thing:dict, *, use_symmetric=False) -> "MoE":
         capacity_factor, top_k, n_experts, hidden_width, embed_dim, dtype, is_quantized = thing["moe_configs"]
         dtype = nx.str_to_dtype[dtype]
         scales = thing["scales"]
@@ -249,7 +257,7 @@ class MoE:
         moe.router = nx.array(thing["router"], nx.float32)
 
         if is_quantized:
-            if nx.backend == "MLX":
+            if nx.backend == "MLX" and not use_symmetric:
                 moe.Wcombined = nx.array(Wcombined, dtype=nx.uint32)
                 moe.Wout = nx.array(Wout, dtype=nx.uint32)
             else:

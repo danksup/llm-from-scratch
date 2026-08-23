@@ -203,7 +203,7 @@ class AttentionSWA:
         return dx,dWqkv,dWo
 
     #TODO:compiled, dtype fix, quantization
-    def inference_forward(self, x, max_cache_len, freqs, quantization, cached_k=None, cached_v=None, position = 0):
+    def inference_forward(self, x, max_cache_len, freqs, quantization, cached_k=None, cached_v=None, position = 0,  *, use_symmetric:bool=False):
         scale = nx.float_32(nx.sqrt(self.head_dim))
 
         wqkv_scale, wo_scale, wqkv_bias, wo_bias = quantization #type:ignore
@@ -262,7 +262,7 @@ class AttentionSWA:
         padded_position = time_idx + window_idx
         return padded_position < W
 
-    def to_dict(self) -> dict:
+    def to_dict(self, *, as_symmetric) -> dict:
         '''serialize into dict with weights turned into list'''
         attn_dict = {
             "embed_dim":self.embed_dim,
@@ -276,15 +276,21 @@ class AttentionSWA:
         }
 
         if self.quantized:
-             attn_dict["scales"] = (self.scales[0].tolist(), self.scales[1].tolist()) #type:ignore
-             attn_dict["biases"] = (self.biases[0].tolist(), self.biases[1].tolist()) #type:ignore
+            if as_symmetric:
+                Wqkv, wqkv_scale, wqkv_bias = nx.quantize( nx.dequantize(self.Wqkv, self.scales[0], self.biases[0], self.dtype), regular=True)
+                Wo, wo_scale, wo_bias = nx.quantize(nx.dequantize(self.Wo, self.scales[1], self.biases[1], self.dtype), regular=True)
+                attn_dict["Wqkv"] = Wqkv.tolist()
+                attn_dict["Wo"] = Wo.tolist()
+                attn_dict["scales"] = (wqkv_scale.tolist(), wo_scale.tolist()) 
+                attn_dict["biases"] = (wqkv_bias.tolist(), wo_bias.tolist()) 
+            else:
+                attn_dict["scales"] = (self.scales[0].tolist(), self.scales[1].tolist()) #type:ignore
+                attn_dict["biases"] = (self.biases[0].tolist(), self.biases[1].tolist()) #type:ignore
         else:
-             attn_dict["scales"] = self.scales
-             attn_dict["biases"] = self.biases
+            attn_dict["scales"] = self.scales
+            attn_dict["biases"] = self.biases
         return attn_dict
-
-
-
+ 
     @classmethod
     def from_dict(cls,thing) -> "AttentionSWA":
         """deserialize"""

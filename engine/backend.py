@@ -8,7 +8,7 @@ from typing import Any, Literal, Union
 
 backend = os.environ.get("BACKEND", "auto").lower()
 seed = int(os.environ.get("SEED", 1))
-assert isinstance(seed, int), "handsome youre a mansion with a view"
+assert isinstance(seed, int), f"seed must be int, got {seed} with type of {type(seed)} instead."
 
 if backend == "auto":
     try:
@@ -37,7 +37,7 @@ else:
     backend = "NumPy"
     os.environ["BACKEND"] = "NumPy"
 
-if backend in ["MLX", "CuPy"]:
+if backend in ["MLX"]:
     _nx.random.seed(seed) # type: ignore
 else:
     rng = _nx.random.default_rng(seed) # type: ignore
@@ -95,6 +95,16 @@ str_to_dtype = {
     "uint8":uint8,
     "bool":bool_,
 }
+
+def set_seed(seed:int):
+    global rng
+    if backend in ["MLX", "CuPy"]:
+        _nx.random.seed(seed)
+        return
+    else:
+        rng = _nx.random.default_rng(seed)
+        return
+
 
 def array(a:Any, dtype=None) -> ArrayLike:
     if hasattr(a, "dtype"):
@@ -567,3 +577,6 @@ def quantized_matmul(x,w,/, scales, biases, transpose:bool|tuple=False, *, regul
         else:
             return x @ dequant_q.transpose(transpose)
     return x @ dequant_q
+
+
+set_seed(seed)

@@ -289,7 +289,8 @@ class Session:
         all_caches = None
         position = 0
         memory = []
-        logits, all_caches = self.transformer.inference(context,self.configs["context_size"], all_caches, position)
+        as_symmetric = self.configs["backend"].get("mlx_save_quantized_weights_as_symmetric", False if nx.backend == "MLX" else True)
+        logits, all_caches = self.transformer.inference(context,self.configs["context_size"], all_caches, position, use_symmetric=as_symmetric)
         position = context.shape[1]
 
         raw_token = self._sample(logits, memory,  temperature, top_k, top_p)
@@ -303,7 +304,7 @@ class Session:
         next_token = nx.array([[token]], dtype=nx.int32)
 
         for i in range(n-1):
-            logits, all_caches = self.transformer.inference(next_token,self.configs["context_size"], all_caches, position)
+            logits, all_caches = self.transformer.inference(next_token,self.configs["context_size"], all_caches, position, use_symmetric=as_symmetric)
             raw_token = self._sample(logits, memory, temperature, top_k, top_p, penalty)
 
             if len(memory) >= mem_size:
@@ -395,9 +396,10 @@ class Session:
             version = int.from_bytes(f.read(4), "little")
             session = pickle.load(f)
 
-        transformer = Transformer.from_dict(session["transformer"])
-        tokenizer = Tokenizer.from_dict(session["tokenizer"])
         configs = session["configs"]
+        use_symmetric = configs["backend"].get("mlx_save_quantized_weights_as_symmetric", False if nx.backend=="MLX" else True)
+        transformer = Transformer.from_dict(session["transformer"], saved_as_symmetric=use_symmetric)
+        tokenizer = Tokenizer.from_dict(session["tokenizer"])
         optimizer_class = OPTIMIZERS[configs["optimizer"]]
         optimizer = optimizer_class.from_dict(session["optimizer"])
         session_id = session["session_id"]

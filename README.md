@@ -56,9 +56,8 @@ logs:
 - int8 weight-only quantization aug 17 2026 
 
 ## Ongoing:
-- mlx backend to be able to use the fallback quantization
 - byte-level BPE
-- cupy/cuda support
+- fixing cupy/cuda support
 - optimizing/cleanup/docs
 
 ## TODO (not in order):

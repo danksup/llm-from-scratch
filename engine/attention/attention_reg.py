@@ -38,6 +38,7 @@ class AttentionFull:
         self.scales = (None, None)
         self.biases = (None,None)
         self.quantized = quantized
+        self.use_symmetric = use_symmetric
         if quantized:
             self.Wqkv, wqkv_scale, wqkv_bias = nx.quantize(self.Wqkv, regular=use_symmetric)
             self.Wo, wo_scale, wo_bias = nx.quantize(self.Wo, regular=use_symmetric)
@@ -167,7 +168,6 @@ class AttentionFull:
     #TODO:compiled, dtype fix, quantization
     def inference_forward(self, x, max_cache_len, freqs, quantization, cached_k=None, cached_v=None, position = 0,  *, use_symmetric:bool=False):
         wqkv_scale, wo_scale, wqkv_bias, wo_bias = quantization #type:ignore
-
         if wqkv_scale is not None:
             combined = nx.quantized_matmul(x, self.Wqkv, wqkv_scale,wqkv_bias, transpose=True, regular=use_symmetric)
         else:
@@ -226,7 +226,8 @@ class AttentionFull:
             "Wqkv":self.Wqkv.tolist(),
             "Wo":self.Wo.tolist(),
             "dtype":nx.dtype_to_srt[self.dtype],
-            "quantized":self.quantized
+            "quantized":self.quantized,
+            # "use_symmetric":self.use_symmetric,
         }
 
         if self.quantized:

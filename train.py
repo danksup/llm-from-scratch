@@ -19,12 +19,12 @@ EMBED_DIM = 256
 CONTEXT_SIZE = 1200
 BATCH_SIZE = 5
 BASE_WIDTH = 4 * EMBED_DIM
-N_HEADS = 4
+N_HEADS = 8
 N_KV_HEADS = max(1, N_HEADS // 2)
 N_EXPERTS = 10
 CF = 1.25
 VAL = 1
-TOP_K = 1
+TOP_K = 2
 
 CORPUS_PATH = "artifacts/dataloader"
 TOKENIZER_PATH = "artifacts/tokenizer/tokenizer32000_1351277738len.tokenizer"
@@ -32,7 +32,7 @@ tokenizer1 = Tokenizer.load(TOKENIZER_PATH)
 
 session_configs = {
     "epochs":EPOCHS,
-    "max_step":5,
+    "max_step":10,
     "train_split": VAL,
     "max_val_step":300,
     "eval_every":1,
@@ -48,12 +48,13 @@ session_configs = {
         "min_lr": 1e-3,
     },
     "using":os.environ.get("BACKEND"),
-    "save":False,
+    "save":True,
     "create_checkpoint":True,
     "checkpoint_every":1000,
     "weights_only": True,
     "backend": {
         "mlx_disable_compile":False,
+        "mlx_save_quantized_weights_as_symmetric":True
     }
 }
 
@@ -64,7 +65,7 @@ model_configs = {
     "gradient_scale":4096,
     "vocab_size": len(tokenizer1.vocab),
     "moe_lambda":0.01,
-    "quantized":"symmetric", #here can be True, symmetric, False
+    "quantized":True, #here can be True, "symmetric", False
     "check_non_finite":False,
     "block_configs":{
         "ff_hidden_width": BASE_WIDTH,

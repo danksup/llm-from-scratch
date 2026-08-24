@@ -154,7 +154,7 @@ class Transformer:
         """
         total = 0
         for i in self.blocks:
-            total += i.count_param()
+            total += i.count_param(use_symmetric=self.symmetric_quant)
         total += self.embedding.lookup_table.size
         return total
 
@@ -510,19 +510,20 @@ class Transformer:
         final_loss = total_loss / count
         return final_loss.item()
 
-    def inference(self, context:Any, max_cache_len, all_caches = None,  position = 0) -> Any:
+    def inference(self, context:Any, max_cache_len, all_caches = None,  position = 0, *, use_symmetric) -> Any:
         if all_caches is None:
             all_caches = [(None, None) for _ in range(len(self.blocks))]
+        as_symmetric = self.symmetric_quant or use_symmetric
         output = self.embedding.forward(context)
         for idx, block in enumerate(self.blocks):
             cached_k, cached_v = all_caches[idx]
-            ff_out, cache_k, cache_v = block.inference_forward(output,max_cache_len, cached_k, cached_v, position, use_symmetric=self.symmetric_quant)
+            ff_out, cache_k, cache_v = block.inference_forward(output,max_cache_len, cached_k, cached_v, position, use_symmetric=as_symmetric)
             all_caches[idx] = (cache_k, cache_v)
             output = ff_out
 
         if self.quantized:
             #TODO this becomes nan, tho the lookup table and the scale themselves arent (fixed)
-            scores = nx.quantized_matmul(output, self.embedding.lookup_table, self.embedding.table_scale, self.embedding.bias, transpose=True, regular=self.symmetric_quant) #type:ignore
+            scores = nx.quantized_matmul(output, self.embedding.lookup_table, self.embedding.table_scale, self.embedding.bias, transpose=True, regular=as_symmetric) #type:ignore
         else:
             scores = output @ self.embedding.lookup_table.T
 
@@ -539,7 +540,7 @@ class Transformer:
         transformer_configs["dtype"] = nx.dtype_to_srt[self.dtype]
         transformer_configs["quantized"] =  self.quantized
         transformer_configs["symmetric_quant"] =  self.symmetric_quant
-        a["embedding"] = self.embedding.to_dict()
+        a["embedding"] = self.embedding.to_dict(as_symmetric=as_symmetric)
         blocks = []
         for block in self.blocks:
             blocks.append(block.to_dict(as_symmetric=as_symmetric))
@@ -547,19 +548,18 @@ class Transformer:
         return a
 
     @classmethod
-    def from_dict(cls,thing:dict[str, Any]) -> "Transformer":
+    def from_dict(cls,thing:dict[str, Any],*, saved_as_symmetric=False) -> "Transformer":
         configs = thing["transformer_configs"]
         configs["dtype"] = nx.str_to_dtype[configs["dtype"]]
         raw_blocks = thing["blocks"]
         blocks = []
-        use_symmetric = configs["symmetric_quant"]
+        use_symmetric = configs["symmetric_quant"] or saved_as_symmetric
         for block in raw_blocks:
             a = TransformerBlock.from_dict(block, use_symmetric=use_symmetric)
             blocks.append(a)
 
         transformer = cls(configs, blocks=blocks)
-        transformer.embedding = Embedding.from_dict(thing["embedding"])
-
+        transformer.embedding = Embedding.from_dict(thing["embedding"], use_symmetric=use_symmetric)
         return transformer
 
     def get_configs_str(self):

@@ -56,7 +56,7 @@ class Embedding:
         lookup_table = thing["lookuptable"]
         scale = thing["table_scale"]
         bias = thing["bias"]
-        embedding = cls(thing["n"],thing["embed_dim"], dtype, is_quantized)
+        embedding = cls(thing["n"],thing["embed_dim"], dtype, is_quantized, use_symmetric=use_symmetric)
 
         if is_quantized:
             if nx.backend == "MLX" and not use_symmetric:

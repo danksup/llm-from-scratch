@@ -42,9 +42,9 @@ class TransformerBlock:
         # this_str = f""
         return str(this)
 
-    def count_param(self) -> int:
+    def count_param(self, *, use_symmetric=False) -> int:
         total = 0
-        if self.quantized and nx.backend == "MLX":
+        if self.quantized and nx.backend == "MLX" and not use_symmetric:
             total += self.ff.Wcombined.size * 4
             total += self.ff.Wout.size * 4
             total += self.attention.Wqkv.size * 4
@@ -66,6 +66,7 @@ class TransformerBlock:
         rmsnorm1_out, caches_rmsnorm1 = RMSNorm._forward(x, gamma1,epsilon)
 
         rmsnorm1_out = rmsnorm1_out.astype(x.dtype)
+
         attn_out, caches_attn = ATTN_TYPE[attention]._forward(rmsnorm1_out, causal_mask, attn_configs, attn_params, quantization[0], use_symmetric=use_symmetric) #type:ignore
         drop_attn_out, mask1 = Dropout._forward(attn_out, p,is_training)
 
@@ -107,6 +108,7 @@ class TransformerBlock:
     #TODO:compiled, dtype consistency fix/check
     def inference_forward(self, x, max_cache_len, cached_k=None, cached_v=None,  position=0, * ,use_symmetric=False):
         # print("x", x.dtype)
+
         rmsnorm1_out, _ = RMSNorm._forward(x, self.rmsnorm1.gamma, self.rmsnorm1.epsilon)
         rmsnorm1_out = rmsnorm1_out.astype(x.dtype)
 

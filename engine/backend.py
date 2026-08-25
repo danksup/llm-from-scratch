@@ -5,6 +5,8 @@
 
 import os
 from typing import Any, Literal, Union
+import array as arraymodule
+from pathlib import Path
 
 backend = os.environ.get("BACKEND", "auto").lower()
 seed = int(os.environ.get("SEED", 1))
@@ -104,7 +106,18 @@ def set_seed(seed:int):
     else:
         rng = _nx.random.default_rng(seed)
         return
+    
+def get_dim(a):
+    return 1 + get_dim(a[0]) if isinstance(a, (list, arraymodule.array)) and a else 0
 
+def tolist(a):
+    if isinstance(a, arraymodule.array):
+        return a.tolist()
+
+    if isinstance(a, (list, tuple)):
+        return [tolist(i) for i in a]
+
+    return a
 
 def array(a:Any, dtype=None) -> ArrayLike:
     if hasattr(a, "dtype"):
@@ -578,5 +591,8 @@ def quantized_matmul(x,w,/, scales, biases, transpose:bool|tuple=False, *, regul
             return x @ dequant_q.transpose(transpose)
     return x @ dequant_q
 
+def save_safetensors(file:Path, arrays:dict[str,ArrayLike], metadata:dict[str,str]|None=None):
+    if backend == "MLX":
+        return _nx.save_safetensors(file=file, arrays=arrays, metadata=metadata)
 
 set_seed(seed)

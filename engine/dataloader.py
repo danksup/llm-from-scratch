@@ -222,8 +222,7 @@ class DataLoader:
         for token in self.stream_token(files, permutation, chunk_size=chunk_size):
             if token is None:
                 continue
-            if isinstance(token, array.array):
-                token = token.tolist()
+            # print(type(token))
             context_batches.append(token[:-1])
             target_batches.append(token[1:])
 
@@ -234,6 +233,7 @@ class DataLoader:
 
     def worker(self, Q:Queue, files:list[Path], chunk_size:int= 1024000):
         for batch in self.get_pairs(files, chunk_size):
+            # Q.put(nx.tolist(batch))
             Q.put(batch)
         Q.put(None)
 

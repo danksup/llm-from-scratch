@@ -5,6 +5,7 @@ import uuid
 import warnings
 from pathlib import Path
 from typing import Any, Union
+import safetensors as safe
 
 import engine.backend as nx
 import engine.optimizer as optim
@@ -14,6 +15,7 @@ from engine.optimizer import scheduler
 from engine.tokenizer import Tokenizer
 from engine.transformer import Transformer
 from helper.singleton import colorize, sleep
+
 
 optimizers = Union[optim.Adam, optim.AdamW, optim.SGD]
 OPTIMIZER_TYPES = (optim.Adam,optim.AdamW,optim.SGD,)
@@ -30,6 +32,7 @@ DEFAULT_CONFIGS = {
     "optimizer":"adamw",
     "train_split":.9,
     "save":True,
+    "error_save":False,
     "create_checkpoint":False,
     "checkpoint_every":1000,
     "weights_only": True,
@@ -115,9 +118,13 @@ class Session:
         if not nx.backend == "MLX" and self.transformer.quantized:
             self.transformer.symmetric_quant = True
 
-        if transformer.dtype == nx.float32 and self.configs["optimizer_args"]["use_master"]:
-            warnings.warn("master is disabled when using full precision", Warning)
-            self.configs["optimizer_args"]["use_master"] = False
+        if transformer.dtype == nx.float32:
+            if self.configs["optimizer_args"]["use_master"]:
+                self.configs["optimizer_args"]["use_master"] = False
+                warnings.warn(colorize("master is disabled when using full precision", "yellow"), UserWarning)
+            if self.transformer.gradient_scale != 1:
+                self.transformer.gradient_scale = 1
+                warnings.warn(colorize("gradient scale is reset to 1 when using full precision", "yellow"), UserWarning)
 
         if self.configs["train_split"] == 1:
             self.configs["validate_every"] = 0
@@ -260,28 +267,29 @@ class Session:
                 if savefile_name == "":
                     savefile_name = filename
                 self.save(savefile_name)
+                self.save_test(savefile_name)
         except ValueError as e:
             end = time.perf_counter()
             print(f"epoch {epoch}: {e}. Time elapsed: {end-start:.5f}")
-            if self.configs["save"] and self.configs["create_checkpoint"]:
+            if self.configs["save"] and self.configs["error_save"]:
                 self.save(f"valueerror_save_{self.session_id}")
             raise
         except OverflowError as e:
             end = time.perf_counter()
             print(f"epoch {epoch}: {e}. Time elapsed: {end-start:.5f}")
-            if self.configs["save"] and self.configs["create_checkpoint"]:
+            if self.configs["save"] and self.configs["error_save"]:
                 self.save(f"overflow_save_{self.session_id}")
             raise
         except KeyboardInterrupt as e:
             end = time.perf_counter()
             print(f"epoch {epoch}: {e}. Time elapsed: {end-start:.5f}")
-            if self.configs["save"] and self.configs["create_checkpoint"]:
+            if self.configs["save"] and self.configs["error_save"]:
                 self.save(f"keyboardinterrupt_save_{self.session_id}")
             raise
         except RuntimeError as e:
             end = time.perf_counter()
             print(f"epoch {epoch}: {e}. Time elapsed: {end-start:.5f}")
-            if self.configs["save"] and self.configs["create_checkpoint"]:
+            if self.configs["save"] and self.configs["error_save"]:
                 self.save(f"RuntimeError_save_{self.session_id}")
             raise
 
@@ -383,6 +391,10 @@ class Session:
            f.write(b"RAM2N")
            f.write((1).to_bytes(4, "little"))
            pickle.dump(session, f)
+
+    def save_test(self, filename:str="test123"):
+        transformer = self.transformer.get_all_weights("dict")
+        nx.save_safetensors(Path(f"artifacts/sessions/{filename}.safetensors"), transformer, None)
 
     @classmethod
     def load(cls, filepath:str) -> "Session":

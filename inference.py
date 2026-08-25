@@ -2,11 +2,10 @@ from engine.sessions import Session
 import engine.backend as nx
 import time
 
-
-session = Session.load("artifacts/sessions/session_82688000_param_1_epochs_weights_only_quantized_c972e8bb-5cef-43f3-a61e-e3f808a6d93f.ram2n")
+session = Session.load("artifacts/sessions/session_88832000_param_1_epochs_weights_only_9f067464-2d72-49a3-a671-17452deec92b.ram2n")
 tokenizer = session.tokenizer
 context_size = session.configs["context_size"]
-context = "you are stupid"
+context = "this is so stupid."
 print(f"input: {context}")
 context = nx.array(tokenizer.encode(context), nx.uint16)
 

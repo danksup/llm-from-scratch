@@ -1,7 +1,6 @@
 import copy
-from typing import Any, Literal
+from typing import Any, Literal, overload
 
-from engine import tokenizer
 import engine.attention as attn
 import engine.backend as nx
 import engine.initializers as init
@@ -10,6 +9,7 @@ from engine.dataloader import DataLoader
 from engine.embedding import Embedding
 from engine.losses import cross_entropy, cross_entropy_gradient
 from engine.transformer_block import TransformerBlock
+from helper.singleton import sleep
 
 optimizers = optim.Adam | optim.AdamW | optim.SGD
 
@@ -139,7 +139,7 @@ class Transformer:
         else:
             self.blocks = blocks
             if not self.blocks:
-                raise ValueError("lol")
+                raise ValueError("this transformer doesnt have any block.")
 
             for i, block in enumerate(self.blocks):
                 if block.embed_dim != self.embed_dim:
@@ -286,21 +286,6 @@ class Transformer:
 
         nx.eval(*to_eval)
 
-    def get_all_weights(self):
-        all_weights = {}
-        layers = ["ff", "attention", "rmsnorm1", "rmsnorm2"]
-        weights = [["router", "Wcombined", "Wout"],[ "Wo", "Wqkv"],[ "gamma"],[ "gamma"]]
-
-        for idx, block in enumerate(self.blocks):
-            all_weights[idx] = {}
-            for layer_i, layer in enumerate(layers):
-                layer_ = getattr(block, layer)
-                all_weights[idx][layer] = {}
-                for weight in weights[layer_i]:
-                    weight_ = getattr(layer_, weight)
-                    all_weights[idx][layer][weight] = weight_
-
-        return all_weights
     
     def non_finite_check(self):
         # nan_weights = []
@@ -337,8 +322,10 @@ class Transformer:
         embed_acc = nx.zeros((self.vocab_size, self.embed_dim), nx.float32)
 
         for contexts, next_tokens in dataloader.prefetch_batch(dataloader.train_files):
-            contexts = nx.array(contexts, nx.int32)
-            next_tokens = nx.array(next_tokens, nx.int32)
+            contexts = nx.array(nx.tolist(contexts), nx.int32)
+            next_tokens = nx.array(nx.tolist(next_tokens), nx.int32)
+            # contexts = nx.array(contexts, nx.int32)
+            # next_tokens = nx.array(next_tokens, nx.int32)
 
             if step >= max_step:
                 break
@@ -591,3 +578,41 @@ class Transformer:
     @staticmethod
     def create_checkpoint(to_checkpoint:"Transformer") -> "Transformer":
         return to_checkpoint.from_dict(to_checkpoint.to_dict())
+
+    @overload
+    def get_all_weights(self, flatten: Literal[False] = False) -> dict[int, dict[str, dict[str, nx.ArrayLike]]]: ...
+
+    @overload
+    def get_all_weights(self, flatten: Literal["dict"]) -> dict[str, nx.ArrayLike]: ...
+
+    @overload
+    def get_all_weights(self, flatten: Literal[True]) -> list[Any]: ...
+
+    def get_all_weights(self, flatten:bool|Literal["dict"]=False) -> dict[int,dict[str,dict[str,nx.ArrayLike]]] | dict[str,nx.ArrayLike] | list[Any]:
+            layers = ["ff", "attention", "rmsnorm1", "rmsnorm2"]
+            weights = [["router", "Wcombined", "Wout"],[ "Wo", "Wqkv"],[ "gamma"],[ "gamma"]]
+
+            if not flatten:
+                all_weights = {}
+                for idx, block in enumerate(self.blocks):
+                    all_weights[idx] = {}
+                    for layer_i, layer in enumerate(layers):
+                        layer_ = getattr(block, layer)
+                        all_weights[idx][layer] = {}
+                        for weight in weights[layer_i]:
+                            weight_ = getattr(layer_, weight)
+                            all_weights[idx][layer][weight] = weight_
+            else:
+                if flatten == "dict":
+                    all_weights = {}
+                    for idx, block in enumerate(self.blocks):
+                        for layer_i, layer in enumerate(layers):
+                            layer_ = getattr(block, layer)
+                            for weight in weights[layer_i]:
+                                weight_ = getattr(layer_, weight)
+                                all_weights[f"{idx}.{layer}.{weight}"] = weight_
+                else:
+                    a:dict[str,nx.ArrayLike] = self.get_all_weights("dict") #type:ignore
+                    return list(a.values())
+
+            return all_weights

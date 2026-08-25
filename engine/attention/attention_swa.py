@@ -322,3 +322,6 @@ class AttentionSWA:
             attention.Wo = nx.array(Wo, dtype=dtype)
 
         return attention
+
+    def get_configs(self):
+        return self.embed_dim, self.n_heads, self.n_kv_heads, self.W

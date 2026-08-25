@@ -32,7 +32,7 @@ tokenizer1 = Tokenizer.load(TOKENIZER_PATH)
 
 session_configs = {
     "epochs":EPOCHS,
-    "max_step":100,
+    "max_step":1,
     "train_split": VAL,
     "max_val_step":1,
     "eval_every":1,
@@ -61,11 +61,11 @@ session_configs = {
 model_configs = {
     "n_blocks":10,
     "embed_dim":EMBED_DIM,
-    "dtype": nx.float16,
+    "dtype": nx.float32,
     "gradient_scale":4096,
     "vocab_size": len(tokenizer1.vocab),
     "moe_lambda":0.01,
-    "quantized":True, #here can be True, "symmetric", False
+    "quantized":False, #here can be True, "symmetric", False
     "check_non_finite":False,
     "block_configs":{
         "ff_hidden_width": BASE_WIDTH,

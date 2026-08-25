@@ -277,3 +277,6 @@ class AttentionFull:
         attention.quantized=True
 
         return attention
+
+    def get_configs(self):
+        return self.embed_dim, self.n_heads, self.n_kv_heads

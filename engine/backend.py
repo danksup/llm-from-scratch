@@ -595,4 +595,8 @@ def save_safetensors(file:Path, arrays:dict[str,ArrayLike], metadata:dict[str,st
     if backend == "MLX":
         return _nx.save_safetensors(file=file, arrays=arrays, metadata=metadata)
 
+def load(file:Path,/, format:Literal['safetensors', 'npz', 'npy']='safetensors',return_metadata=True):
+    if backend == "MLX":
+        return _nx.load(file, format=format, return_metadata=return_metadata)
+    
 set_seed(seed)

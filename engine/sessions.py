@@ -91,7 +91,7 @@ BACKEND_SPECIFICS = {
 }
 
 class Session:
-    def __init__(self, transformer:Transformer, tokenizer:Tokenizer, init_optimizer:bool | optimizers = True, configs:dict | None = None, *, session_id=None):
+    def __init__(self, transformer:Transformer, tokenizer:Tokenizer, init_optimizer:bool | optimizers | None = True, configs:dict | None = None, *, session_id=None):
         self.session_id = session_id
         if self.session_id is None:
             self.session_id = uuid.uuid4()
@@ -129,42 +129,46 @@ class Session:
         if self.configs["train_split"] == 1:
             self.configs["validate_every"] = 0
 
-        self.configs_str = copy.deepcopy(self.configs)
-        if self.configs["train_split"] == 1 or self.configs["validate_every"] == 0:
-            self.configs_str["validate_every"] = f"validation is disabled"
-            self.configs_str["val_max_step"] = f"validation is disabled"
-
-        if not self.configs['save']:
-            self.configs_str["save"]= colorize("False", "red")
-            self.configs_str["create_checkpoint"] = "disabled because save is false"
-
         if nx.backend == "MLX":
             if self.configs["backend"]["mlx_disable_compile"]:
                 nx._nx.disable_compile() #type:ignore
-                self.configs_str["backend"]["mlx_disable_compile"] = colorize("True", "red")
 
-        if isinstance(init_optimizer, bool) and init_optimizer:
-            optimizer_class = OPTIMIZERS[self.configs["optimizer"].lower()]
-            schedule = self.configs["optimizer_args"]["scheduler"]
-            if schedule is not None:
-                schedule = self.configs["optimizer_args"]["scheduler"].lower()
-                if isinstance(schedule, str):
-                    if schedule not in SCHEDULER:
-                        raise ValueError(f"invalid scheduler {schedule}. valid schedulers: {", ".join(SCHEDULER.keys())}")
-                    self.configs["optimizer_args"]["scheduler"] = SCHEDULER[schedule]
+        self.optimizer = None
+        if isinstance(init_optimizer, bool):
+            if init_optimizer:
+                optimizer_class = OPTIMIZERS[self.configs["optimizer"].lower()]
+                schedule = self.configs["optimizer_args"]["scheduler"]
+                if schedule is not None:
+                    schedule = self.configs["optimizer_args"]["scheduler"].lower()
+                    if isinstance(schedule, str):
+                        if schedule not in SCHEDULER:
+                            raise ValueError(f"invalid scheduler {schedule}. valid schedulers: {", ".join(SCHEDULER.keys())}")
+                        self.configs["optimizer_args"]["scheduler"] = SCHEDULER[schedule]
 
-                if self.configs["optimizer_args"]["min_lr"] is None:
-                    self.configs["optimizer_args"]["min_lr"] = self.configs["optimizer_args"]["lr"] / 1e2
-                    self.configs_str["optimizer_args"]["min_lr"] = self.configs["optimizer_args"]["lr"] / 1e2
-            else:
-                self.configs["optimizer_args"].pop("min_lr")
-            self.optimizer = optimizer_class(**self.configs["optimizer_args"])
+                    if self.configs["optimizer_args"]["min_lr"] is None:
+                        self.configs["optimizer_args"]["min_lr"] = self.configs["optimizer_args"]["lr"] / 1e2
+                else:
+                    self.configs["optimizer_args"].pop("min_lr")
+                self.optimizer = optimizer_class(**self.configs["optimizer_args"])
         elif isinstance(init_optimizer, OPTIMIZER_TYPES):
             self.optimizer = init_optimizer
 
     def __str__(self) -> str:
         t_mess = f"param: {self.transformer.count_params()} \n"
-        for key,val in self.configs_str.items():
+        configs_str = copy.deepcopy(self.configs)
+        if self.configs["train_split"] == 1 or self.configs["validate_every"] == 0:
+            configs_str["validate_every"] = f"validation is disabled"
+            configs_str["val_max_step"] = f"validation is disabled"
+
+        if not self.configs['save']:
+            configs_str["save"]= colorize("False", "red")
+            configs_str["create_checkpoint"] = "disabled because save is false"
+
+        if nx.backend == "MLX":
+            if self.configs["backend"]["mlx_disable_compile"]:
+                configs_str["backend"]["mlx_disable_compile"] = colorize("True", "red")
+
+        for key,val in configs_str.items():
             if isinstance(val, dict):
                 a = f"{key}: "
                 b = ""
@@ -267,7 +271,7 @@ class Session:
                 if savefile_name == "":
                     savefile_name = filename
                 self.save(savefile_name)
-                self.save_test(savefile_name)
+                self.simple_save(savefile_name)
         except ValueError as e:
             end = time.perf_counter()
             print(f"epoch {epoch}: {e}. Time elapsed: {end-start:.5f}")
@@ -368,12 +372,12 @@ class Session:
 
     def to_dict(self) -> dict:
         convert_to_symmetric = nx.backend == "MLX" and self.configs["backend"]["mlx_save_quantized_weights_as_symmetric"] and not self.transformer.symmetric_quant
+
         session = {
             "configs":self.configs,
             "transformer":self.transformer.to_dict(as_symmetric=convert_to_symmetric),
             "tokenizer":self.tokenizer.to_dict(),
-            "optimizer":self.optimizer.to_dict(config_only=self.configs["weights_only"]),
-            "session_id":self.session_id
+            "optimizer":self.optimizer.to_dict(config_only=self.configs["weights_only"]) if self.optimizer is not None else None,
         }
 
         return session
@@ -392,12 +396,24 @@ class Session:
            f.write((1).to_bytes(4, "little"))
            pickle.dump(session, f)
 
-    def save_test(self, filename:str="test123"):
-        transformer = self.transformer.get_all_weights("dict")
-        nx.save_safetensors(Path(f"artifacts/sessions/{filename}.safetensors"), transformer, None)
+    def simple_save(self, filename:str="test123", *, save_tokenizer:bool=False):
+        tensors = self.transformer.get_all_weights("dict") 
+        quants = self.transformer.get_quant_params()
+        
+        convert_to_symmetric = nx.backend == "MLX" and self.configs["backend"]["mlx_save_quantized_weights_as_symmetric"] and not self.transformer.symmetric_quant
+        if convert_to_symmetric:
+            for k,v in tensors.items():
+                # transformer[k] = pass
+                pass
+        metadata = {
+            "tokenizer_id": str(self.session_id),
+            "configs": str(self.configs)
+        }
+        nx.save_safetensors(Path(f"artifacts/sessions/session_{filename}.safetensors"), tensors, metadata)
+
 
     @classmethod
-    def load(cls, filepath:str) -> "Session":
+    def load(cls, filepath:str|Path, *, inference_only:bool=True) -> "Session":
         """
         load the saved session file and build
         """
@@ -414,7 +430,7 @@ class Session:
         tokenizer = Tokenizer.from_dict(session["tokenizer"])
         optimizer_class = OPTIMIZERS[configs["optimizer"]]
         optimizer = optimizer_class.from_dict(session["optimizer"])
-        session_id = session["session_id"]
+        session_id = configs["session_id"]
 
         return  cls(transformer, tokenizer, optimizer, configs=configs, session_id=session_id)
 
@@ -422,6 +438,6 @@ class Session:
     def create_checkpoint(cls, to_checkpoint:"Session",) -> "Session":
         transformer_checkpoint = Transformer.create_checkpoint(to_checkpoint.transformer)
         tokenizer_checkpoint = Tokenizer.from_dict(to_checkpoint.tokenizer.to_dict())
-        optimizer = to_checkpoint.optimizer.from_dict(to_checkpoint.optimizer.to_dict(to_checkpoint.configs["weights_only"]))
+        optimizer = None if to_checkpoint.optimizer is None else to_checkpoint.optimizer.from_dict(to_checkpoint.optimizer.to_dict(to_checkpoint.configs["weights_only"]))
         checkpoint = cls(transformer=transformer_checkpoint, tokenizer = tokenizer_checkpoint, init_optimizer=optimizer)
         return checkpoint

@@ -6,7 +6,7 @@ class CosineDecay:
         self.start = start
         self.end = end
 
-    def __repr__(self) -> str:
+    def __str__(self) -> str:
         return "CosineDecay"
 
     def __call__(self, progress) -> Any:

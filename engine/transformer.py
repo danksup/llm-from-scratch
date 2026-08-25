@@ -291,7 +291,7 @@ class Transformer:
         # nan_weights = []
         texts = ""
         layers = ["ff", "attention", "rmsnorm1", "rmsnorm2"]
-        weights = [["router", "Wcombined", "Wout"],[ "Wo", "Wqkv"],[ "gamma"],[ "gamma"]]
+        weights = [["router", "Wcombined", "Wout"],[ "Wqkv", "Wo"],[ "gamma"],[ "gamma"]]
         dweights = [ ["d_router", "dWcombined","dWout"], ["dWo", "dWqkv"],[ "d_gamma"],["d_gamma"]]
         for idx, block in enumerate(self.blocks):
             text = f"block{idx}: "
@@ -520,19 +520,24 @@ class Transformer:
         """
         get dictionary
         """
-        a:dict[str,Any] = {"transformer_configs":{}}
-        transformer_configs = a["transformer_configs"]
-        transformer_configs["vocab_size"] = self.vocab_size
-        transformer_configs["embed_dim"] = self.embed_dim
-        transformer_configs["dtype"] = nx.dtype_to_srt[self.dtype]
-        transformer_configs["quantized"] =  self.quantized
-        transformer_configs["symmetric_quant"] =  self.symmetric_quant
+        a:dict[str,Any] = {}
+        a["transformer_configs"] = self.get_configs()
         a["embedding"] = self.embedding.to_dict(as_symmetric=as_symmetric)
         blocks = []
         for block in self.blocks:
             blocks.append(block.to_dict(as_symmetric=as_symmetric))
         a["blocks"] = blocks
         return a
+
+    def get_configs(self):
+        configs = {}
+        configs["vocab_size"] = self.vocab_size
+        configs["embed_dim"] = self.embed_dim
+        configs["dtype"] = nx.dtype_to_srt[self.dtype]
+        configs["quantized"] =  self.quantized
+        configs["symmetric_quant"] =  self.symmetric_quant
+        configs["gradient_scale"] = self.gradient_scale
+        return configs
 
     @classmethod
     def from_dict(cls,thing:dict[str, Any],*, saved_as_symmetric=False) -> "Transformer":
@@ -551,11 +556,14 @@ class Transformer:
 
     def get_configs_str(self):
         configs = ""
-        configs += f"vocab_size: {str(self.vocab_size)}" + "\n"
-        configs += f"embed_dim: {str(self.embed_dim)}" + "\n"
-        configs += f"gradient_scale: {str(self.gradient_scale)}" + "\n"
+        for k,v in self.get_configs().items():
+            if k not in ["dtype", "symmetric_quant"]:
+                configs += f"{k}: {str(v)}\n"
+        # configs += f"vocab_size: {str(self.vocab_size)}" + "\n"
+        # configs += f"embed_dim: {str(self.embed_dim)}" + "\n"
+        # configs += f"quantized: {str(self.quantized)}" + "\n"
+        # configs += f"gradient_scale: {str(self.gradient_scale)}" + "\n"
         configs += "precision: full (float32)\n" if self.dtype == nx.float32 else f"precision: mixed precision ({self.dtype})\n"
-        configs += f"quantized: {str(self.quantized)}" + "\n"
         configs += f"moe_lambda: {str(self.moe_lambda)}" + "\n"
         configs += f"block configs: {self.block_configs}\n"
         configs += "individual block configs (only difference is shown): \n"
@@ -590,7 +598,7 @@ class Transformer:
 
     def get_all_weights(self, flatten:bool|Literal["dict"]=False) -> dict[int,dict[str,dict[str,nx.ArrayLike]]] | dict[str,nx.ArrayLike] | list[Any]:
             layers = ["ff", "attention", "rmsnorm1", "rmsnorm2"]
-            weights = [["router", "Wcombined", "Wout"],[ "Wo", "Wqkv"],[ "gamma"],[ "gamma"]]
+            weights = [["router", "Wcombined", "Wout"],[ "Wqkv", "Wo"],[ "gamma"],[ "gamma"]]
 
             if not flatten:
                 all_weights = {}
@@ -616,3 +624,19 @@ class Transformer:
                     return list(a.values())
 
             return all_weights
+
+    def get_quant_params(self):
+        quant_params = {}
+        layers = ["ff", "attention"]
+        weights = [["Wcombined", "Wout"],[ "Wqkv", "Wo"]]
+        quants = ["scales", "biases"]
+
+        for idx, block in enumerate(self.blocks):
+            for layer_i, layer in enumerate(layers):
+                layer_ = getattr(block, layer)
+                for quant in quants:
+                    quant_attr = getattr(layer_, quant)
+                    for attr_i, attr in enumerate(quant_attr):
+                        quant_params[f"{idx}.{layer}.{weights[layer_i][attr_i]}.{quant}"] = attr
+
+        return quant_params

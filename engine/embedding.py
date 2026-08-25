@@ -69,3 +69,6 @@ class Embedding:
             embedding.lookup_table =  nx.array(lookup_table, dtype=dtype)
 
         return embedding
+
+    def get_configs(self):
+        return(self.n, self.embed_dim)

@@ -72,3 +72,13 @@ class Embedding:
 
     def get_configs(self):
         return(self.n, self.embed_dim)
+
+    @classmethod
+    def from_weights(cls, lookuptable, scale, bias, dtype):
+        n = len(lookuptable)
+        D = lookuptable.shape[0]
+        embedding = cls(n, D, dtype=dtype)
+        embedding.lookup_table = lookuptable
+        embedding.table_scale = scale
+        embedding.bias = bias
+        return embedding

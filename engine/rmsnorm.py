@@ -45,3 +45,11 @@ class RMSNorm:
         rmsnorm.gamma = nx.array(thing["gamma"],dtype=nx.float32)
 
         return rmsnorm
+
+    @classmethod
+    def from_weight(cls, configs, gamma):
+        D, epsilon = configs
+        rms = cls(D, epsilon)
+        rms.gamma = gamma
+
+        return rms

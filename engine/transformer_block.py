@@ -16,31 +16,27 @@ ATTN_TYPE = {
 }
 
 class TransformerBlock:
-    def __init__(self ,embed_dim, attention:Attention, ff:MoE, dtype=nx.float16, attn_init=init.glorot_uniform, moe_init=init.glorot_uniform, quantized:bool|str=False,* , use_symmetric=False) -> None:
+    def __init__(self ,attention:Attention, ff:MoE, rmsnorm1:RMSNorm, rmsnorm2:RMSNorm) -> None:
         self.causal_mask = None
-        self.embed_dim = embed_dim
-
-        self.dtype = dtype
 
         self.attention = attention
         self.attention_type = attention.self_type()
         self.ff = ff
-        self.rmsnorm1 = RMSNorm(embed_dim)
-        self.rmsnorm2 = RMSNorm(embed_dim)
-        self.quantized = quantized
+        self.rmsnorm1 = rmsnorm1
+        self.rmsnorm2 = rmsnorm2
+        
 
     def __str__(self) -> str:
         param_count = self.count_param()
         this = {
             "param_count":param_count,
-            "embed_dim":self.embed_dim,
         }
         # this_str = f""
         return str(this)
 
-    def count_param(self, *, use_symmetric=False) -> int:
+    def count_param(self, *, quantized=False, use_symmetric=False) -> int:
         total = 0
-        if self.quantized and nx.backend == "MLX" and not use_symmetric:
+        if quantized and nx.backend == "MLX" and not use_symmetric:
             total += self.ff.Wcombined.size * 4
             total += self.ff.Wout.size * 4
             total += self.attention.Wqkv.size * 4
@@ -123,10 +119,10 @@ class TransformerBlock:
 
     def to_dict(self, *, as_symmetric=False) -> dict:
         return {
-            "block_configs": {
-                "embed_dim":self.embed_dim,
-                "dtype": nx.dtype_to_srt[self.dtype]
-            },
+            # "block_configs": {
+            #     "embed_dim":self.embed_dim,
+            #     "dtype": nx.dtype_to_srt[self.dtype]
+            # },
             "attention":{"type":self.attention.self_type(), "param":self.attention.to_dict(as_symmetric=as_symmetric)},
             "ff":self.ff.to_dict(as_symmetric=as_symmetric),
             "rmsnorm1":self.rmsnorm1.to_dict(),
@@ -140,16 +136,25 @@ class TransformerBlock:
         attn_param = thing["attention"]["param"]
         attention = attn_cls.from_dict(attn_param, use_symmetric=use_symmetric)
         ff = MoE.from_dict(thing["ff"], use_symmetric=use_symmetric)
-        transformer_block = cls(configs["embed_dim"], attention, ff, dtype = nx.str_to_dtype[configs["dtype"]])
-        transformer_block.ff = MoE.from_dict(thing["ff"], use_symmetric=use_symmetric)
-        transformer_block.rmsnorm1 = RMSNorm.from_dict(thing["rmsnorm1"])
-        transformer_block.rmsnorm2 = RMSNorm.from_dict(thing["rmsnorm2"])
+        rmsnorm1 = RMSNorm.from_dict(thing["rmsnorm1"])
+        rmsnorm2 = RMSNorm.from_dict(thing["rmsnorm2"])
+        transformer_block = cls(attention, ff, rmsnorm1, rmsnorm2)
         return transformer_block
 
-    def get_configs(self, weight):
+    def get_configs(self):
         return {
+            "attn_type": self.attention.self_type(),
             "attention": self.attention.configs,
             "ff":self.ff.configs,
             "rmsnorm1": self.rmsnorm1.configs,
             "rmsnorm2": self.rmsnorm2.configs,
         }
+
+    @classmethod
+    def from_weights(cls, attn_type, attn_configs, attn_weights,attn_quants, ff_configs, ff_weights,ff_quants, rmsnorm1_configs,gamma1, rmsnorm2_configs,gamma2, dtype):
+        attn = ATTN_TYPE[attn_type].from_weight(attn_configs, attn_weights, quants=attn_quants, dtype=dtype)
+        ff = MoE.from_weight(configs=ff_configs, weights=ff_weights, quants=ff_quants, dtype=dtype)
+        rmsnorm1 = RMSNorm.from_weight(rmsnorm1_configs, gamma1)
+        rmsnorm2 = RMSNorm.from_weight(rmsnorm2_configs, gamma2)
+        block = TransformerBlock(attn, ff, rmsnorm1, rmsnorm2)
+        return block

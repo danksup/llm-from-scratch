@@ -98,6 +98,9 @@ str_to_dtype = {
     "bool":bool_,
 }
 
+floating_type = [float64, float32, float16, bfloat16]
+floating_type_str = [dtype_to_srt[i] for i in floating_type]
+
 def set_seed(seed:int):
     global rng
     if backend in ["MLX", "CuPy"]:

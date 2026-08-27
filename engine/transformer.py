@@ -6,6 +6,7 @@ from engine.moe import MoE
 import engine.backend as nx
 import engine.initializers as init
 import engine.optimizer as optim
+from engine.rmsnorm import RMSNorm
 from engine.dataloader import DataLoader
 from engine.embedding import Embedding
 from engine.losses import cross_entropy, cross_entropy_gradient
@@ -43,22 +44,37 @@ INITIALIZERS = {
 }
 
 class Transformer:
-    def __init__(self, configs: dict[str, Any] | None = None, blocks:list|None=None):
+    def __init__(self, configs: dict[str, Any] | None = None, blocks:list|None=None, *, embedding:bool|Embedding=False):
         self.blocks = []
         configs =  {} if configs is None else configs
+        self.configs = configs
 
         self.vocab_size = configs.get("vocab_size", None)
         assert self.vocab_size is not None, "vocab size can't be None"
 
         self.embed_dim = configs.get("embed_dim", 128)
         self.dtype = configs.get("dtype", nx.float32)
+        print(self.dtype)
+        if self.dtype not in nx.str_to_dtype and self.dtype not in nx.dtype_to_srt:
+            raise ValueError(f"invalid input: \"{self.dtype}\" of type {type(self.dtype)} for dtype. valid dtypes: {", ".join(nx.floating_type_str)} (str)")
+        if isinstance(self.dtype, str):
+            self.dtype = nx.str_to_dtype[self.dtype]
+        if nx.issubdtype(self.dtype, nx.integer):
+            raise ValueError(f"please use floating type for dtype initialization, got {self.dtype} instead.")
 
         self.quantized = configs.get("quantized", False)
         self.symmetric_quant = True if self.quantized == "symmetric" else False
 
         self.check_non_finite = configs.get("check_non_finite", True)
         assert self.quantized in [True, False, "symmetric"], f"True= mlx:affine, else symmetric; symmetric= use symmetric regardless of backend type; False = floats; got {self.quantized} of type {type(self.quantized)} instead."
-        self.embedding = Embedding(self.vocab_size, self.embed_dim, self.dtype, self.quantized, use_symmetric=self.symmetric_quant)
+
+        if not isinstance(embedding, Embedding):
+            self.embedding = Embedding(self.vocab_size, self.embed_dim, self.dtype, self.quantized, use_symmetric=self.symmetric_quant)
+        else:
+            self.embedding = self.embedding
+        if not isinstance(self.embedding, Embedding):
+            raise ValueError(",")
+        
         self.gradient_scale = configs.get("gradient_scale", 4096)
         self.moe_lambda = configs.get("moe_lambda", 0.01)
         assert self.gradient_scale > 0, "gradient scale cant be less than 1"
@@ -136,8 +152,10 @@ class Transformer:
                         raise ValueError(f"[block {i}] invalid variant of \"{attn_variant}\". valid variants: {", ".join(ATTN_VARIANT)}")
 
                 ff = MoE(CF, topk, E, D, H, dtype=self.dtype, initializer=ff_init, quantized=self.quantized, as_symmetric=self.symmetric_quant)
-                transformer_block = TransformerBlock(D, attn, ff, self.dtype, attn_init, ff_init, self.quantized, use_symmetric=self.symmetric_quant)
-
+                rmsnorm1 = RMSNorm(D)
+                rmsnorm2 = RMSNorm(D)
+                transformer_block = TransformerBlock(attn, ff, rmsnorm1, rmsnorm2)
+               
                 self.blocks.append(transformer_block)
         else:
             self.blocks = blocks
@@ -157,7 +175,7 @@ class Transformer:
         """
         total = 0
         for i in self.blocks:
-            total += i.count_param(use_symmetric=self.symmetric_quant)
+            total += i.count_param(quantized=self.quantized, use_symmetric=self.symmetric_quant)
         total += self.embedding.lookup_table.size
         return total
 
@@ -569,6 +587,7 @@ class Transformer:
         configs += "precision: full (float32)\n" if self.dtype == nx.float32 else f"precision: mixed precision ({self.dtype})\n"
         configs += f"moe_lambda: {str(self.moe_lambda)}" + "\n"
         configs += f"block configs: {self.block_configs}\n"
+        configs += f"check_non_finite: {self.check_non_finite}\n"
         configs += "individual block configs (only difference is shown): \n"
         similar_count = 0
         for i, block in  enumerate(self.individual_block_configs):

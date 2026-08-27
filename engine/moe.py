@@ -269,3 +269,18 @@ class MoE:
              moe.Wcombined = nx.array(Wcombined, dtype=dtype)
              moe.Wout = nx.array(Wout, dtype=dtype)
         return moe
+
+    @classmethod
+    def from_weight(cls, configs, weights, quants, dtype) -> "MoE":
+        hidden_width, embed_dim, n_experts, capacity_factor, top_k = configs
+        router, wcombined, wout = weights
+        scales, biases = quants
+
+        moe = cls(capacity_factor, top_k, n_experts, embed_dim, hidden_width, dtype)
+        moe.router = router
+        moe.Wcombined = wcombined
+        moe.Wout = wout
+        moe.scales = scales
+        moe.biases = biases
+
+        return moe

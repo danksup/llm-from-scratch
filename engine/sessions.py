@@ -16,6 +16,9 @@ from engine.optimizer import scheduler
 from engine.tokenizer import Tokenizer
 from engine.transformer import Transformer
 from helper.singleton import colorize, sleep
+from engine.transformer_block import TransformerBlock
+from engine.moe import MoE
+from engine.embedding import Embedding
 
 
 optimizers = Union[optim.Adam, optim.AdamW, optim.SGD]
@@ -404,22 +407,27 @@ class Session:
            pickle.dump(session, f)
 
     def simple_save(self, filename:str="test123", *, save_tokenizer:bool=False):
-        tensors = self.transformer.get_all_weights("dict") 
+        weights = self.transformer.get_all_weights("dict") 
         quants = self.transformer.get_quant_params()
 
         convert_to_symmetric = nx.backend == "MLX" and self.configs["backend"]["mlx_save_quantized_weights_as_symmetric"] and not self.transformer.symmetric_quant
         if convert_to_symmetric:
-            for k,v in tensors.items():
+            for k,v in weights.items():
                 if f"{k}.scales" in quants:
                     scale = quants[f"{k}.scales"]
                     bias = quants[f"{k}.biases"]
-                    tensors[k], new_scale, new_bias = nx.quantize(nx.dequantize(v, scale, bias))
+                    weights[k], new_scale, new_bias = nx.quantize(nx.dequantize(v, scale, bias))
                     quants[f"{k}.scales"] = new_scale
                     quants[f"{k}.biases"] = new_bias
 
+        embedding = {"embedding":self.transformer.embedding.lookup_table, "embedding_scale":self.transformer.embedding.table_scale,  "embedding_bias":self.transformer.embedding.bias}
+        tensors = weights | quants | embedding
+
         metadata = {
             "tokenizer_id": str(self.tokenizer.tokenizer_id),
-            "configs": str(self.configs)
+            "session_configs": str(self.configs),
+            "transformer_configs": str(self.transformer.configs),
+            "block_configs": str(self.transformer.get_block_configs())
         }
         nx.save_safetensors(Path(f"artifacts/sessions/session_{filename}.safetensors"), tensors, metadata)
 
@@ -429,13 +437,44 @@ class Session:
             filepath = Path(filepath)
 
         session, metadata = nx.load(filepath, format='safetensors', return_metadata=True) #type:ignore
-        configs = ast.literal_eval(metadata["configs"]) #type:ignore
+        session_configs = ast.literal_eval(metadata["session_configs"]) #type:ignore
+        transformer_configs =  ast.literal_eval(metadata["transformer_configs"]) #type:ignore
+        block_configs =  ast.literal_eval(metadata["block_configs"]) #type:ignore
         tokenizer_id = metadata["tokenizer_id"] #type:ignore
 
         if tokenizer_id != str(tokenizer.tokenizer_id):
             raise ValueError(f"input tokenizer of id {tokenizer.tokenizer_id} doesnt match the session's tokenizer of id {tokenizer_id}")
 
-        return configs
+        blocks = []
+        n_block = transformer_configs["n_blocks"]
+        dtype = transformer_configs["dtype"]
+        embedding_lookuptable = session["embedding"] #type:ignore
+        embedding_scale = session["embedding_scale"] #type:ignore
+        embedding_bias = session["embedding_bias"] #type:ignore
+
+        for i in range(n_block):
+            configs = block_configs[i]
+            attn_type = configs["attn_type"]
+            attn_configs = configs["attention"]
+            attn_params = (session[f"{i}.attention.Wqkv"], session[f"{i}.attention.Wo"]) #type:ignore
+            attn_quants = (session[f"{i}.attention.Wqkv.scales"], session[f"{i}.attention.Wo.biases"]) #type:ignore
+            ff_configs = configs["ff"]
+            ff_params = (session[f"{i}.ff.router"],session[f"{i}.ff.Wcombined"], session[f"{i}.ffs.Wout"]) #type:ignore
+            ff_quants = (session[f"{i}.attention.Wqkv.scales"], session[f"{i}.attention.Wo.biases"]) #type:ignore
+            rmsnorm1_configs = configs["rmsnorm1"]
+            rmsnorm1_gamma = session[f"{i}.rmsnorm1.gamma"] #type:ignore
+            rmsnorm2_configs = configs["rmsnorm2"]
+            rmsnorm2_gamma = session[f"{i}.rmsnorm2.gamma"] #type:ignore
+
+            block = TransformerBlock.from_weights(attn_type=attn_type, attn_configs=attn_configs, attn_weights=attn_params,attn_quants=attn_quants, ff_configs=ff_configs, ff_weights=ff_params,ff_quants=ff_quants, rmsnorm1_configs=rmsnorm1_configs, rmsnorm2_configs=rmsnorm2_configs, gamma1=rmsnorm1_gamma, gamma2=rmsnorm2_gamma, dtype=dtype)
+            blocks.append(block)
+
+        embedding = Embedding.from_weights(lookuptable=embedding_lookuptable, scale=embedding_scale, bias=embedding_bias, dtype=dtype)
+        transformer = Transformer(transformer_configs, blocks, embedding=embedding)
+
+        session_id = session_configs["session_id"]
+        session = cls(transformer=transformer, tokenizer=tokenizer, init_optimizer=False, session_id=session_id)
+        return session
         
     @classmethod
     def load(cls, filepath:str|Path, *, inference_only:bool=True) -> "Session":

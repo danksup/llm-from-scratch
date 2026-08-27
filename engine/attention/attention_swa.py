@@ -322,3 +322,17 @@ class AttentionSWA:
             attention.Wo = nx.array(Wo, dtype=dtype)
 
         return attention
+
+    @classmethod
+    def from_weight(cls, configs, weights,quants, dtype) -> "AttentionSWA":
+        embed_dim, n_kv_heads, n_heads, _, _,W, _ = configs
+        wqkv, wo = weights
+        scales, biases = quants
+
+        attn = cls(embed_dim, n_heads, n_kv_heads,W,dtype)
+        attn.Wqkv = wqkv
+        attn.Wo = wo
+        attn.scales = scales
+        attn.biases = biases
+
+        return attn

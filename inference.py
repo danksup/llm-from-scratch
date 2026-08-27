@@ -2,8 +2,7 @@ from engine.sessions import Session
 import engine.backend as nx
 import time
 
-session = Session.load("artifacts/sessions/session_82688000_param_1_epochs_weights_only_quantized_f0c6f5aa-7439-4b99-a03a-c4eacf862766.ram2n")
-print(session.transformer.blocks[0].attention.Wqkv)
+session = Session.load("artifacts/sessions/session_88832000_param_1_epochs_weights_only_4eeb33aa-37c3-4856-a7cd-a28373d9ca6c.ram2n")
 tokenizer = session.tokenizer
 context = "this is so stupid."
 print(f"input: {context}")

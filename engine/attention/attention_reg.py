@@ -277,3 +277,17 @@ class AttentionFull:
         attention.quantized=True
 
         return attention
+
+    @classmethod
+    def from_weight(cls, configs, weights,quants, dtype) -> "AttentionFull":
+        embed_dim, n_kv_heads, n_heads, n_rep, head_dim, _ = configs
+        wqkv, wo = weights
+        scales, biases = quants
+
+        attn = cls(embed_dim, n_heads, n_kv_heads,dtype)
+        attn.Wqkv = wqkv
+        attn.Wo = wo
+        attn.scales = scales
+        attn.biases = biases
+
+        return attn

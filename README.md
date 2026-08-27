@@ -69,7 +69,7 @@ logs:
   
 #### Maybe:
 - autograd
-- other gpus acceleration (maybe not)
+
 ## Bugs:
 ### Fixed
 - inference degraded after a certain number of tokens 

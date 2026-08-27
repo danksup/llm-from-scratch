@@ -16,17 +16,15 @@ ATTN_TYPE = {
 }
 
 class TransformerBlock:
-    def __init__(self ,embed_dim, attention:Attention, ff_dim, n_experts=1, cf=1.25, top_k =2, dtype=nx.float16, attn_init=init.glorot_uniform, moe_init=init.glorot_uniform, quantized:bool|str=False,* , use_symmetric=False) -> None:
+    def __init__(self ,embed_dim, attention:Attention, ff:MoE, dtype=nx.float16, attn_init=init.glorot_uniform, moe_init=init.glorot_uniform, quantized:bool|str=False,* , use_symmetric=False) -> None:
         self.causal_mask = None
         self.embed_dim = embed_dim
-        self.hidden_width = ff_dim
-        self.n_experts = n_experts
-        self.cf = cf
+
         self.dtype = dtype
 
         self.attention = attention
         self.attention_type = attention.self_type()
-        self.ff = MoE(cf, top_k, n_experts, embed_dim, self.hidden_width, dtype=dtype, initializer=moe_init, quantized=quantized, as_symmetric=use_symmetric)
+        self.ff = ff
         self.rmsnorm1 = RMSNorm(embed_dim)
         self.rmsnorm2 = RMSNorm(embed_dim)
         self.quantized = quantized
@@ -36,8 +34,6 @@ class TransformerBlock:
         this = {
             "param_count":param_count,
             "embed_dim":self.embed_dim,
-            "hidden_width":self.hidden_width,
-            "n_experts":self.n_experts,
         }
         # this_str = f""
         return str(this)
@@ -128,9 +124,6 @@ class TransformerBlock:
     def to_dict(self, *, as_symmetric=False) -> dict:
         return {
             "block_configs": {
-                "cf":self.cf,
-                "n_experts" :self.n_experts,
-                "hidden_width":self.hidden_width,
                 "embed_dim":self.embed_dim,
                 "dtype": nx.dtype_to_srt[self.dtype]
             },
@@ -146,8 +139,17 @@ class TransformerBlock:
         attn_cls = ATTN_TYPE[thing["attention"]["type"]]
         attn_param = thing["attention"]["param"]
         attention = attn_cls.from_dict(attn_param, use_symmetric=use_symmetric)
-        transformer_block = cls(configs["embed_dim"], attention, configs["hidden_width"], configs["n_experts"],configs["cf"], dtype = nx.str_to_dtype[configs["dtype"]])
+        ff = MoE.from_dict(thing["ff"], use_symmetric=use_symmetric)
+        transformer_block = cls(configs["embed_dim"], attention, ff, dtype = nx.str_to_dtype[configs["dtype"]])
         transformer_block.ff = MoE.from_dict(thing["ff"], use_symmetric=use_symmetric)
         transformer_block.rmsnorm1 = RMSNorm.from_dict(thing["rmsnorm1"])
         transformer_block.rmsnorm2 = RMSNorm.from_dict(thing["rmsnorm2"])
         return transformer_block
+
+    def get_configs(self, weight):
+        return {
+            "attention": self.attention.configs,
+            "ff":self.ff.configs,
+            "rmsnorm1": self.rmsnorm1.configs,
+            "rmsnorm2": self.rmsnorm2.configs,
+        }

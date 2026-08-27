@@ -7,6 +7,7 @@ class RMSNorm:
         self.gamma = nx.ones((embed_dim,), dtype=nx.float32)
         self.d_gamma = None
         self.epsilon = nx.float_32(epsilon)
+        self.configs = embed_dim, epsilon
 
     @staticmethod
     def _forward(x:nx.ArrayLike, gamma:nx.ArrayLike, epsilon:Any) -> tuple[nx.ArrayLike, tuple[Any,...]]:

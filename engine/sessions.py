@@ -1,3 +1,4 @@
+import ast
 import copy
 import pickle
 import time
@@ -94,7 +95,7 @@ class Session:
     def __init__(self, transformer:Transformer, tokenizer:Tokenizer, init_optimizer:bool | optimizers | None = True, configs:dict | None = None, *, session_id=None):
         self.session_id = session_id
         if self.session_id is None:
-            self.session_id = uuid.uuid4()
+            self.session_id = str(uuid.uuid4())
         self.tokenizer = tokenizer
         self.transformer = transformer
         assert len(tokenizer.vocab) == transformer.vocab_size, f"vocab size mismatch of {transformer.vocab_size} in transformer and {len(tokenizer.vocab)} in tokenizer."
@@ -134,6 +135,7 @@ class Session:
                 nx._nx.disable_compile() #type:ignore
 
         self.optimizer = None
+        optimizer_args = self.configs["optimizer_args"].copy()
         if isinstance(init_optimizer, bool):
             if init_optimizer:
                 optimizer_class = OPTIMIZERS[self.configs["optimizer"].lower()]
@@ -143,13 +145,13 @@ class Session:
                     if isinstance(schedule, str):
                         if schedule not in SCHEDULER:
                             raise ValueError(f"invalid scheduler {schedule}. valid schedulers: {", ".join(SCHEDULER.keys())}")
-                        self.configs["optimizer_args"]["scheduler"] = SCHEDULER[schedule]
+                        optimizer_args["scheduler"] = SCHEDULER[schedule]
 
                     if self.configs["optimizer_args"]["min_lr"] is None:
-                        self.configs["optimizer_args"]["min_lr"] = self.configs["optimizer_args"]["lr"] / 1e2
+                        self.configs["optimizer_args"]["min_lr"] = optimizer_args["min_lr"] = self.configs["optimizer_args"]["lr"] / 1e2
                 else:
                     self.configs["optimizer_args"].pop("min_lr")
-                self.optimizer = optimizer_class(**self.configs["optimizer_args"])
+                self.optimizer = optimizer_class(**optimizer_args)
         elif isinstance(init_optimizer, OPTIMIZER_TYPES):
             self.optimizer = init_optimizer
 
@@ -167,6 +169,11 @@ class Session:
         if nx.backend == "MLX":
             if self.configs["backend"]["mlx_disable_compile"]:
                 configs_str["backend"]["mlx_disable_compile"] = colorize("True", "red")
+
+        for key, val in configs_str.items():
+            if isinstance(configs_str[key], (type)):
+                print(key)
+                configs_str[key] = val.__str__()
 
         for key,val in configs_str.items():
             if isinstance(val, dict):
@@ -399,19 +406,37 @@ class Session:
     def simple_save(self, filename:str="test123", *, save_tokenizer:bool=False):
         tensors = self.transformer.get_all_weights("dict") 
         quants = self.transformer.get_quant_params()
-        
+
         convert_to_symmetric = nx.backend == "MLX" and self.configs["backend"]["mlx_save_quantized_weights_as_symmetric"] and not self.transformer.symmetric_quant
         if convert_to_symmetric:
             for k,v in tensors.items():
-                # transformer[k] = pass
-                pass
+                if f"{k}.scales" in quants:
+                    scale = quants[f"{k}.scales"]
+                    bias = quants[f"{k}.biases"]
+                    tensors[k], new_scale, new_bias = nx.quantize(nx.dequantize(v, scale, bias))
+                    quants[f"{k}.scales"] = new_scale
+                    quants[f"{k}.biases"] = new_bias
+
         metadata = {
-            "tokenizer_id": str(self.session_id),
+            "tokenizer_id": str(self.tokenizer.tokenizer_id),
             "configs": str(self.configs)
         }
         nx.save_safetensors(Path(f"artifacts/sessions/session_{filename}.safetensors"), tensors, metadata)
 
+    @classmethod
+    def simple_load(cls, filepath:str|Path, tokenizer:Tokenizer):
+        if isinstance(filepath, str):
+            filepath = Path(filepath)
 
+        session, metadata = nx.load(filepath, format='safetensors', return_metadata=True) #type:ignore
+        configs = ast.literal_eval(metadata["configs"]) #type:ignore
+        tokenizer_id = metadata["tokenizer_id"] #type:ignore
+
+        if tokenizer_id != str(tokenizer.tokenizer_id):
+            raise ValueError(f"input tokenizer of id {tokenizer.tokenizer_id} doesnt match the session's tokenizer of id {tokenizer_id}")
+
+        return configs
+        
     @classmethod
     def load(cls, filepath:str|Path, *, inference_only:bool=True) -> "Session":
         """

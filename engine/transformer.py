@@ -2,6 +2,7 @@ import copy
 from typing import Any, Literal, overload
 
 import engine.attention as attn
+from engine.moe import MoE
 import engine.backend as nx
 import engine.initializers as init
 import engine.optimizer as optim
@@ -134,7 +135,9 @@ class Transformer:
                     case _:
                         raise ValueError(f"[block {i}] invalid variant of \"{attn_variant}\". valid variants: {", ".join(ATTN_VARIANT)}")
 
-                transformer_block = TransformerBlock(D, attn, H, E, CF, topk, self.dtype, attn_init, ff_init, self.quantized, use_symmetric=self.symmetric_quant)
+                ff = MoE(CF, topk, E, D, H, dtype=self.dtype, initializer=ff_init, quantized=self.quantized, as_symmetric=self.symmetric_quant)
+                transformer_block = TransformerBlock(D, attn, ff, self.dtype, attn_init, ff_init, self.quantized, use_symmetric=self.symmetric_quant)
+
                 self.blocks.append(transformer_block)
         else:
             self.blocks = blocks
@@ -640,3 +643,8 @@ class Transformer:
                         quant_params[f"{idx}.{layer}.{weights[layer_i][attr_i]}.{quant}"] = attr
 
         return quant_params
+
+    def get_block_configs(self):
+        configs = {}
+        for idx, block in enumerate(self.blocks):
+            configs[idx] = block.get_configs()

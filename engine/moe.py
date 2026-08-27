@@ -269,6 +269,3 @@ class MoE:
              moe.Wcombined = nx.array(Wcombined, dtype=dtype)
              moe.Wout = nx.array(Wout, dtype=dtype)
         return moe
-
-    def get_configs(self):
-        return (self.hidden_width, self.embed_dim, self.n_experts, self.cf, self.top_k)

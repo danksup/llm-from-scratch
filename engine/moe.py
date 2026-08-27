@@ -7,7 +7,7 @@ from engine.activations import softmax, softmax_derivative, swish, swish_derivat
 from helper.singleton import sleep
 
 class MoE:
-    def __init__(self, capacity_factor, top_k, n_experts, embed_dim, hidden_width, dtype:Any=nx.float16, initializer:Callable=initializer.glorot_uniform, quantized:bool|str=False, *, as_symmetric:bool=False) -> None:
+    def __init__(self, capacity_factor, top_k, n_experts, embed_dim, hidden_width, dtype:Any=nx.float16, initializer:Callable=initializer.glorot_uniform, quantized:bool|str=False, *, as_symmetric:bool=False, init=True) -> None:
         self.hidden_width = hidden_width
         self.embed_dim = embed_dim #D
         self.n_experts = n_experts #E
@@ -16,27 +16,29 @@ class MoE:
         self.dtype = dtype
 
         self.configs = (hidden_width, embed_dim, n_experts, capacity_factor, top_k)
-
-        router_shape = embed_dim, n_experts
-        self.router = initializer(router_shape, dtype= nx.float32)
-        self.d_router = None
-
-        wcombined_shape =  (n_experts, embed_dim, hidden_width * 2)
-        self.Wcombined = initializer(wcombined_shape, dtype=dtype)
-        assert nx.isfinite(self.Wcombined).all(), f"non-finite detected when initializing moe.Wcombined."
-
-        wout_shape =  (n_experts, hidden_width, embed_dim)
-        self.Wout = initializer(wout_shape, dtype = dtype)
-        assert nx.isfinite(self.Wout).all(), f"non-finite detected when initializing moe.Wout."
+        self.quantized = quantized
 
         self.scales = (None, None)
         self.biases = (None, None)
-        self.quantized = quantized
-        if quantized:
-            self.Wcombined, wcombined_scale, wcombined_biases = nx.quantize(self.Wcombined, regular=as_symmetric)
-            self.Wout, wout_scale, wout_biases = nx.quantize(self.Wout, regular=as_symmetric)
-            self.scales = (wcombined_scale, wout_scale)
-            self.biases = (wcombined_biases, wout_biases)
+        
+        if init:
+            router_shape = embed_dim, n_experts
+            self.router = initializer(router_shape, dtype= nx.float32)
+            self.d_router = None
+
+            wcombined_shape =  (n_experts, embed_dim, hidden_width * 2)
+            self.Wcombined = initializer(wcombined_shape, dtype=dtype)
+            assert nx.isfinite(self.Wcombined).all(), f"non-finite detected when initializing moe.Wcombined."
+
+            wout_shape =  (n_experts, hidden_width, embed_dim)
+            self.Wout = initializer(wout_shape, dtype = dtype)
+            assert nx.isfinite(self.Wout).all(), f"non-finite detected when initializing moe.Wout."
+
+            if quantized:
+                self.Wcombined, wcombined_scale, wcombined_biases = nx.quantize(self.Wcombined, regular=as_symmetric)
+                self.Wout, wout_scale, wout_biases = nx.quantize(self.Wout, regular=as_symmetric)
+                self.scales = (wcombined_scale, wout_scale)
+                self.biases = (wcombined_biases, wout_biases)
 
         self.dWcombined = None
         self.dWout = None
@@ -274,13 +276,15 @@ class MoE:
     def from_weight(cls, configs, weights, quants, dtype) -> "MoE":
         hidden_width, embed_dim, n_experts, capacity_factor, top_k = configs
         router, wcombined, wout = weights
-        scales, biases = quants
 
-        moe = cls(capacity_factor, top_k, n_experts, embed_dim, hidden_width, dtype)
+        moe = cls(capacity_factor, top_k, n_experts, embed_dim, hidden_width, dtype, init=False)
         moe.router = router
         moe.Wcombined = wcombined
         moe.Wout = wout
-        moe.scales = scales
-        moe.biases = biases
+
+        if quants is not None:
+            scales, biases = quants
+            moe.scales = scales
+            moe.biases = biases
 
         return moe

@@ -6,7 +6,7 @@ import engine.initializers as initializer
 from engine.rope import precompute_freqs
 
 class AttentionFull:
-    def __init__(self,embed_dim:int, n_heads:int, n_kv_heads:int=-1,  dtype:Any=nx.float16,  initializer:Callable=initializer.glorot_uniform, quantized:bool=False, *, use_symmetric=False) -> None:
+    def __init__(self,embed_dim:int, n_heads:int, n_kv_heads:int=-1,  dtype:Any=nx.float16,  initializer:Callable=initializer.glorot_uniform, quantized:bool=False, *, use_symmetric=False, init=True) -> None:
         self.n_kv_heads = n_kv_heads
 
         if n_kv_heads < 0:
@@ -27,23 +27,25 @@ class AttentionFull:
 
         self.configs = self.embed_dim, self.n_kv_heads, self.n_heads, self.n_rep, self.head_dim, self.freqs
 
-        wqkv_shape = embed_dim + 2 * n_kv_heads * self.head_dim, embed_dim
-        self.Wqkv = initializer(wqkv_shape, dtype=dtype)
-        assert nx.isfinite(self.Wqkv).all(), f"non-finite detected when initializing attentipn.Wqkv."
-
-        wo_shape = embed_dim,embed_dim
-        self.Wo = initializer(wo_shape, dtype=dtype)
-        assert nx.isfinite(self.Wo).all(), f"non-finite detected when initializing attentipn.Wo."
-
+        self.quantized = quantized
         self.scales = (None, None)
         self.biases = (None,None)
-        self.quantized = quantized
-        self.use_symmetric = use_symmetric
-        if quantized:
-            self.Wqkv, wqkv_scale, wqkv_bias = nx.quantize(self.Wqkv, regular=use_symmetric)
-            self.Wo, wo_scale, wo_bias = nx.quantize(self.Wo, regular=use_symmetric)
-            self.scales = (wqkv_scale, wo_scale)
-            self.biases = (wqkv_bias, wo_bias)
+        
+        if init:
+            wqkv_shape = embed_dim + 2 * n_kv_heads * self.head_dim, embed_dim
+            self.Wqkv = initializer(wqkv_shape, dtype=dtype)
+            assert nx.isfinite(self.Wqkv).all(), f"non-finite detected when initializing attentipn.Wqkv."
+
+            wo_shape = embed_dim,embed_dim
+            self.Wo = initializer(wo_shape, dtype=dtype)
+            assert nx.isfinite(self.Wo).all(), f"non-finite detected when initializing attentipn.Wo."
+
+            self.use_symmetric = use_symmetric
+            if quantized:
+                self.Wqkv, wqkv_scale, wqkv_bias = nx.quantize(self.Wqkv, regular=use_symmetric)
+                self.Wo, wo_scale, wo_bias = nx.quantize(self.Wo, regular=use_symmetric)
+                self.scales = (wqkv_scale, wo_scale)
+                self.biases = (wqkv_bias, wo_bias)
 
         self.dWqkv = None
         self.dWo = None
@@ -280,14 +282,16 @@ class AttentionFull:
 
     @classmethod
     def from_weight(cls, configs, weights,quants, dtype) -> "AttentionFull":
-        embed_dim, n_kv_heads, n_heads, n_rep, head_dim, _ = configs
+        embed_dim, n_kv_heads, n_heads, _, _, = configs
         wqkv, wo = weights
-        scales, biases = quants
 
-        attn = cls(embed_dim, n_heads, n_kv_heads,dtype)
+        attn = cls(embed_dim, n_heads, n_kv_heads,dtype, init=False)
         attn.Wqkv = wqkv
         attn.Wo = wo
-        attn.scales = scales
-        attn.biases = biases
+
+        if quants is not None:
+            scales, biases = quants
+            attn.scales = scales
+            attn.biases = biases
 
         return attn

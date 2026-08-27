@@ -131,7 +131,6 @@ class TransformerBlock:
 
     @classmethod
     def from_dict(cls,thing:dict, *, use_symmetric=False) -> "TransformerBlock":
-        configs = thing["block_configs"]
         attn_cls = ATTN_TYPE[thing["attention"]["type"]]
         attn_param = thing["attention"]["param"]
         attention = attn_cls.from_dict(attn_param, use_symmetric=use_symmetric)
@@ -144,7 +143,7 @@ class TransformerBlock:
     def get_configs(self):
         return {
             "attn_type": self.attention.self_type(),
-            "attention": self.attention.configs,
+            "attention": list(self.attention.configs)[0:-1],
             "ff":self.ff.configs,
             "rmsnorm1": self.rmsnorm1.configs,
             "rmsnorm2": self.rmsnorm2.configs,

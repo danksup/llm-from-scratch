@@ -3,10 +3,13 @@ import engine.backend as nx
 
 
 class RMSNorm:
-    def __init__(self, embed_dim:int, epsilon:float=1e-5) -> None:
-        self.gamma = nx.ones((embed_dim,), dtype=nx.float32)
-        self.d_gamma = None
+    def __init__(self, embed_dim:int, epsilon:float=1e-5, *, init=True) -> None:
         self.epsilon = nx.float_32(epsilon)
+
+        if init:
+            self.gamma = nx.ones((embed_dim,), dtype=nx.float32)
+
+        self.d_gamma = None
         self.configs = embed_dim, epsilon
 
     @staticmethod
@@ -49,7 +52,7 @@ class RMSNorm:
     @classmethod
     def from_weight(cls, configs, gamma):
         D, epsilon = configs
-        rms = cls(D, epsilon)
+        rms = cls(D, epsilon, init=False)
         rms.gamma = gamma
 
         return rms

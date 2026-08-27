@@ -1,10 +1,11 @@
 from engine.sessions import Session
+from engine.tokenizer import Tokenizer
 import engine.backend as nx
 import time
 
-session = Session.load("artifacts/sessions/session_88832000_param_1_epochs_weights_only_4eeb33aa-37c3-4856-a7cd-a28373d9ca6c.ram2n")
-tokenizer = session.tokenizer
-context = "this is so stupid."
+tokenizer = Tokenizer.load("artifacts/tokenizer/tokenizer32000_1351277738len.tokenizer")
+session = Session.simple_load("artifacts/sessions/session_88832000_param_1_epochs_weights_only_19f47f5e-5e2f-4b8e-a2f1-3a362e0e279e.safetensors", tokenizer)
+context = "test123."
 print(f"input: {context}")
 context = nx.array(tokenizer.encode(context), nx.uint16)
 

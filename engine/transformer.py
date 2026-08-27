@@ -54,7 +54,6 @@ class Transformer:
 
         self.embed_dim = configs.get("embed_dim", 128)
         self.dtype = configs.get("dtype", nx.float32)
-        print(self.dtype)
         if self.dtype not in nx.str_to_dtype and self.dtype not in nx.dtype_to_srt:
             raise ValueError(f"invalid input: \"{self.dtype}\" of type {type(self.dtype)} for dtype. valid dtypes: {", ".join(nx.floating_type_str)} (str)")
         if isinstance(self.dtype, str):
@@ -71,7 +70,7 @@ class Transformer:
         if not isinstance(embedding, Embedding):
             self.embedding = Embedding(self.vocab_size, self.embed_dim, self.dtype, self.quantized, use_symmetric=self.symmetric_quant)
         else:
-            self.embedding = self.embedding
+            self.embedding = embedding
         if not isinstance(self.embedding, Embedding):
             raise ValueError(",")
         
@@ -161,10 +160,6 @@ class Transformer:
             self.blocks = blocks
             if not self.blocks:
                 raise ValueError("this transformer doesnt have any block.")
-
-            for i, block in enumerate(self.blocks):
-                if block.embed_dim != self.embed_dim:
-                    raise ValueError(f"block {i} embed dimension of {block.embed_dim} does not match the transformer's embed dimension of {self.embed_dim}")
 
     def __str__(self) -> str:
         return self.get_configs_str()
@@ -667,3 +662,5 @@ class Transformer:
         configs = {}
         for idx, block in enumerate(self.blocks):
             configs[idx] = block.get_configs()
+
+        return configs

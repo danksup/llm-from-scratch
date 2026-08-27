@@ -20,6 +20,8 @@ from engine.transformer_block import TransformerBlock
 from engine.moe import MoE
 from engine.embedding import Embedding
 
+from helper.singleton import sleep
+
 
 optimizers = Union[optim.Adam, optim.AdamW, optim.SGD]
 OPTIMIZER_TYPES = (optim.Adam,optim.AdamW,optim.SGD,)
@@ -172,11 +174,6 @@ class Session:
         if nx.backend == "MLX":
             if self.configs["backend"]["mlx_disable_compile"]:
                 configs_str["backend"]["mlx_disable_compile"] = colorize("True", "red")
-
-        for key, val in configs_str.items():
-            if isinstance(configs_str[key], (type)):
-                print(key)
-                configs_str[key] = val.__str__()
 
         for key,val in configs_str.items():
             if isinstance(val, dict):
@@ -410,7 +407,7 @@ class Session:
         weights = self.transformer.get_all_weights("dict") 
         quants = self.transformer.get_quant_params()
 
-        convert_to_symmetric = nx.backend == "MLX" and self.configs["backend"]["mlx_save_quantized_weights_as_symmetric"] and not self.transformer.symmetric_quant
+        convert_to_symmetric = nx.backend == "MLX" and self.transformer.quantized and self.configs["backend"]["mlx_save_quantized_weights_as_symmetric"] and not self.transformer.symmetric_quant
         if convert_to_symmetric:
             for k,v in weights.items():
                 if f"{k}.scales" in quants:
@@ -420,8 +417,12 @@ class Session:
                     quants[f"{k}.scales"] = new_scale
                     quants[f"{k}.biases"] = new_bias
 
-        embedding = {"embedding":self.transformer.embedding.lookup_table, "embedding_scale":self.transformer.embedding.table_scale,  "embedding_bias":self.transformer.embedding.bias}
-        tensors = weights | quants | embedding
+        if self.transformer.quantized:
+            embedding = {"embedding":self.transformer.embedding.lookup_table, "embedding_scale":self.transformer.embedding.table_scale,  "embedding_bias":self.transformer.embedding.bias}
+            tensors = weights | quants | embedding
+        else:
+            embedding = {"embedding":self.transformer.embedding.lookup_table}
+            tensors = weights | embedding
 
         metadata = {
             "tokenizer_id": str(self.tokenizer.tokenizer_id),
@@ -447,29 +448,40 @@ class Session:
 
         blocks = []
         n_block = transformer_configs["n_blocks"]
+        quantized = transformer_configs["quantized"]
         dtype = transformer_configs["dtype"]
+
         embedding_lookuptable = session["embedding"] #type:ignore
-        embedding_scale = session["embedding_scale"] #type:ignore
-        embedding_bias = session["embedding_bias"] #type:ignore
+        embedding_quants = None
+    
+        if quantized:
+            embedding_quants = session["embedding_scale"],session["embedding_bias"] #type:ignore
 
         for i in range(n_block):
             configs = block_configs[i]
+
             attn_type = configs["attn_type"]
             attn_configs = configs["attention"]
             attn_params = (session[f"{i}.attention.Wqkv"], session[f"{i}.attention.Wo"]) #type:ignore
-            attn_quants = (session[f"{i}.attention.Wqkv.scales"], session[f"{i}.attention.Wo.biases"]) #type:ignore
+            attn_quants = None #type:ignore
+
             ff_configs = configs["ff"]
-            ff_params = (session[f"{i}.ff.router"],session[f"{i}.ff.Wcombined"], session[f"{i}.ffs.Wout"]) #type:ignore
-            ff_quants = (session[f"{i}.attention.Wqkv.scales"], session[f"{i}.attention.Wo.biases"]) #type:ignore
+            ff_params = (session[f"{i}.ff.router"],session[f"{i}.ff.Wcombined"], session[f"{i}.ff.Wout"]) #type:ignore
+            ff_quants = None #type:ignore
+
             rmsnorm1_configs = configs["rmsnorm1"]
             rmsnorm1_gamma = session[f"{i}.rmsnorm1.gamma"] #type:ignore
             rmsnorm2_configs = configs["rmsnorm2"]
             rmsnorm2_gamma = session[f"{i}.rmsnorm2.gamma"] #type:ignore
 
+            if quantized:
+                attn_quants = (session[f"{i}.attention.Wqkv.scales"], session[f"{i}.attention.Wo.biases"]) #type:ignore
+                ff_quants = (session[f"{i}.attention.Wqkv.scales"], session[f"{i}.attention.Wo.biases"]) #type:ignore
+
             block = TransformerBlock.from_weights(attn_type=attn_type, attn_configs=attn_configs, attn_weights=attn_params,attn_quants=attn_quants, ff_configs=ff_configs, ff_weights=ff_params,ff_quants=ff_quants, rmsnorm1_configs=rmsnorm1_configs, rmsnorm2_configs=rmsnorm2_configs, gamma1=rmsnorm1_gamma, gamma2=rmsnorm2_gamma, dtype=dtype)
             blocks.append(block)
 
-        embedding = Embedding.from_weights(lookuptable=embedding_lookuptable, scale=embedding_scale, bias=embedding_bias, dtype=dtype)
+        embedding = Embedding.from_weights(lookuptable=embedding_lookuptable, quants=embedding_quants, dtype=dtype)
         transformer = Transformer(transformer_configs, blocks, embedding=embedding)
 
         session_id = session_configs["session_id"]

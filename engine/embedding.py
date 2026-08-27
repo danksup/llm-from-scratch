@@ -3,20 +3,21 @@ from typing import Any
 import engine.backend as nx
 
 class Embedding:
-    def __init__(self, n:int, embed_dim:int, dtype=nx.float16, quantized:bool|str=False, *, use_symmetric=False) -> None:
+    def __init__(self, n:int, embed_dim:int, dtype=nx.float16, quantized:bool|str=False, *, use_symmetric=False, init=True) -> None:
         self.n = n
         self.embed_dim = embed_dim
         self.dtype = dtype
-        init = 0.02
-        self.lookup_table = nx.uniform(low=-init, high=init, size=(n, self.embed_dim), dtype=dtype)
-
-        self.table_scale = None
         self.quantized = quantized
-        self.use_symmetric = use_symmetric
-        self.bias = None
-        if quantized:
-            self.lookup_table, self.table_scale, self.bias = nx.quantize(self.lookup_table, regular=use_symmetric)
-        assert nx.isfinite(self.lookup_table).all(), f"non-finite detected when initializing embedding."
+
+        if init:
+            init_ = 0.02
+            self.lookup_table = nx.uniform(low=-init_, high=init_, size=(n, self.embed_dim), dtype=dtype)
+
+            self.table_scale = None
+            self.use_symmetric = use_symmetric
+            self.bias = None
+            if quantized:
+                self.lookup_table, self.table_scale, self.bias = nx.quantize(self.lookup_table, regular=use_symmetric)
 
     def __eq__(self, value: object) -> bool:
         if not isinstance(value, Embedding):
@@ -74,11 +75,12 @@ class Embedding:
         return(self.n, self.embed_dim)
 
     @classmethod
-    def from_weights(cls, lookuptable, scale, bias, dtype):
+    def from_weights(cls, lookuptable, quants, dtype):
         n = len(lookuptable)
         D = lookuptable.shape[0]
-        embedding = cls(n, D, dtype=dtype)
+        embedding = cls(n, D, dtype=dtype, init=False)
         embedding.lookup_table = lookuptable
-        embedding.table_scale = scale
-        embedding.bias = bias
+
+        if quants is not None:
+            embedding.table_scale, embedding.bias= quants
         return embedding

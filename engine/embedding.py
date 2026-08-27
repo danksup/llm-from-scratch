@@ -84,3 +84,13 @@ class Embedding:
         if quants is not None:
             embedding.table_scale, embedding.bias= quants
         return embedding
+
+    def copy(self):
+        embedding_copy = Embedding(self.n, self.embed_dim, self.dtype, self.quantized, init=False)
+        embedding_copy.lookup_table = nx.copy(self.lookup_table)
+
+        if self.quantized:
+            embedding_copy.table_scale = nx.copy(self.table_scale)
+            embedding_copy.bias = nx.copy(self.bias)
+
+        return embedding_copy

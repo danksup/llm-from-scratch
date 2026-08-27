@@ -5,10 +5,8 @@ import engine.backend as nx
 class RMSNorm:
     def __init__(self, embed_dim:int, epsilon:float=1e-5, *, init=True) -> None:
         self.epsilon = nx.float_32(epsilon)
-
         if init:
             self.gamma = nx.ones((embed_dim,), dtype=nx.float32)
-
         self.d_gamma = None
         self.configs = embed_dim, epsilon
 
@@ -56,3 +54,11 @@ class RMSNorm:
         rms.gamma = gamma
 
         return rms
+
+    def copy(self):
+        gamma_copy = nx.copy(self.gamma)
+        embed_dim = gamma_copy.shape[0] 
+        rmscopy = RMSNorm(embed_dim, init=False)
+        rmscopy.gamma = gamma_copy
+
+        return rmscopy

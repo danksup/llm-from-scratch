@@ -278,7 +278,6 @@ class Session:
                 if savefile_name == "":
                     savefile_name = filename
                 self.save(savefile_name)
-                self.simple_save(savefile_name)
         except ValueError as e:
             end = time.perf_counter()
             print(f"epoch {epoch}: {e}. Time elapsed: {end-start:.5f}")
@@ -377,33 +376,7 @@ class Session:
         keep_probs /= nx.sum(keep_probs)
         return nx.random_choice(keep_indices, p=keep_probs)
 
-    def to_dict(self) -> dict:
-        convert_to_symmetric = nx.backend == "MLX" and self.configs["backend"]["mlx_save_quantized_weights_as_symmetric"] and not self.transformer.symmetric_quant
-
-        session = {
-            "configs":self.configs,
-            "transformer":self.transformer.to_dict(as_symmetric=convert_to_symmetric),
-            "tokenizer":self.tokenizer.to_dict(),
-            "optimizer":self.optimizer.to_dict(config_only=self.configs["weights_only"]) if self.optimizer is not None else None,
-        }
-
-        return session
-
-    def save(self, filename:str, save_artifacts:bool=False):
-        '''
-        Args:
-            filename: the name the save file will have. session_{filename}.json
-            save_artifacts: also save artifacts seperately (not implemented yet)
-        '''
-        session = self.to_dict()
-
-        filename = f"session_{filename}.ram2n"
-        with open(Path(f"artifacts/sessions/{filename}"), "wb") as f:
-           f.write(b"RAM2N")
-           f.write((1).to_bytes(4, "little"))
-           pickle.dump(session, f)
-
-    def simple_save(self, filename:str="test123", *, save_tokenizer:bool=False):
+    def save(self, filename:str="test123", *, save_tokenizer:bool=False):
         weights = self.transformer.get_all_weights("dict") 
         quants = self.transformer.get_quant_params()
 
@@ -433,7 +406,7 @@ class Session:
         nx.save_safetensors(Path(f"artifacts/sessions/session_{filename}.safetensors"), tensors, metadata)
 
     @classmethod
-    def simple_load(cls, filepath:str|Path, tokenizer:Tokenizer):
+    def load(cls, filepath:str|Path, tokenizer:Tokenizer):
         if isinstance(filepath, str):
             filepath = Path(filepath)
 
@@ -487,32 +460,10 @@ class Session:
         session_id = session_configs["session_id"]
         session = cls(transformer=transformer, tokenizer=tokenizer, init_optimizer=False, session_id=session_id)
         return session
-        
-    @classmethod
-    def load(cls, filepath:str|Path, *, inference_only:bool=True) -> "Session":
-        """
-        load the saved session file and build
-        """
-        with open(filepath, "rb") as f:
-            magic = f.read(5)
-            if magic != b"RAM2N":
-                raise ValueError("unknown file")
-            version = int.from_bytes(f.read(4), "little")
-            session = pickle.load(f)
-
-        configs = session["configs"]
-        use_symmetric = configs["backend"].get("mlx_save_quantized_weights_as_symmetric", False if nx.backend=="MLX" else True)
-        transformer = Transformer.from_dict(session["transformer"], saved_as_symmetric=use_symmetric)
-        tokenizer = Tokenizer.from_dict(session["tokenizer"])
-        optimizer_class = OPTIMIZERS[configs["optimizer"]]
-        optimizer = optimizer_class.from_dict(session["optimizer"])
-        session_id = configs["session_id"]
-
-        return  cls(transformer, tokenizer, optimizer, configs=configs, session_id=session_id)
 
     @classmethod
     def create_checkpoint(cls, to_checkpoint:"Session",) -> "Session":
-        transformer_checkpoint = Transformer.create_checkpoint(to_checkpoint.transformer)
+        transformer_checkpoint = Transformer.copy(to_checkpoint.transformer)
         tokenizer_checkpoint = Tokenizer.from_dict(to_checkpoint.tokenizer.to_dict())
         optimizer = None if to_checkpoint.optimizer is None else to_checkpoint.optimizer.from_dict(to_checkpoint.optimizer.to_dict(to_checkpoint.configs["weights_only"]))
         checkpoint = cls(transformer=transformer_checkpoint, tokenizer = tokenizer_checkpoint, init_optimizer=optimizer)

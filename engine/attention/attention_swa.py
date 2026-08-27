@@ -265,67 +265,6 @@ class AttentionSWA:
         padded_position = time_idx + window_idx
         return padded_position < W
 
-    def to_dict(self, *, as_symmetric) -> dict:
-        '''serialize into dict with weights turned into list'''
-        attn_dict = {
-            "embed_dim":self.embed_dim,
-            "n_heads":self.n_heads,
-            "n_kv_heads":self.n_kv_heads,
-            "dtype": nx.dtype_to_srt[self.dtype],
-            "W":self.W,
-            "Wqkv":self.Wqkv.tolist(),
-            "Wo":self.Wo.tolist(),
-            "quantized":self.quantized
-        }
-
-        if self.quantized:
-            if as_symmetric:
-                Wqkv, wqkv_scale, wqkv_bias = nx.quantize( nx.dequantize(self.Wqkv, self.scales[0], self.biases[0], self.dtype), regular=True)
-                Wo, wo_scale, wo_bias = nx.quantize(nx.dequantize(self.Wo, self.scales[1], self.biases[1], self.dtype), regular=True)
-                attn_dict["Wqkv"] = Wqkv.tolist()
-                attn_dict["Wo"] = Wo.tolist()
-                attn_dict["scales"] = (wqkv_scale.tolist(), wo_scale.tolist()) 
-                attn_dict["biases"] = (wqkv_bias.tolist(), wo_bias.tolist()) 
-            else:
-                attn_dict["scales"] = (self.scales[0].tolist(), self.scales[1].tolist()) #type:ignore
-                attn_dict["biases"] = (self.biases[0].tolist(), self.biases[1].tolist()) #type:ignore
-        else:
-            attn_dict["scales"] = self.scales
-            attn_dict["biases"] = self.biases
-        return attn_dict
- 
-    @classmethod
-    def from_dict(cls,thing) -> "AttentionSWA":
-        """deserialize"""
-        embed_dim = thing["embed_dim"]
-        n_kv_heads = thing["n_kv_heads"]
-        n_heads = thing["n_heads"]
-        W = thing["W"]
-        Wqkv = thing["Wqkv"]
-        Wo = thing["Wo"]
-        dtype = nx.str_to_dtype[thing["dtype"]]
-        is_quantized = thing["quantized"]
-        scales = thing["scales"]
-        biases = thing["biases"]
-
-        attention = cls(embed_dim=embed_dim, n_heads=n_heads, n_kv_heads=n_kv_heads, W=W, dtype=dtype, quantized=is_quantized)
-
-        if is_quantized:
-            if nx.backend == "MLX":
-                attention.Wqkv = nx.array(Wqkv, dtype=nx.uint32)
-                attention.Wo = nx.array(Wo, dtype=nx.uint32)
-            else:
-                attention.Wqkv = nx.array(Wqkv, dtype=nx.int8)
-                attention.Wo = nx.array(Wo, dtype=nx.int8)
-
-            attention.scales = (nx.array(scales[0], dtype=dtype), nx.array(scales[1], dtype=dtype))
-            attention.biases = (nx.array(biases[0], dtype=dtype), nx.array(biases[1], dtype=dtype))
-        else:
-            attention.Wqkv = nx.array(Wqkv, dtype=dtype)
-            attention.Wo = nx.array(Wo, dtype=dtype)
-
-        return attention
-
     @classmethod
     def from_weight(cls, configs, weights,quants, dtype) -> "AttentionSWA":
         embed_dim, n_kv_heads, n_heads, _, _,W, _ = configs
@@ -341,3 +280,13 @@ class AttentionSWA:
             attn.biases = biases
 
         return attn
+
+    def copy(self):
+        attn_copy = AttentionSWA(self.embed_dim, self.n_heads, self.n_kv_heads,self.W, self.dtype, quantized=self.quantized, init=False)
+        attn_copy.Wqkv = nx.copy(self.Wqkv)
+        attn_copy.Wo = nx.copy(self.Wo)
+        if self.quantized:
+            attn_copy.scales = (nx.copy(self.scales[0]), nx.copy(self.scales[1]))
+            attn_copy.biases = (nx.copy(self.biases[0]), nx.copy(self.biases[1]))
+
+        return attn_copy

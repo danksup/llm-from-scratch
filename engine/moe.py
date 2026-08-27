@@ -288,3 +288,14 @@ class MoE:
             moe.biases = biases
 
         return moe
+
+    def copy(self):
+        moe_copy = MoE(self.cf, self.top_k, self.n_experts, self.embed_dim, self.hidden_width, self.dtype, quantized=self.quantized, init=False)
+        moe_copy.router = nx.copy(self.router)
+        moe_copy.Wcombined = nx.copy(self.Wcombined)
+        moe_copy.Wout = nx.copy(self.Wout)
+        if self.quantized:
+            moe_copy.scales = (nx.copy(self.scales[0]), nx.copy(self.scales[1]))
+            moe_copy.biases = (nx.copy(self.biases[0]), nx.copy(self.biases[1]))
+
+        return moe_copy

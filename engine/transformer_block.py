@@ -117,29 +117,6 @@ class TransformerBlock:
 
         return ff_out, cached_k, cached_v
 
-    def to_dict(self, *, as_symmetric=False) -> dict:
-        return {
-            # "block_configs": {
-            #     "embed_dim":self.embed_dim,
-            #     "dtype": nx.dtype_to_srt[self.dtype]
-            # },
-            "attention":{"type":self.attention.self_type(), "param":self.attention.to_dict(as_symmetric=as_symmetric)},
-            "ff":self.ff.to_dict(as_symmetric=as_symmetric),
-            "rmsnorm1":self.rmsnorm1.to_dict(),
-            "rmsnorm2":self.rmsnorm2.to_dict(),
-        }
-
-    @classmethod
-    def from_dict(cls,thing:dict, *, use_symmetric=False) -> "TransformerBlock":
-        attn_cls = ATTN_TYPE[thing["attention"]["type"]]
-        attn_param = thing["attention"]["param"]
-        attention = attn_cls.from_dict(attn_param, use_symmetric=use_symmetric)
-        ff = MoE.from_dict(thing["ff"], use_symmetric=use_symmetric)
-        rmsnorm1 = RMSNorm.from_dict(thing["rmsnorm1"])
-        rmsnorm2 = RMSNorm.from_dict(thing["rmsnorm2"])
-        transformer_block = cls(attention, ff, rmsnorm1, rmsnorm2)
-        return transformer_block
-
     def get_configs(self):
         return {
             "attn_type": self.attention.self_type(),
@@ -157,3 +134,13 @@ class TransformerBlock:
         rmsnorm2 = RMSNorm.from_weight(rmsnorm2_configs, gamma2)
         block = TransformerBlock(attn, ff, rmsnorm1, rmsnorm2)
         return block
+
+    def copy(self):
+        attn_copy = self.attention.copy()
+        ff_copy = self.ff.copy()
+        rms1_copy = self.rmsnorm1.copy()
+        rms2_copy = self.rmsnorm2.copy()
+        
+        block_copy = TransformerBlock(attn_copy, ff_copy, rms1_copy, rms2_copy)
+        return block_copy
+

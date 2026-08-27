@@ -532,19 +532,6 @@ class Transformer:
 
         return scores, all_caches
 
-    def to_dict(self, *, as_symmetric=False) -> dict[str, Any]:
-        """
-        get dictionary
-        """
-        a:dict[str,Any] = {}
-        a["transformer_configs"] = self.get_configs()
-        a["embedding"] = self.embedding.to_dict(as_symmetric=as_symmetric)
-        blocks = []
-        for block in self.blocks:
-            blocks.append(block.to_dict(as_symmetric=as_symmetric))
-        a["blocks"] = blocks
-        return a
-
     def get_configs(self):
         configs = {}
         configs["vocab_size"] = self.vocab_size
@@ -554,21 +541,6 @@ class Transformer:
         configs["symmetric_quant"] =  self.symmetric_quant
         configs["gradient_scale"] = self.gradient_scale
         return configs
-
-    @classmethod
-    def from_dict(cls,thing:dict[str, Any],*, saved_as_symmetric=False) -> "Transformer":
-        configs = thing["transformer_configs"]
-        configs["dtype"] = nx.str_to_dtype[configs["dtype"]]
-        raw_blocks = thing["blocks"]
-        blocks = []
-        use_symmetric = configs["symmetric_quant"] or saved_as_symmetric
-        for block in raw_blocks:
-            a = TransformerBlock.from_dict(block, use_symmetric=use_symmetric)
-            blocks.append(a)
-
-        transformer = cls(configs, blocks=blocks)
-        transformer.embedding = Embedding.from_dict(thing["embedding"], use_symmetric=use_symmetric)
-        return transformer
 
     def get_configs_str(self):
         configs = ""
@@ -599,10 +571,6 @@ class Transformer:
         if similar_count == len(self.individual_block_configs):
             configs += "None\n"
         return configs
-
-    @staticmethod
-    def create_checkpoint(to_checkpoint:"Transformer") -> "Transformer":
-        return to_checkpoint.from_dict(to_checkpoint.to_dict())
 
     @overload
     def get_all_weights(self, flatten: Literal[False] = False) -> dict[int, dict[str, dict[str, nx.ArrayLike]]]: ...
@@ -664,3 +632,14 @@ class Transformer:
             configs[idx] = block.get_configs()
 
         return configs
+
+    def copy(self) -> "Transformer":
+        configs = copy.deepcopy(self.configs)
+        block_copy = []
+        for block in self.blocks:
+            block_copy.append(block.copy())
+
+        embedding_copy = self.embedding.copy()
+        transformer_copy = Transformer(configs, block_copy, embedding=embedding_copy)
+
+        return transformer_copy

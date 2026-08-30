@@ -54,9 +54,11 @@ logs:
 - gradient accumulation aug 12 2026
 - prefetching encoded chunk aug 13 2026
 - int8 weight-only quantization aug 17 2026 
+- replace pickle with safetensors aug 30 2026
+- i jsut realized that mlx also supports cuda...
+
 
 ## Ongoing:
-- replace pickle with safetensors
 - byte-level BPE
 - fixing cupy/cuda support
 - optimizing/cleanup/docs

@@ -20,7 +20,8 @@ from engine.transformer_block import TransformerBlock
 from engine.moe import MoE
 from engine.embedding import Embedding
 
-from helper.singleton import sleep
+from helper.validate_and_raise import validate_choice, validate_match
+
 
 
 optimizers = Union[optim.Adam, optim.AdamW, optim.SGD]
@@ -103,14 +104,15 @@ class Session:
             self.session_id = str(uuid.uuid4())
         self.tokenizer = tokenizer
         self.transformer = transformer
-        assert len(tokenizer.vocab) == transformer.vocab_size, f"vocab size mismatch of {transformer.vocab_size} in transformer and {len(tokenizer.vocab)} in tokenizer."
+
+        validate_match(transformer.vocab_size, len(tokenizer.vocab), f"between {transformer.vocab_size} in transformer and {len(tokenizer.vocab)} in tokenizer.")
 
         if configs is None:
             configs = {}
         configs["session_id"] = self.session_id
         self.configs = DEFAULT_CONFIGS | configs
         config_optimizer = self.configs["optimizer"].lower()
-        assert config_optimizer in OPTIMIZERS, f"invalid optimizer \"{config_optimizer}\". valid optimizers: {", ".join(OPTIMIZERS.keys())}"
+        validate_choice(config_optimizer, "optimizer", OPTIMIZERS)
         self.configs["optimizer_args"] = DEFAULT_OPTIMIZER_ARGS[config_optimizer] | configs.get("optimizer_args", {})
         self.configs["backend"] = BACKEND_SPECIFICS[nx.backend] | configs.get("backend", {})
 
@@ -149,7 +151,7 @@ class Session:
                     schedule = self.configs["optimizer_args"]["scheduler"].lower()
                     if isinstance(schedule, str):
                         if schedule not in SCHEDULER:
-                            raise ValueError(f"invalid scheduler {schedule}. valid schedulers: {", ".join(SCHEDULER.keys())}")
+                            validate_choice(schedule, "scheduler", SCHEDULER)
                         optimizer_args["scheduler"] = SCHEDULER[schedule]
 
                     if self.configs["optimizer_args"]["min_lr"] is None:
@@ -307,7 +309,7 @@ class Session:
         all_caches = None
         position = 0
         memory = []
-        as_symmetric = self.configs["backend"].get("mlx_save_quantized_weights_as_symmetric", False if nx.backend == "MLX" else True)
+        as_symmetric = self.transformer.symmetric_quant
         logits, all_caches = self.transformer.inference(context,self.configs["context_size"], all_caches, position, use_symmetric=as_symmetric)
         position = context.shape[1]
 
@@ -386,12 +388,15 @@ class Session:
                 if f"{k}.scales" in quants:
                     scale = quants[f"{k}.scales"]
                     bias = quants[f"{k}.biases"]
-                    weights[k], new_scale, new_bias = nx.quantize(nx.dequantize(v, scale, bias))
+                    weights[k], new_scale, new_bias = nx.quantize(nx.dequantize(v, scale, bias), regular=True)
                     quants[f"{k}.scales"] = new_scale
                     quants[f"{k}.biases"] = new_bias
 
         if self.transformer.quantized:
             embedding = {"embedding":self.transformer.embedding.lookup_table, "embedding_scale":self.transformer.embedding.table_scale,  "embedding_bias":self.transformer.embedding.bias}
+            if convert_to_symmetric:
+                embedding["embedding"], embedding["embedding_scale"], embedding["embedding_bias"] = nx.quantize(nx.dequantize(embedding["embedding"], embedding["embedding_scale"], embedding["embedding_bias"]), regular=True)
+
             tensors = weights | quants | embedding
         else:
             embedding = {"embedding":self.transformer.embedding.lookup_table}
@@ -422,24 +427,27 @@ class Session:
         blocks = []
         n_block = transformer_configs["n_blocks"]
         quantized = transformer_configs["quantized"]
-        dtype = transformer_configs["dtype"]
+        dtype = nx.str_to_dtype[transformer_configs["dtype"]]
+
+        requantize = nx.backend == "MLX" and transformer_configs["quantized"] is True and session_configs["backend"]["mlx_save_quantized_weights_as_symmetric"]
 
         embedding_lookuptable = session["embedding"] #type:ignore
         embedding_quants = None
     
         if quantized:
             embedding_quants = session["embedding_scale"],session["embedding_bias"] #type:ignore
-
+            if requantize:
+                embedding_lookuptable, new_scale, new_bias = nx.quantize(nx.dequantize(embedding_lookuptable, embedding_quants[0], embedding_quants[1], regular=True))
+                embedding_quants = new_scale, new_bias
+        
         for i in range(n_block):
             configs = block_configs[i]
 
             attn_type = configs["attn_type"]
             attn_configs = configs["attention"]
-            attn_params = (session[f"{i}.attention.Wqkv"], session[f"{i}.attention.Wo"]) #type:ignore
             attn_quants = None #type:ignore
 
             ff_configs = configs["ff"]
-            ff_params = (session[f"{i}.ff.router"],session[f"{i}.ff.Wcombined"], session[f"{i}.ff.Wout"]) #type:ignore
             ff_quants = None #type:ignore
 
             rmsnorm1_configs = configs["rmsnorm1"]
@@ -448,8 +456,25 @@ class Session:
             rmsnorm2_gamma = session[f"{i}.rmsnorm2.gamma"] #type:ignore
 
             if quantized:
-                attn_quants = (session[f"{i}.attention.Wqkv.scales"], session[f"{i}.attention.Wo.biases"]) #type:ignore
-                ff_quants = (session[f"{i}.attention.Wqkv.scales"], session[f"{i}.attention.Wo.biases"]) #type:ignore
+                attn_quants = ((session[f"{i}.attention.Wqkv.scales"],session[f"{i}.attention.Wo.scales"]), (session[f"{i}.attention.Wqkv.biases"],session[f"{i}.attention.Wo.biases"])) #type:ignore
+                ff_quants = ((session[f"{i}.ff.Wcombined.scales"],session[f"{i}.ff.Wout.scales"]), (session[f"{i}.ff.Wcombined.biases"],session[f"{i}.ff.Wout.biases"])) #type:ignore
+
+                if requantize:
+                    wqkv, wqkv_scale,wqkv_bias =  nx.quantize(nx.dequantize( session[f"{i}.attention.Wqkv"], attn_quants[0][0], attn_quants[1][0], regular=True)) #type:ignore
+                    wo, wo_scale,wo_bias =  nx.quantize(nx.dequantize( session[f"{i}.attention.Wo"], attn_quants[0][1], attn_quants[1][1], regular=True)) #type:ignore
+                    wcombined, wcombined_scale, wcombined_bias =  nx.quantize(nx.dequantize( session[f"{i}.ff.Wcombined"], ff_quants[0][0],ff_quants[1][0], regular=True)) #type:ignore
+                    wout, wout_scale, wout_bias =  nx.quantize(nx.dequantize( session[f"{i}.ff.Wout"],  ff_quants[0][1],ff_quants[1][1], regular=True)) #type:ignore
+
+                    attn_params = (wqkv, wo) #type:ignore
+                    ff_params = (session[f"{i}.ff.router"], wcombined, wout) #type:ignore
+                    attn_quants = ((wqkv_scale, wo_scale), (wqkv_bias,wo_bias)) #type:ignore
+                    ff_quants = ((wcombined_scale, wout_scale), (wcombined_bias, wout_bias)) #type:ignore
+                else:
+                    attn_params = (session[f"{i}.attention.Wqkv"], session[f"{i}.attention.Wo"]) #type:ignore
+                    ff_params = (session[f"{i}.ff.router"],session[f"{i}.ff.Wcombined"], session[f"{i}.ff.Wout"]) #type:ignore
+            else:
+                attn_params = (session[f"{i}.attention.Wqkv"], session[f"{i}.attention.Wo"]) #type:ignore
+                ff_params = (session[f"{i}.ff.router"],session[f"{i}.ff.Wcombined"], session[f"{i}.ff.Wout"]) #type:ignore
 
             block = TransformerBlock.from_weights(attn_type=attn_type, attn_configs=attn_configs, attn_weights=attn_params,attn_quants=attn_quants, ff_configs=ff_configs, ff_weights=ff_params,ff_quants=ff_quants, rmsnorm1_configs=rmsnorm1_configs, rmsnorm2_configs=rmsnorm2_configs, gamma1=rmsnorm1_gamma, gamma2=rmsnorm2_gamma, dtype=dtype)
             blocks.append(block)

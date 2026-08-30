@@ -27,9 +27,9 @@ class Embedding:
     def forward(self, token_list:Any):
         ''' loopup and convert to the vector for each token id'''
         embed = self.lookup_table[token_list]
-        # print(embed)
+        use_symmetric = self.quantized and getattr(self, "use_symmetric", False)   
         if self.quantized:
-            qtized = nx.dequantize(embed, scales=self.table_scale[token_list], biases=self.bias[token_list], dtype=self.dtype, regular=self.use_symmetric) if self.table_scale is not None else embed #type:ignore
+            qtized = nx.dequantize(embed, scales=self.table_scale[token_list], biases=self.bias[token_list], dtype=self.dtype, regular=use_symmetric) if self.table_scale is not None else embed #type:ignore
             # print(qtized)
             return qtized
         return embed
@@ -78,7 +78,8 @@ class Embedding:
     def from_weights(cls, lookuptable, quants, dtype):
         n = len(lookuptable)
         D = lookuptable.shape[0]
-        embedding = cls(n, D, dtype=dtype, init=False)
+        quantized = True if quants is not None else False
+        embedding = cls(n, D, dtype=dtype, init=False, quantized=quantized)
         embedding.lookup_table = lookuptable
 
         if quants is not None:

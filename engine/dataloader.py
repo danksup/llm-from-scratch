@@ -7,6 +7,9 @@ from typing import Any, Iterator, Literal
 import engine.backend as nx
 from engine.tokenizer import Tokenizer
 
+from helper.validate_and_raise import validate_match
+import uuid
+
 
 class DataLoader:
     def __init__(self, filepath:str, tokenizer:Tokenizer, context_size:int=1024, batch_size:int=10, train_split:float|Literal['all']=0.9, *, __test_mode:bool = False) -> None:
@@ -126,7 +129,7 @@ class DataLoader:
             yield files[idx]
 
     @staticmethod
-    def stream_chunk(file:Path,type_code:str, chunk_size= 100_240_000, tokenizer_id_bytes:Any|None=None):
+    def stream_chunk(file:Path,type_code:str, chunk_size= 100_240_000, tokenizer_id_bytes:Any|None=None, *, tokenizer_id_str:str|None=None):
         chunk = None
         if file.suffix == ".txt":
             with open(file, "r", encoding="utf-8", errors='ignore') as f:
@@ -153,8 +156,8 @@ class DataLoader:
                     raise ValueError("unknown file")
                 version = int.from_bytes(f.read(4), "little")
                 this_tokenizer_id = f.read(16)
-                if this_tokenizer_id != tokenizer_id_bytes:
-                    raise ValueError("please use the same tokenizer you used for tokenizing.")
+                str_id = str(uuid.UUID(bytes=this_tokenizer_id))
+                validate_match(this_tokenizer_id, tokenizer_id_bytes, f"please use the tokenizer you used to tokenize this file (with id: {tokenizer_id_str}), got with id: {str_id}")
                 while True:
                     tokens = array.array(type_code)
                     try:
@@ -174,7 +177,7 @@ class DataLoader:
         for file in self.stream_file(files, permutation):
             if not carry_leftover_to_next_file:
                 leftover_temp_context = None
-            for chungus in self.stream_chunk(file,self.type_code, chunk_size, self.tokenizer.tokenizer_id.bytes): #type:ignore
+            for chungus in self.stream_chunk(file,self.type_code, chunk_size, self.tokenizer.tokenizer_id.bytes, tokenizer_id_str=self.tokenizer.tokenizer_id.__str__()): #type:ignore
                 context = None
 
                 if leftover_temp_context is not None:

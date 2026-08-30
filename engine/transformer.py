@@ -12,6 +12,8 @@ from engine.embedding import Embedding
 from engine.losses import cross_entropy, cross_entropy_gradient
 from engine.transformer_block import TransformerBlock
 from helper.singleton import sleep
+from helper.validate_and_raise import validate_choice
+
 
 optimizers = optim.Adam | optim.AdamW | optim.SGD
 
@@ -54,18 +56,20 @@ class Transformer:
 
         self.embed_dim = configs.get("embed_dim", 128)
         self.dtype = configs.get("dtype", nx.float32)
-        if self.dtype not in nx.str_to_dtype and self.dtype not in nx.dtype_to_srt:
-            raise ValueError(f"invalid input: \"{self.dtype}\" of type {type(self.dtype)} for dtype. valid dtypes: {", ".join(nx.floating_type_str)} (str)")
+        validate_choice(self.dtype, "dtype", nx.floating_type_str)
         if isinstance(self.dtype, str):
             self.dtype = nx.str_to_dtype[self.dtype]
         if nx.issubdtype(self.dtype, nx.integer):
             raise ValueError(f"please use floating type for dtype initialization, got {self.dtype} instead.")
 
         self.quantized = configs.get("quantized", False)
+        self.quantized = self.quantized.lower() if isinstance(self.quantized, str) else self.quantized
         self.symmetric_quant = True if self.quantized == "symmetric" else False
 
         self.check_non_finite = configs.get("check_non_finite", True)
-        assert self.quantized in [True, False, "symmetric"], f"True= mlx:affine, else symmetric; symmetric= use symmetric regardless of backend type; False = floats; got {self.quantized} of type {type(self.quantized)} instead."
+        
+        # assert self.quantized in [True, False, "symmetric"], f"True= mlx:affine, else symmetric; symmetric= use symmetric regardless of backend type; False = floats; got {self.quantized} of type {type(self.quantized)} instead."
+        validate_choice(self.quantized, "quantized", [True, False, "symmetric"])
 
         if not isinstance(embedding, Embedding):
             self.embedding = Embedding(self.vocab_size, self.embed_dim, self.dtype, self.quantized, use_symmetric=self.symmetric_quant)
@@ -96,22 +100,24 @@ class Transformer:
                 overrided = this | override
 
                 attn_variant = overrided["attn_variant"]
-                assert attn_variant in ATTN_VARIANT, f"[block {i}] invalid input: \"{attn_variant}\" of type {type({attn_variant})} for attn_variant. valid attn_variant: {", ".join(ATTN_VARIANT.keys())}"
+                # assert attn_variant in ATTN_VARIANT, f"[block {i}] invalid input: \"{attn_variant}\" of type {type(attn_variant)} for attn_variant. valid attn_variant: {", ".join(ATTN_VARIANT.keys())}"
+                validate_choice(attn_variant, "attn_variant", ATTN_VARIANT)
 
                 attn_type_str = overrided["attn_type"]
-                assert attn_type_str in ATTN_TYPE, f"[block {i}] invalid input: \"{attn_type_str}\" of type {type({attn_type_str})} for attn_type. valid attn_type: {", ".join(ATTN_TYPE.keys())}"
+                validate_choice(attn_type_str, "attn_type", ATTN_TYPE)
 
                 overrided = overrided | ATTN_TYPE[overrided["attn_type"]] | ATTN_VARIANT[overrided["attn_variant"]] | this  | override
                 overrided.pop('attn')
 
                 attn_type = ATTN_TYPE[attn_type_str]["attn"]
 
-                assert overrided["attn_init"] in INITIALIZERS, f"your configs contain invalid input: {overrided["attn_init"]} of type {type(overrided["attn_init"])}. expected for this config: {", ".join(list(INITIALIZERS))}"
-                assert overrided["ff_init"] in INITIALIZERS, f"your configs contain invalid input: {overrided["ff_init"]} of type {type(overrided["ff_init"])}. expected for this config: {", ".join(list(INITIALIZERS))}"
+                # assert overrided["attn_init"] in INITIALIZERS, f"your configs contain invalid input: {overrided["attn_init"]} of type {type(overrided["attn_init"])}. expected for this config: {", ".join(list(INITIALIZERS))}"
+                validate_choice(overrided["attn_init"], "attn_init", INITIALIZERS)
+                validate_choice(overrided["ff_init"], "ff_init", INITIALIZERS)
+
                 check = default_block_configs | ATTN_TYPE[this["attn_type"]] | ATTN_VARIANT[this["attn_variant"]] | ATTN_TYPE[overrided["attn_type"]] | ATTN_VARIANT[overrided["attn_variant"]]
                 for config in overrided:
-                    if config not in check:
-                        raise ValueError(f"[block {i}] {config} is invalid. valid override: {", ".join(check.keys())}")
+                    validate_choice(config, "block_overrides", check, f"[block {i}]")
                 self.individual_block_configs.append(overrided)
 
                 D = self.embed_dim
@@ -171,7 +177,11 @@ class Transformer:
         total = 0
         for i in self.blocks:
             total += i.count_param(quantized=self.quantized, use_symmetric=self.symmetric_quant)
-        total += self.embedding.lookup_table.size
+
+        embedding_size = self.embedding.lookup_table.size
+        if self.symmetric_quant:
+            embedding_size *= 4
+        total += embedding_size
         return total
 
     def forward(self, inputs:Any, return_cache= True, is_training=True) -> Any:

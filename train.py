@@ -32,7 +32,7 @@ tokenizer1 = Tokenizer.load(TOKENIZER_PATH)
 
 session_configs = {
     "epochs":EPOCHS,
-    "max_step":50,
+    "max_step":10,
     "train_split": VAL,
     "max_val_step":1,
     "eval_every":1,
@@ -44,7 +44,7 @@ session_configs = {
     "optimizer_args":{
         "lr": 1e-3,
         "use_master": True,
-        "scheduler": "cosine_decay",
+        "scheduler": "none",
         "min_lr": 1e-4,
     },
     "using":os.environ.get("BACKEND"),
@@ -65,7 +65,7 @@ model_configs = {
     "gradient_scale":4096,
     "vocab_size": len(tokenizer1.vocab),
     "moe_lambda":0.01,
-    "quantized":False, #here can be True, "symmetric", False
+    "quantized":True, #here can be True, "symmetric", False
     "check_non_finite":True,
     "block_configs":{
         "ff_hidden_width": BASE_WIDTH,

@@ -7,8 +7,6 @@ import os
 from typing import Any, Literal, Union
 import array as arraymodule
 from pathlib import Path
-from safetensors.numpy import save_file, load_file
-from safetensors import safe_open
 
 backend = os.environ.get("BACKEND", "auto").lower()
 seed = int(os.environ.get("SEED", 1))
@@ -45,6 +43,10 @@ if backend in ["MLX"]:
     _nx.random.seed(seed) # type: ignore
 else:
     rng = _nx.random.default_rng(seed) # type: ignore
+
+if backend in ["NumPy", "CuPy"]:
+    from safetensors.numpy import save_file, load_file
+    from safetensors import safe_open
 
 ArrayLike = Any
 e = _nx.e
@@ -609,16 +611,16 @@ def quantized_matmul(x,w,/, scales, biases, transpose:bool|tuple=False, *, regul
 def save_safetensors(file:Path, arrays:dict[str,ArrayLike], metadata:dict[str,str]|None=None):
     if backend == "MLX":
         return _nx.save_safetensors(file=file, arrays=arrays, metadata=metadata)
-    return save_file(tensor_dict=arrays, filename=file,metadata=metadata)
+    return save_file(tensor_dict=arrays, filename=file,metadata=metadata) #type:ignore
 
 def load(file:Path,/, return_metadata=True):
     if backend == "MLX":
         return _nx.load(file, format='safetensors', return_metadata=return_metadata)
-
-    if return_metadata:
-        with safe_open(file, 'numpy') as f: #type:ignore
-            tensors = {key: f.get_tensor(key) for key in f.keys()}
-            metadata = f.metadata()
-        return tensors, metadata
-    return load_file(file)
+    else:
+        if return_metadata:
+            with safe_open(file, 'numpy') as f: #type:ignore
+                tensors = {key: f.get_tensor(key) for key in f.keys()}
+                metadata = f.metadata()
+            return tensors, metadata
+        return load_file(file) #type:ignore
 set_seed(seed)

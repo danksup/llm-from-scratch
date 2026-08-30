@@ -1,12 +1,10 @@
 import os
-os.environ["BACKEND"] = "s"
+os.environ["BACKEND"] = "n"
 import engine.backend as nx
 from engine.sessions import Session
 from engine.tokenizer import Tokenizer
 
 nx.set_seed(111111)
-print(nx.backend)
-import time
 
 tokenizer = Tokenizer.load("artifacts/tokenizer/tokenizer32000_1351277738len.tokenizer")
 session_path = "artifacts/sessions/session_82688000_param_1_epochs_weights_only_quantized_59d0ce46-354e-429e-8774-579e6e9b7be9.safetensors"

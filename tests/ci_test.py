@@ -46,7 +46,7 @@ session_configs = {
 model_configs = {
     "n_blocks":10,
     "embed_dim":256,
-    "dtype": nx.float16,
+    "dtype": "float16",
     "gradient_scale":8,
     "vocab_size": len(tokenizer1.vocab),
     "moe_lambda":0.01,

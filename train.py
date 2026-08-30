@@ -2,7 +2,7 @@
 #feel free to play with any values u see here, especially the filepath.
 
 import os
-os.environ["BACKEND"] = "mlx"
+os.environ["BACKEND"] = "s"
 
 import time
 

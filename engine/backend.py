@@ -7,6 +7,8 @@ import os
 from typing import Any, Literal, Union
 import array as arraymodule
 from pathlib import Path
+from safetensors.numpy import save_file, load_file
+from safetensors import safe_open
 
 backend = os.environ.get("BACKEND", "auto").lower()
 seed = int(os.environ.get("SEED", 1))
@@ -152,6 +154,16 @@ def add_at(a:Any, idx:Any, values:Any) -> Any:
             a[idx] += values
             return a
         _nx.add.at(a, idx, values)
+    return a
+
+def substract_at(a:Any, idx:Any, values:Any) -> Any:
+    if backend == "MLX":
+        return a.at[idx].subtract(values)
+    if backend in ("NumPy", "CuPy"):
+        if isinstance(idx, slice) or (isinstance(idx, tuple) and any(isinstance(i, slice) for i in idx)):
+            a[idx] -= values
+            return a
+        _nx.subtract.at(a, idx, values)
     return a
 
 def unique(a:ArrayLike,/, return_counts:bool=False ) -> Any:
@@ -597,9 +609,16 @@ def quantized_matmul(x,w,/, scales, biases, transpose:bool|tuple=False, *, regul
 def save_safetensors(file:Path, arrays:dict[str,ArrayLike], metadata:dict[str,str]|None=None):
     if backend == "MLX":
         return _nx.save_safetensors(file=file, arrays=arrays, metadata=metadata)
+    return save_file(tensor_dict=arrays, filename=file,metadata=metadata)
 
-def load(file:Path,/, format:Literal['safetensors', 'npz', 'npy']='safetensors',return_metadata=True):
+def load(file:Path,/, return_metadata=True):
     if backend == "MLX":
-        return _nx.load(file, format=format, return_metadata=return_metadata)
-    
+        return _nx.load(file, format='safetensors', return_metadata=return_metadata)
+
+    if return_metadata:
+        with safe_open(file, 'numpy') as f: #type:ignore
+            tensors = {key: f.get_tensor(key) for key in f.keys()}
+            metadata = f.metadata()
+        return tensors, metadata
+    return load_file(file)
 set_seed(seed)

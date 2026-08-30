@@ -348,7 +348,8 @@ class Session:
             mem_unique = mem_array[0]
             mem_count = mem_array[1]
             # print(memory)
-            logits = logits.at[..., mem_unique].subtract(mem_count * penalty)
+            # logits = logits.at[..., mem_unique].subtract(mem_count * penalty)
+            logits = nx.substract_at(logits, (..., mem_unique), mem_count * penalty)
             # logits[...,mem_unique] -= mem_count * penalty
 
         probs = softmax(logits[0, -1]/temperature)
@@ -415,7 +416,7 @@ class Session:
         if isinstance(filepath, str):
             filepath = Path(filepath)
 
-        session, metadata = nx.load(filepath, format='safetensors', return_metadata=True) #type:ignore
+        session, metadata = nx.load(filepath, return_metadata=True) #type:ignore
         session_configs = ast.literal_eval(metadata["session_configs"]) #type:ignore
         transformer_configs =  ast.literal_eval(metadata["transformer_configs"]) #type:ignore
         block_configs =  ast.literal_eval(metadata["block_configs"]) #type:ignore

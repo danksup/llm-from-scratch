@@ -1,6 +1,11 @@
+import os
+os.environ["BACKEND"] = "s"
+import engine.backend as nx
 from engine.sessions import Session
 from engine.tokenizer import Tokenizer
-import engine.backend as nx
+
+nx.set_seed(111111)
+print(nx.backend)
 import time
 
 tokenizer = Tokenizer.load("artifacts/tokenizer/tokenizer32000_1351277738len.tokenizer")

@@ -2,7 +2,7 @@
 #feel free to play with any values u see here, especially the filepath.
 
 import os
-os.environ["BACKEND"] = "s"
+os.environ["BACKEND"] = "auto"
 
 import time
 
@@ -12,10 +12,10 @@ from engine.sessions import Session
 from engine.tokenizer import Tokenizer
 from engine.transformer import Transformer
 
-nx.set_seed(1245)
+nx.set_seed(12345)
 
 EPOCHS = 1
-EMBED_DIM = 256
+EMBED_DIM = 320
 CONTEXT_SIZE = 1200
 BATCH_SIZE = 5
 BASE_WIDTH = 4 * EMBED_DIM
@@ -32,7 +32,7 @@ tokenizer1 = Tokenizer.load(TOKENIZER_PATH)
 
 session_configs = {
     "epochs":EPOCHS,
-    "max_step":10,
+    "max_step":1000,
     "train_split": VAL,
     "max_val_step":1,
     "eval_every":1,
@@ -65,8 +65,8 @@ model_configs = {
     "gradient_scale":4096,
     "vocab_size": len(tokenizer1.vocab),
     "moe_lambda":0.01,
-    "quantized":True, #here can be True, "symmetric", False
-    "check_non_finite":True,
+    "quantized":False, #here can be True, "symmetric", False
+    "check_non_finite":False,
     "block_configs":{
         "ff_hidden_width": BASE_WIDTH,
         "ff_n_experts":N_EXPERTS,

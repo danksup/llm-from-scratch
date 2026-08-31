@@ -179,7 +179,7 @@ class Transformer:
             total += i.count_param(quantized=self.quantized, use_symmetric=self.symmetric_quant)
 
         embedding_size = self.embedding.lookup_table.size
-        if self.symmetric_quant:
+        if self.quantized and not self.symmetric_quant:
             embedding_size *= 4
         total += embedding_size
         return total

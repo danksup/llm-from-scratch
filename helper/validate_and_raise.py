@@ -1,4 +1,5 @@
 from typing import Any
+import engine.backend as nx
 
 def get_i_type(l:list) -> str:
     msg = ""
@@ -14,3 +15,9 @@ def validate_choice(input_choice:Any, input_name:Any, choices:list|dict|tuple|se
 def validate_match(arg1:Any, arg2:Any, msg):
     if arg1 != arg2:
         raise ValueError(f"mismatch {msg}")
+
+def validate_finite(a,*,arr_name:str|None=None, msg:str|None=None):
+    if not nx.isfinite(a).any():
+        name = arr_name if arr_name is not None else ""
+        msg = msg if msg is not None else ""
+        raise FloatingPointError(f"{name} is not finite{msg}")

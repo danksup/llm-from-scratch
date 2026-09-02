@@ -485,7 +485,7 @@ class Session:
 
         session_id = session_configs["session_id"]
         session = cls(transformer=transformer, tokenizer=tokenizer, init_optimizer=False, session_id=session_id)
-        return session
+        return session  
 
     @classmethod
     def create_checkpoint(cls, to_checkpoint:"Session",) -> "Session":

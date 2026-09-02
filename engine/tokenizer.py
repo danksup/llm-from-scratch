@@ -5,13 +5,18 @@ from collections import Counter
 from pathlib import Path
 from typing import Any
 import ast
+import re
+import time
+
+#TODO change outdated docstrings
+#TODO change outdated typehints
 
 class Tokenizer:
     def __init__(self, target_vocab_size= 1024, tokenizer_id:uuid.UUID|None=None):
         self.target_vocab_size = target_vocab_size
         self.merge_rank = {}
-        self.id_to_token = {0:"<PAD>", 1:"<UNK>", 2: "<EOT>", 3:"</w>", 4:"<|endofdoc|>"}
-        self.vocab = {"<PAD>":0,"<UNK>":1, "<EOT>":2, "</w>":3, "<|endofdoc|>":4}
+        self.id_to_token = {0:"<PAD>".encode('utf-8'), 1: "<EOT>".encode('utf-8'), 2:"<|endofdoc|>".encode('utf-8')}
+        self.vocab = {"<PAD>".encode('utf-8'):0, "<EOT>".encode('utf-8'):1, "<|endofdoc|>".encode('utf-8'):2}
 
         self.tokenizer_id = tokenizer_id
         if self.tokenizer_id is None:
@@ -22,17 +27,12 @@ class Tokenizer:
             return NotImplemented
         return (self.vocab == value.vocab) and (self.id_to_token == value.id_to_token)
 
-    def init_vocab(self, corpus:str) -> None:
-        '''
-        initializing vocab with character level tokens
-        '''
-        for char in corpus:
-            if char.isspace():
-                continue
-            if char not in self.vocab:
-                next_id = len(self.vocab)
-                self.vocab[char] = next_id
-                self.id_to_token[next_id] = char
+    def init(self):
+        for i in range(256):
+            byte = bytes([i])
+            next_id = len(self.vocab)
+            self.vocab[byte] = next_id
+            self.id_to_token[next_id] = byte
 
     def word_to_ids(self, word:str) -> list[int]:
         """
@@ -47,9 +47,13 @@ class Tokenizer:
         then "hello" -> [3,4,8,8,7,5]\n
         """
         tokenized = []
-        for ch in word:
-            tokenized.append(self.vocab.get(ch, self.vocab["<UNK>"]))
-        tokenized.append(self.vocab["</w>"])
+        encoded_word = word.encode()
+        for b in encoded_word:
+            tokenized.append(self.vocab.get(bytes([b])))
+        # for ch in word:
+        #     ch = ch.encode()
+        #     tokenized.append(self.vocab.get(ch))
+        # tokenized.append(self.vocab["</w>".encode('utf-8')])
         return tokenized
 
     @staticmethod
@@ -212,16 +216,17 @@ class Tokenizer:
                                     break
                             yield chunk
 
-    def fit(self, filepath:str, batch_size=10_485_760):
+    def fit(self, filepath:str, batch_size=10_485_760, *, targets:list|None=None):
         '''
         fill vocabs until specified amount (from `self.target_vocab_size`)
         '''
         global_word_count = {}
         total_char = 0
+        self.init()
         for batch in self.stream_corpus(filepath, batch_size):
+            encoded_batch  = re.findall(r'\s*\S+', batch)
             total_char += len(batch)
-            self.init_vocab(batch)
-            words = [self.word_to_ids(word) for word in batch.split()]
+            words = [self.word_to_ids(word) for word in encoded_batch]
 
             word_counts = self.get_word_counts(words)
 
@@ -232,7 +237,26 @@ class Tokenizer:
                     global_word_count[key] = global_word_count.get(key, 0) + val
 
         pair_counts, pair_to_words = self.build_pair_index(global_word_count)
-        while len(self.vocab) < self.target_vocab_size:
+
+        target = None
+        if targets:
+            targets.sort()
+            targets = [i for i in targets if i < self.target_vocab_size]
+            target = targets.pop(0)
+
+        while True:
+            if target is not None:
+                if len(self.vocab) >= target:
+                    self.total_char_raw = total_char
+                    yield len(self.vocab)
+                    if targets:
+                        target = targets.pop(0)
+                    else:
+                        target = None
+
+            if len(self.vocab) >= self.target_vocab_size:
+                break
+                
             if not pair_counts:
                 break
             best_pair = pair_counts.most_common(1)[0][0]
@@ -252,10 +276,14 @@ class Tokenizer:
             self.merge_rank[best_pair] = (len(self.merge_rank), new_id)
             self.vocab[merged_best] = len_vocab
             self.id_to_token[len_vocab] = merged_best
-        self.total_char_raw = total_char
 
-    def encode(self, text: str) -> list[int]:
-        words = [self.word_to_ids(word) for word in text.split()]
+        self.total_char_raw = total_char
+        yield len(self.vocab)
+
+
+    def encode(self, text: Any) -> list[int]:
+        text = re.findall(r'\s*\S+', text)
+        words = [self.word_to_ids(word) for word in text]
 
         for idx, word in enumerate(words):
             while True:
@@ -285,15 +313,30 @@ class Tokenizer:
         return tokens
 
     def decode(self, thing:list[int]) -> str:
-        decoded = ""
+        decoded_bytes = bytearray()
 
         for token_id in thing:
-            if token_id == self.vocab["<PAD>"]:
+            if token_id == self.vocab["<PAD>".encode('utf-8')]:
                 continue
-            decoded += self.id_to_token[token_id]
+            decoded_bytes.extend(self.id_to_token[token_id])
 
-        decoded = decoded.replace("</w>", " ")
-        return decoded
+        # decoded = decoded.replace("</w>", " ")
+        return decoded_bytes.decode('utf-8', errors='replace')
+
+    @classmethod
+    def train(cls, vocab_size, filepath:str = "data", *, targets:list|None=None):
+        tokenizer1 = cls(vocab_size)
+        print("preprocessing")
+        a = tokenizer1.fit(filepath, targets=targets)
+        start = time.perf_counter()
+        
+        for i in a:
+            print(f"fitting tokenizer of size {i}")
+            end = time.perf_counter()
+            tokenizer_save_name = f"{i}_{tokenizer1.total_char_raw}len"
+            tokenizer1.save(tokenizer_save_name)
+            print(f"{tokenizer_save_name} saved. fitting finished in {end-start:.3f}")
+
 
     def to_dict(self) -> dict[str,dict[Any,Any]]:
         vocab = {

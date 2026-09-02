@@ -55,11 +55,9 @@ logs:
 - prefetching encoded chunk aug 13 2026
 - int8 weight-only quantization aug 17 2026 
 - replace pickle with safetensors aug 30 2026
-- i jsut realized that mlx also supports cuda...
-
+- byte-level BPE sep 2 2026
 
 ## Ongoing:
-- byte-level BPE
 - fixing cupy/cuda support
 - optimizing/cleanup/docs
 
@@ -89,8 +87,6 @@ logs:
 - if num of last batch or microbatch not the multiplier, it will be dropped (aug 13 2026, non severe) 
   - cause: cus `if len(context_batches) == batch_size:` in dataloader and `step_counter % microbatch_size == 0:` in train
   - fix: like in stream_token, handle leftover
-- off by one for step counter (non severe)
-  - cause: modulo
   
 # Performance Logs
 Apple M1 Pro \

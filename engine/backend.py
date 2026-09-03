@@ -510,6 +510,9 @@ def maximum(a, b):
 def minimum(a, b):
     return _nx.minimum(a, b)
 
+def square(a):
+    return _nx.square(a)
+
 def topk(a, k:int, axis:int = -1, return_element:bool=False):
     top_k = _nx.argpartition(a, kth=-k, axis=axis)[..., -k:]
     if return_element:

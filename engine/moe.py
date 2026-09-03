@@ -6,16 +6,19 @@ import engine.initializers as initializer
 from engine.activations import softmax, softmax_derivative, swish, swish_derivative
 from helper.singleton import sleep
 
+C = nx.array(1e-4)
+
 class MoE:
-    def __init__(self, capacity_factor, top_k, n_experts, embed_dim, hidden_width, dtype:Any=nx.float16, initializer:Callable=initializer.glorot_uniform, quantized:bool|str=False, *, as_symmetric:bool=False, init=True) -> None:
+    def __init__(self, capacity_factor, top_k, n_experts, embed_dim, hidden_width,LAMBDA =1e-2, dtype:Any=nx.float16, initializer:Callable=initializer.glorot_uniform, quantized:bool|str=False, *, as_symmetric:bool=False, init=True) -> None:
         self.hidden_width = hidden_width
         self.embed_dim = embed_dim #D
         self.n_experts = n_experts #E
         self.cf = capacity_factor
         self.top_k = top_k
         self.dtype = dtype
+        self.LAMBDA = LAMBDA
 
-        self.configs = (hidden_width, embed_dim, n_experts, capacity_factor, top_k)
+        self.configs = (hidden_width, embed_dim, n_experts, capacity_factor, top_k, LAMBDA)
         self.quantized = quantized
 
         self.scales = (None, None)
@@ -50,7 +53,7 @@ class MoE:
         B, T, D = x.shape
         N = B * T
 
-        H, _, n_experts, capacity_factor, top_k = ff_configs
+        H, _, n_experts, capacity_factor, top_k, LAMBDA = ff_configs
         Wcombined, Wout, router = ff_params
 
         wcombined_scale, wout_scale, wcombined_bias, wout_bias = quantization  #type:ignore
@@ -61,6 +64,7 @@ class MoE:
         capacity = math.ceil(capacity_factor * N * top_k / n_experts)
         flatten_x = x.reshape(-1, D)
         scores =  flatten_x.astype(nx.float32) @ router #(N, E)
+        z_loss = C * nx.mean(nx.square(nx.logsumexp(scores, -1)))
         router_prob = softmax(scores, -1) #(N, E)
 
         #top-k
@@ -78,7 +82,7 @@ class MoE:
         histogram = nx.add_at(histogram, flatten_top_expert_indices, 1)
         avg_prob = nx.mean(router_prob, axis=0) #P
         normalized_histogram = histogram / ( N * top_k) #f
-        router_loss = n_experts * nx.sum(normalized_histogram * avg_prob) #L, fp32
+        router_loss = n_experts * nx.sum(normalized_histogram * avg_prob) * LAMBDA #L, fp32
 
         #dispatch
         M = N * top_k
@@ -118,13 +122,15 @@ class MoE:
         final_output = nx.sum(final_output, axis=1, dtype=nx.float32).reshape(B,T,D) #check
         final_output = final_output.astype(x.dtype)
 
-        cache = (flatten_x, router_prob, top_expert_indices, top_gates32, flatten_top_expert_indices, assignement_tokens, valid, safe_slot, expert_input, expert_gate, projected, hidden, raw_output, normalized_histogram)
-        return final_output, cache, router_loss, normalized_histogram
+        total_aux_loss = router_loss + z_loss
+
+        cache = (flatten_x, router_prob, top_expert_indices, top_gates32, flatten_top_expert_indices, assignement_tokens, valid, safe_slot, expert_input, expert_gate, projected, hidden, raw_output, normalized_histogram, scores)
+        return final_output, cache, total_aux_loss, normalized_histogram
 
 
     @staticmethod
     def backward(gradient , caches, moe_configs, ff_params, quantization:tuple[Any,...]|None=None, *, use_symmetric:bool=False):
-        flatten_x, router_prob, top_expert_indices, top_gates32 , flatten_top_expert_indices, assignement_tokens, valid, safe_slot, expert_input, expert_gate, projected, hidden, raw_output, normalized_histogram = caches
+        flatten_x, router_prob, top_expert_indices, top_gates32 , flatten_top_expert_indices, assignement_tokens, valid, safe_slot, expert_input, expert_gate, projected, hidden, raw_output, normalized_histogram, scores = caches
         Wout, Wcombined = ff_params
 
         wcombined_scale, wout_scale, wcombined_bias, wout_bias = quantization  #type:ignore
@@ -200,7 +206,9 @@ class MoE:
         d_router_prob += LAMBDA * (d_avg_prob / N)
 
         d_scores = softmax_derivative(router_prob, d_router_prob) #(N,E)
+        d_z_loss = ((2 * C) / N) * nx.logsumexp(scores, -1, keepdims=True) * router_prob
         # print("d_scores", d_scores.dtype)
+        d_scores += d_z_loss
 
 
         d_router = flatten_x.astype(nx.float32).T @ d_scores #(D,E) #fp32

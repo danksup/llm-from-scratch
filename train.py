@@ -32,7 +32,7 @@ tokenizer1 = Tokenizer.load(TOKENIZER_PATH)
 
 session_configs = {
     "epochs":EPOCHS,
-    "max_step":1000,
+    "max_step":20,
     "train_split": VAL,
     "max_val_step":1,
     "eval_every":1,
@@ -64,7 +64,6 @@ model_configs = {
     "dtype": "float16",
     "gradient_scale":4096,
     "vocab_size": len(tokenizer1.vocab),
-    "moe_lambda":0.01,
     "quantized":False, #here can be True, "symmetric", False
     "check_non_finite":False,
     "block_configs":{
@@ -73,6 +72,7 @@ model_configs = {
         "ff_topk":TOP_K,
         "ff_cf":CF,
         "ff_init":"glorot_uniform",
+        "ff_moe_lambda":1e-2,
         "attn_type":"full",
         "attn_variant":"gqa",
         "attn_n_heads":N_HEADS,

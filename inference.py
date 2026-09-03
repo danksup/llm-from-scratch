@@ -8,8 +8,8 @@ import random
 nx.set_seed(random.randrange(0,99999))
 
 
-tokenizer = Tokenizer.load("artifacts/tokenizer/tokenizer32000_1351277738len.tokenizer")
-session_path = "artifacts/sessions/session_136230400_param_1_epochs_weights_only_0a4a218f-e416-4cee-8a0c-d681291d9a6a.safetensors"
+tokenizer = Tokenizer.load("artifacts/tokenizer/tokenizer24576_1687527270len.tokenizer")
+session_path = "artifacts/sessions/session_133854720_param_1_epochs_weights_only_dea723f2-893b-410b-985e-e3e8f89d0e52.safetensors"
 
 session = Session.load(session_path, tokenizer)
 context = "I love you."

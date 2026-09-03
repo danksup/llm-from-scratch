@@ -22,6 +22,7 @@ default_block_configs = {
     "ff_n_experts":24,
     "ff_topk":2,
     "ff_cf":1.25,
+    "ff_moe_lambda":1e-2,
     "ff_init":"glorot_uniform",
     "attn_type":"swa",
     "attn_variant":"gqa",
@@ -79,7 +80,6 @@ class Transformer:
             raise ValueError(",")
         
         self.gradient_scale = configs.get("gradient_scale", 4096)
-        self.moe_lambda = configs.get("moe_lambda", 0.01)
         assert self.gradient_scale > 0, "gradient scale cant be less than 1"
         no_class_attn_type = copy.deepcopy(ATTN_TYPE)
         no_class_attn_type[default_block_configs["attn_type"]].pop('attn')
@@ -127,6 +127,7 @@ class Transformer:
                 CF = overrided["ff_cf"]
                 topk = overrided["ff_topk"]
                 ff_init = INITIALIZERS[overrided["ff_init"]]
+                ff_moe_lambda = overrided["ff_moe_lambda"]
 
                 if "attn_windows" in override and override.get("attn_type", None) == "full":
                     raise ValueError(f"[block {i}] attention type of {attn_type_str} doesn't accept \"attn_windows\"")
@@ -156,7 +157,7 @@ class Transformer:
                     case _:
                         raise ValueError(f"[block {i}] invalid variant of \"{attn_variant}\". valid variants: {", ".join(ATTN_VARIANT)}")
 
-                ff = MoE(CF, topk, E, D, H, dtype=self.dtype, initializer=ff_init, quantized=self.quantized, as_symmetric=self.symmetric_quant)
+                ff = MoE(CF, topk, E, D, H,ff_moe_lambda, dtype=self.dtype, initializer=ff_init, quantized=self.quantized, as_symmetric=self.symmetric_quant)
                 rmsnorm1 = RMSNorm(D)
                 rmsnorm2 = RMSNorm(D)
                 transformer_block = TransformerBlock(attn, ff, rmsnorm1, rmsnorm2)
@@ -252,7 +253,7 @@ class Transformer:
             _,T,_ = current_grad.shape
             caches_attn, caches_ff, caches_rmsnorm1, caches_rmsnorm2 = caches
             mask1, mask2 = masks
-            scaled_lambda = self.moe_lambda * self.gradient_scale
+            scaled_lambda = block.ff.LAMBDA * self.gradient_scale
             moe_configs = block.ff.cf, block.ff.n_experts, block.ff.hidden_width, block.ff.router, scaled_lambda
             P = nx.array(0.1, dtype=self.dtype)
 
@@ -357,7 +358,7 @@ class Transformer:
                 break
 
             embedded = self.embedding.forward(contexts)  # shape (batch, context_size, embed_dim)
-            batch_scores, last_output, all_masks, all_caches, total_router_loss, histograms = self.forward(embedded)
+            batch_scores, last_output, all_masks, all_caches, total_aux_loss, histograms = self.forward(embedded)
 
             if total_histograms is None:
                 total_histograms = histograms
@@ -366,7 +367,7 @@ class Transformer:
                     total_histograms[i] += histograms[i]
 
             loss = cross_entropy(batch_scores, next_tokens)
-            loss = nx.mean(loss) + self.moe_lambda * total_router_loss
+            loss = nx.mean(loss)  + total_aux_loss
 
             batch_gradient = cross_entropy_gradient(batch_scores, next_tokens)
             batch_gradient /= (batch_gradient.shape[0] * batch_gradient.shape[1])
@@ -510,7 +511,7 @@ class Transformer:
             batch_validation_scores, total_router_loss = self.forward(embedded, False, False)
 
             val_loss = cross_entropy(batch_validation_scores, next_tokens)
-            val_loss = nx.mean(val_loss) + self.moe_lambda * total_router_loss
+            val_loss = nx.mean(val_loss)  + total_router_loss
             total_loss += val_loss * next_tokens.size
             count += next_tokens.size
             step_counter += 1
@@ -562,7 +563,6 @@ class Transformer:
         # configs += f"quantized: {str(self.quantized)}" + "\n"
         # configs += f"gradient_scale: {str(self.gradient_scale)}" + "\n"
         configs += "precision: full (float32)\n" if self.dtype == nx.float32 else f"precision: mixed precision ({self.dtype})\n"
-        configs += f"moe_lambda: {str(self.moe_lambda)}" + "\n"
         configs += f"block configs: {self.block_configs}\n"
         configs += f"check_non_finite: {self.check_non_finite}\n"
         configs += "individual block configs (only difference is shown): \n"

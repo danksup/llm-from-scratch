@@ -63,7 +63,6 @@ logs:
 
 ## TODO (not in order):
 - moe noise
-- moe router z loss
 - inference optimization 
 - conversation memory
   

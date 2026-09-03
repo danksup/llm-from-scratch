@@ -1,5 +1,5 @@
 import engine.backend as nx
-from engine.activations import softmax, softmax_derivative
+from engine.activations import softmax_derivative
 from engine.rope import rope_forward, rope_inverse
 from typing import Any, Callable
 import engine.initializers as initializer
@@ -111,7 +111,7 @@ class AttentionSWA:
         scores = scores[:,:,:,:,0,:].reshape(B, -1, T, W+1)
         scores = scores.astype(nx.float32) /  nx.sqrt(head_dim, dtype=nx.float32)
         scores = nx.where(causal_mask, -nx.inf, scores)
-        weights_softmax = softmax(scores) #(B, n_heads, T, W+1) #fp32
+        weights_softmax = nx.softmax(scores) #(B, n_heads, T, W+1) #fp32
 
         weights = weights_softmax.astype(x.dtype)
         weights = weights.reshape(B, n_kv_heads, n_rep, T, W+1)
@@ -251,7 +251,7 @@ class AttentionSWA:
         repeats_cached_v = nx.repeat(cached_v, self.n_rep, axis=1 )
 
         scores = (Q @ repeats_cached_k.transpose(0,1,3,2)) / scale
-        weights = softmax(scores)
+        weights = nx.softmax(scores)
         output = weights @ repeats_cached_v
         output_concat = output.transpose(0, 2, 1, 3).reshape(B, T, self.embed_dim)
         output_projected = nx.quantized_matmul(output_concat, self.Wo, wo_scale, wo_bias) #BTD

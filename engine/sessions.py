@@ -10,7 +10,6 @@ import safetensors as safe
 
 import engine.backend as nx
 import engine.optimizer as optim
-from engine.activations import softmax
 from engine.dataloader import DataLoader
 from engine.optimizer import scheduler
 from engine.tokenizer import Tokenizer
@@ -352,7 +351,7 @@ class Session:
             logits = nx.substract_at(logits, (..., mem_unique), mem_count * penalty)
             # logits[...,mem_unique] -= mem_count * penalty
 
-        probs = softmax(logits[0, -1]/temperature)
+        probs = nx.softmax(logits[0, -1]/temperature)
         # print(logits.shape)
 
         #top k

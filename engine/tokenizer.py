@@ -325,51 +325,59 @@ class Tokenizer:
 
     @classmethod
     def train(cls, vocab_size, filepath:str = "data", *, targets:list|None=None):
-        tokenizer1 = cls(vocab_size)
+        tokenizer = cls(vocab_size)
         print("preprocessing")
-        a = tokenizer1.fit(filepath, targets=targets)
+        a = tokenizer.fit(filepath, targets=targets)
+        print("finished preprocessing")
         start = time.perf_counter()
         
         for i in a:
-            print(f"fitting tokenizer of size {i}")
             end = time.perf_counter()
-            tokenizer_save_name = f"{i}_{tokenizer1.total_char_raw}len"
-            tokenizer1.save(tokenizer_save_name)
+            tokenizer_save_name = f"{i}_{tokenizer.total_char_raw}len"
+            if i != vocab_size:
+                tokenizer.save(tokenizer_save_name, new_id=True)
+            else:
+                tokenizer.save(tokenizer_save_name)
             print(f"{tokenizer_save_name} saved. fitting finished in {end-start:.3f}")
-
-
-    def to_dict(self) -> dict[str,dict[Any,Any]]:
+        
+    def to_dict(self,*, include_id:bool=False) -> dict[str,dict[Any,Any]]:
         vocab = {
             "merge_rank":self.merge_rank.copy(),
             "vocab":self.vocab.copy(),
             "id_to_token":self.id_to_token.copy(),
-            "raw_char_size": self.total_char_raw if hasattr(self, "total_char_raw") else None,
-            "tokenizer_id": self.tokenizer_id if hasattr(self, "tokenizer_id") else uuid.uuid4()
-
         }
+        if include_id:
+            vocab["tokenizer_id"] = str(self.tokenizer_id)
         return vocab
 
     @classmethod
-    def from_dict(cls,thing:dict[str,Any]) -> "Tokenizer":
-        tokenizer = cls(tokenizer_id = thing.get("tokenizer_id", None))
+    def from_dict(cls,thing:dict[str,Any], *, tokenizer_id=None) -> "Tokenizer":
+        if isinstance(tokenizer_id, bytes):
+            tokenizer_id = uuid.UUID(bytes=tokenizer_id)
+        elif isinstance(tokenizer_id, str):
+            tokenizer_id = uuid.UUID(tokenizer_id)
+        elif tokenizer_id is None:
+            tokenizer_id = thing.get("tokenizer_id", None)
+
+        tokenizer = cls(tokenizer_id = tokenizer_id)
 
         tokenizer.vocab = thing["vocab"]
         tokenizer.id_to_token = thing["id_to_token"]
         tokenizer.merge_rank = thing["merge_rank"]
-        tokenizer.total_char_raw = thing.get("raw_char_size", None)
 
         return tokenizer
 
-    def save(self, filename:str, to_json=False):
+    def save(self, filename:str, to_json=False, *, new_id:bool=False):
+        tokenizer_id = uuid.uuid4() if new_id else self.tokenizer_id
         tokenizer:Any = self.to_dict()
         filename = f"tokenizer{filename}"
+        tokenizer["tokenizer_id"] = str(tokenizer_id)
 
         if to_json:
             merge_rank = {}
             for key, val in tokenizer["merge_rank"].items():
                 merge_rank[str(list(key)).replace(" ","")] = val
             tokenizer["merge_rank"] = merge_rank
-            tokenizer["tokenizer_id"] = str(self.tokenizer_id)
             with open(Path(f"artifacts/tokenizer/{filename}.json"), "w") as f:
                 json.dump(tokenizer, f, indent=4)
             return
@@ -377,7 +385,7 @@ class Tokenizer:
         with open(Path(f"artifacts/tokenizer/{filename}.tokenizer"), "wb") as f:
             f.write(b"tokenizer")
             f.write((1).to_bytes(4, "little"))
-            f.write(self.tokenizer_id.bytes) #type:ignore
+            f.write(tokenizer_id.bytes) #type:ignore
 
             pickle.dump(tokenizer, f)
 
@@ -394,7 +402,7 @@ class Tokenizer:
                 tokenizer_id = f.read(16)
                 loaded = pickle.load(f)
 
-            tokenizer = cls.from_dict(loaded)
+            tokenizer = cls.from_dict(loaded, tokenizer_id=tokenizer_id)
             return tokenizer
 
         elif path.suffix == ".json":

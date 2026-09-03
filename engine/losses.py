@@ -1,7 +1,6 @@
 from typing import Any
 
 import engine.backend as nx
-from engine.activations import softmax
 
 
 @nx.compile
@@ -24,7 +23,7 @@ def cross_entropy_gradient(logits:Any , target_idx) -> Any:
     '''
     derivative of cross entropy and softmax
     '''
-    probs = softmax(logits)
+    probs = nx.softmax(logits)
     probs_copy = nx.copy(probs)
     flat_prob = probs_copy.reshape(-1, probs.shape[-1])
     flat_target = target_idx.reshape(-1)#.astype(nx.int32)

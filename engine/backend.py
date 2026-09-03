@@ -564,6 +564,15 @@ def issubdtype(arg1, arg2):
 def iinfo(dtype):
     return _nx.iinfo(dtype)
 
+def softmax(a, axis=-1):
+    if backend == "MLX":
+        return _nx.softmax(a, axis=axis)
+    else:
+        a = a.astype(float32)
+        max_x = max(a, axis=axis, keepdims=True)
+        exp_x = exp(a - max_x, dtype=float32)
+        return exp_x / sum(exp_x, axis=axis, keepdims=True, dtype=float32)
+
 def quantize(w, /, *, regular:bool=False) -> tuple[Any,...]:
     if backend.upper() == "MLX" and not regular:
         return _nx.quantize(w, bits=8, mode="affine")

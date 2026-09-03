@@ -27,12 +27,12 @@ VAL = 1
 TOP_K = 2
 
 CORPUS_PATH = "data"
-TOKENIZER_PATH = "artifacts/tokenizer/tokenizer24576_1687527270len.tokenizer"
+TOKENIZER_PATH = "artifacts/tokenizer/tokenizer40960_1687527270len.tokenizer"
 tokenizer1 = Tokenizer.load(TOKENIZER_PATH)
 
 session_configs = {
     "epochs":EPOCHS,
-    "max_step":20,
+    "max_step":3,
     "train_split": VAL,
     "max_val_step":1,
     "eval_every":1,
@@ -64,7 +64,7 @@ model_configs = {
     "dtype": "float16",
     "gradient_scale":4096,
     "vocab_size": len(tokenizer1.vocab),
-    "quantized":False, #here can be True, "symmetric", False
+    "quantized":True, #here can be True, "symmetric", False
     "check_non_finite":False,
     "block_configs":{
         "ff_hidden_width": BASE_WIDTH,

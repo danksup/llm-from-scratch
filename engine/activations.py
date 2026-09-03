@@ -17,16 +17,6 @@ def leaky_relu_derivative(x:Any) -> Any:
     alpha = nx.float_32(0.01)
     return nx.where(x > 0, one, alpha)
 
-def softmax(x:Any, axis:Any=-1) -> Any:
-    """
-    turns logit into probability distribution that sums into 1.\n
-    f(x) = exp(x - max(x)) / sum(exp(x - max(x)))
-    """
-    x = x.astype(nx.float32)
-    max_x = nx.max(x, axis=axis, keepdims=True)
-    exp_x = nx.exp(x - max_x, dtype=nx.float32)
-    return exp_x / nx.sum(exp_x, axis=axis, keepdims=True, dtype=nx.float32)
-
 def softmax_derivative(s:Any, grad:Any) -> Any:
     """
     derivative of softmax

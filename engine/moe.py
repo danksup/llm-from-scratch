@@ -3,7 +3,7 @@ from typing import Any, Callable
 
 import engine.backend as nx
 import engine.initializers as initializer
-from engine.activations import softmax, softmax_derivative, swish, swish_derivative
+from engine.activations import softmax_derivative, swish, swish_derivative
 from helper.singleton import sleep
 
 C = nx.array(1e-4)
@@ -65,7 +65,7 @@ class MoE:
         flatten_x = x.reshape(-1, D)
         scores =  flatten_x.astype(nx.float32) @ router #(N, E)
         z_loss = C * nx.mean(nx.square(nx.logsumexp(scores, -1)))
-        router_prob = softmax(scores, -1) #(N, E)
+        router_prob = nx.softmax(scores, -1) #(N, E)
 
         #top-k
         top_expert_indices = nx.topk(router_prob, top_k) #(N, K)

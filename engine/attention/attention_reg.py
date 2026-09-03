@@ -1,5 +1,5 @@
 import engine.backend as nx
-from engine.activations import softmax, softmax_derivative
+from engine.activations import softmax_derivative
 from engine.rope import rope_forward, rope_inverse
 from typing import Any, Callable
 import engine.initializers as initializer
@@ -98,7 +98,7 @@ class AttentionFull:
         scores = scores.astype(nx.float32) / nx.sqrt(head_dim, dtype=nx.float32) #type:ignore
         scores = nx.where(causal_mask, -1e9, scores)
 
-        weights = softmax(scores)
+        weights = nx.softmax(scores)
         weights = weights.astype(x.dtype)
 
         output = nx.einsum("bkrQK,bkKh->bkrQh",weights, V) #(B, n_kv_heads, n_rep, Tq, Dh)
@@ -208,7 +208,7 @@ class AttentionFull:
         repeats_cached_v = nx.repeat(cached_v, self.n_rep, axis=1 )
 
         scores = (Q @ repeats_cached_k.transpose(0,1,3,2)).astype(nx.float32) / nx.float_32(nx.sqrt(self.head_dim))
-        weights = softmax(scores)
+        weights = nx.softmax(scores)
         weights = weights.astype(x.dtype)
         output = weights @ repeats_cached_v
         output_concat = output.transpose(0, 2, 1, 3).reshape(B, T, self.embed_dim)

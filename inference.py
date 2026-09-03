@@ -9,7 +9,7 @@ nx.set_seed(random.randrange(0,99999))
 
 
 tokenizer = Tokenizer.load("artifacts/tokenizer/tokenizer24576_1687527270len.tokenizer")
-session_path = "artifacts/sessions/session_133854720_param_1_epochs_weights_only_dea723f2-893b-410b-985e-e3e8f89d0e52.safetensors"
+session_path = "artifacts/sessions/session_133854720_param_1_epochs_weights_only_eca7fc0a-379e-4539-8a38-27a8bfaef9a0.safetensors"
 
 session = Session.load(session_path, tokenizer)
 context = "I love you."

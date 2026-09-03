@@ -282,10 +282,10 @@ class MoE:
 
     @classmethod
     def from_weight(cls, configs, weights, quants, dtype) -> "MoE":
-        hidden_width, embed_dim, n_experts, capacity_factor, top_k = configs
+        hidden_width, embed_dim, n_experts, capacity_factor, top_k, LAMBDA = configs
         router, wcombined, wout = weights
 
-        moe = cls(capacity_factor, top_k, n_experts, embed_dim, hidden_width, dtype, init=False)
+        moe = cls(capacity_factor, top_k, n_experts, embed_dim, hidden_width,LAMBDA, dtype, init=False)
         moe.router = router
         moe.Wcombined = wcombined
         moe.Wout = wout

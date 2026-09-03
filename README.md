@@ -58,10 +58,11 @@ logs:
 - byte-level BPE sep 2 2026
 
 ## Ongoing:
-- fixing cupy/cuda support
+- parallelizing tokenizer word frequency counting
 - optimizing/cleanup/docs
 
 ## TODO (not in order):
+- fixing cuda support (T_T)
 - moe noise
 - inference optimization 
 - conversation memory

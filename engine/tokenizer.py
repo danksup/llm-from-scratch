@@ -223,6 +223,7 @@ class Tokenizer:
         global_word_count = {}
         total_char = 0
         self.init()
+        print("preprocessing")
         for batch in self.stream_corpus(filepath, batch_size):
             encoded_batch  = re.findall(r'\s*\S+', batch)
             total_char += len(batch)
@@ -243,7 +244,7 @@ class Tokenizer:
             targets.sort()
             targets = [i for i in targets if i < self.target_vocab_size]
             target = targets.pop(0)
-
+        print("finished preprocessing")
         while True:
             if target is not None:
                 if len(self.vocab) >= target:
@@ -326,9 +327,7 @@ class Tokenizer:
     @classmethod
     def train(cls, vocab_size, filepath:str = "data", *, targets:list|None=None):
         tokenizer = cls(vocab_size)
-        print("preprocessing")
         a = tokenizer.fit(filepath, targets=targets)
-        print("finished preprocessing")
         start = time.perf_counter()
         
         for i in a:
@@ -359,7 +358,8 @@ class Tokenizer:
         elif tokenizer_id is None:
             tokenizer_id = thing.get("tokenizer_id", None)
 
-        tokenizer = cls(tokenizer_id = tokenizer_id)
+        vocab_size = len(thing["vocab"])
+        tokenizer = cls(vocab_size, tokenizer_id = tokenizer_id)
 
         tokenizer.vocab = thing["vocab"]
         tokenizer.id_to_token = thing["id_to_token"]
@@ -378,6 +378,17 @@ class Tokenizer:
             for key, val in tokenizer["merge_rank"].items():
                 merge_rank[str(list(key)).replace(" ","")] = val
             tokenizer["merge_rank"] = merge_rank
+
+            vocab = {}
+            for key, val in tokenizer["vocab"].items():
+                vocab[key.decode('latin-1')] = val
+            tokenizer["vocab"] = vocab
+
+            id_to_token = {}
+            for key, val in tokenizer["id_to_token"].items():
+                id_to_token[key] = val.decode('latin-1')
+            tokenizer["id_to_token"] = id_to_token
+
             with open(Path(f"artifacts/tokenizer/{filename}.json"), "w") as f:
                 json.dump(tokenizer, f, indent=4)
             return
@@ -416,8 +427,13 @@ class Tokenizer:
 
                 id_to_token = {}
                 for key,val in loaded["id_to_token"].items():
-                    id_to_token[int(key)] = val
+                    id_to_token[int(key)] = val.encode('latin-1')
                 loaded["id_to_token"] = id_to_token
+
+                vocab = {}
+                for key,val in loaded["vocab"].items():
+                    vocab[key.encode('latin-1')] = val
+                loaded["vocab"] = vocab
 
             tokenizer = cls.from_dict(loaded)
             return tokenizer

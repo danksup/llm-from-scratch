@@ -504,8 +504,8 @@ class Transformer:
         for contexts, next_tokens in dataloader.prefetch_batch(dataloader.validation_files):
             if isinstance(val_step, int) and step_counter >= val_step:
                 break
-            contexts = nx.array(contexts, nx.int32)
-            next_tokens = nx.array(next_tokens, nx.int32)
+            contexts = nx.array(nx.tolist(contexts), nx.int32)
+            next_tokens = nx.array(nx.tolist(next_tokens), nx.int32)
 
             embedded = self.embedding.forward(contexts)
             batch_validation_scores, total_router_loss = self.forward(embedded, False, False)

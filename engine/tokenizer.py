@@ -332,7 +332,7 @@ class Tokenizer:
         
         for i in a:
             end = time.perf_counter()
-            tokenizer_save_name = f"{i}_{tokenizer.total_char_raw}len"
+            tokenizer_save_name = f"{i}_vocab"
             if i != vocab_size:
                 tokenizer.save(tokenizer_save_name, new_id=True)
             else:
@@ -370,7 +370,7 @@ class Tokenizer:
     def save(self, filename:str, to_json=False, *, new_id:bool=False):
         tokenizer_id = uuid.uuid4() if new_id else self.tokenizer_id
         tokenizer:Any = self.to_dict()
-        filename = f"tokenizer{filename}"
+        filename = f"tokenizer_{filename}_{tokenizer_id}"
         tokenizer["tokenizer_id"] = str(tokenizer_id)
 
         if to_json:

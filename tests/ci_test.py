@@ -16,7 +16,7 @@ from helper.singleton import init_corpus
 PATIENCE = 20
 TRESHOLD = 1e-2
 
-TOKENIZER_PATH = "artifacts/tokenizer/tokenizer24576_1687527270len.tokenizer"
+TOKENIZER_PATH = "artifacts/tokenizer/tokenizer24576_1624612680len.tokenizer"
 tokenizer1 = Tokenizer.load(TOKENIZER_PATH)
 
 session_configs = {

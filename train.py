@@ -26,8 +26,8 @@ CF = 1.25
 VAL = 1
 TOP_K = 2
 
-CORPUS_PATH = "data"
-TOKENIZER_PATH = "artifacts/tokenizer/tokenizer40960_1687527270len.tokenizer"
+CORPUS_PATH = "artifacts/dataloader"
+TOKENIZER_PATH = "artifacts/tokenizer/tokenizer32768_1624612680len.tokenizer"
 tokenizer1 = Tokenizer.load(TOKENIZER_PATH)
 
 session_configs = {

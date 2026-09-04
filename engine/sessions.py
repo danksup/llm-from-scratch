@@ -239,8 +239,8 @@ class Session:
                     if total_histograms is None:
                         total_histograms = histograms
                     else:
-                        for i in range(self.transformer.configs["n_blocks"]):
-                            total_histograms[i] += histograms[i]
+                        for n in range(self.transformer.configs["n_blocks"]):
+                            total_histograms[n] += histograms[n]
                     flag_to_check_if_validate_checkpoint_crash_with_regular_checkpoint = False
 
                     if dataloader.validation_files and validate_every > 0 and step_counter >= next_validate_step:
@@ -266,11 +266,11 @@ class Session:
                     print(f"step: {step_counter}                                            ",end="\r" )
 
                 if total_histograms is not None:
-                    for i in range(len(total_histograms)):
-                        total_histograms[i] /= total_steps * self.configs["microbatch_size"]
+                    for histo_idx in range(len(total_histograms)):
+                        total_histograms[histo_idx] /= total_steps * self.configs["microbatch_size"]
                 end = time.perf_counter()
                 time_ = end-start
-                
+
                 final_loss /= counts
 
                 display_every = max(1, self.configs["epochs"] // 10)
@@ -328,7 +328,7 @@ class Session:
             end = time.perf_counter()
             print(f"epoch {epoch}: {e}. Time elapsed: {end-start:.5f}")
             if self.configs["save"] and self.configs["error_save"]:
-                self.save(f"RuntimeError_save_{self.session_id}")
+                self.save(f"FloatingPointError_save_{self.session_id}")
             raise
 
     def inference(self, context:Any, temperature=0.8, top_k=3, top_p=0.9, n=100, mem_size=16, penalty:float=.05) -> Any:

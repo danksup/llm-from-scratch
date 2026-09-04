@@ -81,6 +81,8 @@ class Transformer:
             raise ValueError(",")
         
         self.gradient_scale = configs.get("gradient_scale", 4096)
+        self.max_gradient_scale = self.gradient_scale
+
         assert self.gradient_scale > 0, "gradient scale cant be less than 1"
         no_class_attn_type = copy.deepcopy(ATTN_TYPE)
         no_class_attn_type[default_block_configs["attn_type"]].pop('attn')
@@ -359,7 +361,6 @@ class Transformer:
         total_histograms = None
         embed_acc = nx.zeros((self.vocab_size, self.embed_dim), nx.float32)
         clean_step = 0
-        old_gradient_scale = self.gradient_scale
 
         for contexts, next_tokens in dataloader.prefetch_batch(dataloader.train_files):
             contexts = nx.array(nx.tolist(contexts), nx.int32)
@@ -428,7 +429,7 @@ class Transformer:
                         warnings.warn(f"[NON-FINITE step: {step}] non finite loss at microstep {microstep}. isnan forward/backward: {forward_nan}/{backward_nan} | isinf forward/backward: {forward_inf}/{backward_inf} |\n non-finite weights:\n{nan_weights}", UserWarning)
                         self.gradient_scale = max(1, self.gradient_scale // 2)
                         microstep = 0
-                        total_loss = 0
+                        total_loss = nx.float_32(0)
                         count = 0
                         clean_step = 0
                         embed_acc = nx.zeros_like(embed_acc)
@@ -508,14 +509,15 @@ class Transformer:
 
                 step += 1
 
+                #TODO: fix this hardcoding
                 clean_step += 1
                 if clean_step > 0 and clean_step % 1000 == 0:
-                    self.gradient_scale = min(self.gradient_scale * 2, old_gradient_scale)
+                    self.gradient_scale = min(self.gradient_scale * 2, self.max_gradient_scale)
 
                 self.eval_networks(include_gradients=False, optimizer=optimizer)
 
                 yield total_loss.item(), count, total_histograms, step
-                total_loss = 0
+                total_loss = nx.float_32(0)
                 count = 0
                 microstep = 0
                 total_histograms = None

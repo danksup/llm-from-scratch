@@ -14,7 +14,7 @@ from engine.transformer import Transformer
 
 nx.set_seed(12345)
 
-EPOCHS = 1
+EPOCHS = 5
 EMBED_DIM = 320
 CONTEXT_SIZE = 1200
 BATCH_SIZE = 5
@@ -47,7 +47,6 @@ session_configs = {
         "scheduler": "none",
         "min_lr": 1e-4,
     },
-    "using":os.environ.get("BACKEND"),
     "save":True,
     "create_checkpoint":True,
     "checkpoint_every":1000,

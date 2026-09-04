@@ -57,6 +57,7 @@ logs:
 - replace pickle with safetensors aug 30 2026
 - byte-level BPE sep 2 2026
 - cuda support is now using MLX (deleted cupy) -> `pip install mlx[cuda13]` if ur machine supports cuda
+- adaptive gradient scaling and better non-finite handling
 
 ## Ongoing:
 - parallelizing tokenizer word frequency counting

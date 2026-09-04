@@ -172,9 +172,22 @@ class Session:
             configs_str["save"]= colorize("False", "red")
             configs_str["create_checkpoint"] = "disabled because save is false"
 
+        backend = nx.backend
         if nx.backend == "MLX":
             if self.configs["backend"]["mlx_disable_compile"]:
                 configs_str["backend"]["mlx_disable_compile"] = colorize("True", "red")
+
+            compute_api = ""
+
+            if nx._nx.cuda.is_available():
+                compute_api = "cuda"
+            elif nx._nx.metal.is_available():
+                compute_api = "metal"
+            else:
+                compute_api = "erm..."
+            backend += f"({compute_api})"
+
+        configs_str["using"] = backend
 
         for key,val in configs_str.items():
             if isinstance(val, dict):
@@ -211,17 +224,23 @@ class Session:
                 assert self.optimizer, "optimizer doesnt exist"
                 train = self.transformer.train(dataloader, self.optimizer, self.configs["epochs"], max_step=self.configs["max_step"], eval_every=self.configs["eval_every"], microbatch_size=self.configs["microbatch_size"])
 
-                final_loss = 0.0
+                final_loss = nx.float_32(0.0)
                 total_histograms = None
                 total_steps = 0
                 val_loss = None
                 next_validate_step = validate_every
                 next_checkpoint = checkpoint_every
+                counts = 0
 
                 for loss, count, histograms, step_counter in train:
-                    final_loss = loss / count
+                    counts += count
+                    final_loss += loss
                     total_steps = step_counter
-                    total_histograms = histograms
+                    if total_histograms is None:
+                        total_histograms = histograms
+                    else:
+                        for i in range(self.transformer.configs["n_blocks"]):
+                            total_histograms[i] += histograms[i]
                     flag_to_check_if_validate_checkpoint_crash_with_regular_checkpoint = False
 
                     if dataloader.validation_files and validate_every > 0 and step_counter >= next_validate_step:
@@ -251,6 +270,8 @@ class Session:
                         total_histograms[i] /= total_steps * self.configs["microbatch_size"]
                 end = time.perf_counter()
                 time_ = end-start
+                
+                final_loss /= counts
 
                 display_every = max(1, self.configs["epochs"] // 10)
 
@@ -298,6 +319,12 @@ class Session:
                 self.save(f"keyboardinterrupt_save_{self.session_id}")
             raise
         except RuntimeError as e:
+            end = time.perf_counter()
+            print(f"epoch {epoch}: {e}. Time elapsed: {end-start:.5f}")
+            if self.configs["save"] and self.configs["error_save"]:
+                self.save(f"RuntimeError_save_{self.session_id}")
+            raise
+        except FloatingPointError as e:
             end = time.perf_counter()
             print(f"epoch {epoch}: {e}. Time elapsed: {end-start:.5f}")
             if self.configs["save"] and self.configs["error_save"]:

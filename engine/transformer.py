@@ -13,6 +13,7 @@ from engine.losses import cross_entropy, cross_entropy_gradient
 from engine.transformer_block import TransformerBlock
 from helper.singleton import sleep
 from helper.validate_and_raise import validate_choice
+import warnings
 
 
 optimizers = optim.Adam | optim.AdamW | optim.SGD
@@ -332,7 +333,6 @@ class Transformer:
                         text += f"{layer}_{weight}"
 
                 for dweight in dweights[layer_i]:
-                    layer_ = getattr(block, layer)
                     dweight_ = getattr(layer_, dweight)
                     if not nx.isfinite(dweight_).all():
                         text += f"{layer}_{dweight} "
@@ -341,6 +341,16 @@ class Transformer:
             texts += f"{text}\n"
         return texts
 
+    def reset_gradient(self):
+        layers = ["ff", "attention", "rmsnorm1", "rmsnorm2"]
+        dweights = [ ["d_router", "dWcombined","dWout"], ["dWo", "dWqkv"],[ "d_gamma"],["d_gamma"]]
+        for block in self.blocks:
+            for layer_i, layer in enumerate(layers):
+                layer_ = getattr(block, layer)
+                for dweight in dweights[layer_i]:
+                    if hasattr(layer_, dweight):
+                        delattr(layer_, dweight)
+
     def train(self, dataloader:DataLoader, optimizer:optimizers, total_epoch:int, max_step:int=50000, eval_every:int=5, microbatch_size:int=16):
         total_loss = nx.float_32(0.0)
         count = 0
@@ -348,12 +358,12 @@ class Transformer:
         step = 0
         total_histograms = None
         embed_acc = nx.zeros((self.vocab_size, self.embed_dim), nx.float32)
+        clean_step = 0
+        old_gradient_scale = self.gradient_scale
 
         for contexts, next_tokens in dataloader.prefetch_batch(dataloader.train_files):
             contexts = nx.array(nx.tolist(contexts), nx.int32)
             next_tokens = nx.array(nx.tolist(next_tokens), nx.int32)
-            # contexts = nx.array(contexts, nx.int32)
-            # next_tokens = nx.array(next_tokens, nx.int32)
 
             if step >= max_step:
                 break
@@ -398,28 +408,35 @@ class Transformer:
             count += next_tokens.size
             microstep += 1
 
-            if microstep % eval_every == 0:
+            if microstep % eval_every == 0 or microstep == microbatch_size:
                 to_eval = [total_loss, self.embedding.lookup_table, embed_acc, total_histograms]
                 self.eval_networks(to_eval)
 
                 if self.check_non_finite:
-                    if not nx.isfinite(loss).item():
+                    gradient_mean = nx.mean(current_grad)
+                    if not nx.isfinite(loss).item() or not nx.isfinite(gradient_mean).item():
+                        if self.gradient_scale <= 1:
+                            raise FloatingPointError("worthless")
+                        
                         forward_nan = nx.isnan(loss)
                         forward_inf = nx.isinf(loss)
                         nan_weights = self.non_finite_check()
 
-                        raise FloatingPointError(f"[FORWARD step: {step}] non finite loss at microstep {microstep}. isnan: {forward_nan} | isinf: {forward_inf} |\n non-finite weights:\n{nan_weights}")
+                        backward_nan = nx.isnan(gradient_mean)
+                        backward_inf = nx.isinf(gradient_mean)
 
-                    if not nx.isfinite(current_grad).all().item():
-                        backward_max = nx.max(current_grad)
-                        backward_min = nx.min(current_grad)
-                        backward_nan = nx.isnan(current_grad).any()
-                        backward_inf = nx.isinf(current_grad).any()
-                        nan_weights = self.non_finite_check()
-                        raise FloatingPointError(f"[BACKWARD step: {step}] non-finite gradient at microstep {microstep}. isnan: {backward_nan} | isinf: {backward_inf}.\nmin value: {backward_min}\nmax value: {backward_max}, | non-finite weights: {nan_weights}")
+                        warnings.warn(f"[NON-FINITE step: {step}] non finite loss at microstep {microstep}. isnan forward/backward: {forward_nan}/{backward_nan} | isinf forward/backward: {forward_inf}/{backward_inf} |\n non-finite weights:\n{nan_weights}", UserWarning)
+                        self.gradient_scale = max(1, self.gradient_scale // 2)
+                        microstep = 0
+                        total_loss = 0
+                        count = 0
+                        clean_step = 0
+                        embed_acc = nx.zeros_like(embed_acc)
+                        total_histograms = None
+                        self.reset_gradient()
+                        continue                        
 
-                    
-            if microstep > 0 and microstep % microbatch_size == 0:
+            if microstep == microbatch_size:
                 all_network_params = []
                 for i,block in enumerate(self.blocks):
                     dWqkv = block.attention.dWqkv.astype(nx.float32) / self.gradient_scale / microbatch_size
@@ -491,10 +508,17 @@ class Transformer:
 
                 step += 1
 
+                clean_step += 1
+                if clean_step > 0 and clean_step % 1000 == 0:
+                    self.gradient_scale = min(self.gradient_scale * 2, old_gradient_scale)
+
                 self.eval_networks(include_gradients=False, optimizer=optimizer)
 
                 yield total_loss.item(), count, total_histograms, step
-
+                total_loss = 0
+                count = 0
+                microstep = 0
+                total_histograms = None
                 nx.clear_cache()
 
 

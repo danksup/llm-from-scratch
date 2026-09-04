@@ -224,6 +224,7 @@ class Transformer:
                 all_caches.append(caches)
                 histograms[idx] = nx.zeros_like(normalized_histogram)
                 histograms[idx] += normalized_histogram
+                # self.eval_networks()
             except TypeError as e:
                 print(f"[block {idx}] TypeError")
                 raise TypeError(e)
@@ -417,6 +418,7 @@ class Transformer:
                         nan_weights = self.non_finite_check()
                         raise FloatingPointError(f"[BACKWARD step: {step}] non-finite gradient at microstep {microstep}. isnan: {backward_nan} | isinf: {backward_inf}.\nmin value: {backward_min}\nmax value: {backward_max}, | non-finite weights: {nan_weights}")
 
+                    
             if microstep > 0 and microstep % microbatch_size == 0:
                 all_network_params = []
                 for i,block in enumerate(self.blocks):
@@ -442,6 +444,7 @@ class Transformer:
                     del Wqkv, Wo, Wcombined, Wout
                     del dWqkv, dWo, dWcombined, dWout, d_router, d_gamma1, d_gamma2
                     del block.attention.dWqkv, block.attention.dWo, block.ff.dWcombined, block.ff.dWout, block.ff.d_router, block.rmsnorm1.d_gamma, block.rmsnorm2.d_gamma
+
 
                 lookup_table = nx.dequantize(self.embedding.lookup_table, self.embedding.table_scale, self.embedding.bias, regular=self.symmetric_quant)
                 all_network_params.extend([("embedding",lookup_table, embed_acc / microbatch_size)])
@@ -491,7 +494,9 @@ class Transformer:
                 self.eval_networks(include_gradients=False, optimizer=optimizer)
 
                 yield total_loss.item(), count, total_histograms, step
+
                 nx.clear_cache()
+
 
     def validate(self, dataloader:DataLoader, val_step:int|None=None):
         total_loss = nx.float_32(0.0)

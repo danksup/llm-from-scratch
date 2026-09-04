@@ -56,6 +56,7 @@ logs:
 - int8 weight-only quantization aug 17 2026 
 - replace pickle with safetensors aug 30 2026
 - byte-level BPE sep 2 2026
+- cuda support is now using MLX (deleted cupy) -> `pip install mlx[cuda13]` if ur machine supports cuda
 
 ## Ongoing:
 - parallelizing tokenizer word frequency counting

@@ -20,7 +20,7 @@ from engine.moe import MoE
 from engine.embedding import Embedding
 
 from helper.validate_and_raise import validate_choice, validate_match
-
+from helper.logger import Logger
 
 
 optimizers = Union[optim.Adam, optim.AdamW, optim.SGD]
@@ -101,8 +101,11 @@ class Session:
         self.session_id = session_id
         if self.session_id is None:
             self.session_id = str(uuid.uuid4())
+
+        self.logger = Logger(str(self.session_id), "logs")
+
         self.tokenizer = tokenizer
-        self.transformer = transformer
+        self.transformer = transformer(logger=self.logger)
 
         validate_match(transformer.vocab_size, len(tokenizer.vocab), f"between {transformer.vocab_size} in transformer and {len(tokenizer.vocab)} in tokenizer.")
 
@@ -202,6 +205,40 @@ class Session:
         t_mess += self.transformer.get_configs_str()
         return t_mess
 
+    def mini_info(self) -> str:
+        info = ""
+        info += f"param: {self.transformer.count_params()}\n"
+        info += "precision: full (float32)\n" if self.transformer.dtype == nx.float32 else f"precision: mixed precision ({self.transformer.dtype})\n"
+
+        if self.optimizer is not None :
+            if self.optimizer.scheduler is not None and self.optimizer.min_lr is not None:
+                info += f"optimizer: max_lr: {self.optimizer.init_lr:.7f} | scheduler: {(self.optimizer.scheduler.str_name())} | min_lr: {self.optimizer.min_lr:.7f}\n" #type:ignore
+            else:
+                info += f"optimizer: max_lr: {self.optimizer.init_lr:.7f}"
+
+        for key,val in self.transformer.configs.items():
+            if key in ["check_non_finite", "quantized"]:
+                info += f"{key}: {val} \n"
+
+        for key,val in self.configs.items():
+            if key in ["session_id", "epochs", "max_step", "using"]:
+                info += f"{key}: {val} \n"
+
+        if self.configs["train_split"] == 1 or self.configs["validate_every"] == 0:
+            info += f"validation: {colorize("disabled", "red")}\n"
+
+        if self.configs["create_checkpoint"] == 0 or self.configs["create_checkpoint"] == 0:
+            info += f"checkpoint: {colorize("disabled", "red")}\n"
+
+        if not self.configs['save']:
+            info += f"save: {colorize("disabled", "red")}\n"
+
+        if nx.backend == "MLX":
+            if self.configs["backend"]["mlx_disable_compile"]:
+                info += f"mlx_disable_compile: {colorize("True", "red")}\n"
+
+        return info
+
     @classmethod
     def build_from_files(cls):
         '''
@@ -209,10 +246,14 @@ class Session:
         '''
         raise NotImplementedError("not yet")
 
-    def train(self,dataloader:DataLoader,patience:int=10, display_message:bool=True, savefile_name:str=""):
+    def train(self,dataloader:DataLoader,patience:int=10, display_message:bool=True, savefile_name:str="", *, print_whole_self:bool=False):
         if display_message:
-            print("[training]              ")
-            print(self)
+            print("[TRAINING]")
+            if print_whole_self:
+                print(self)
+            else:
+                print(self.mini_info())
+        self.logger.info(self)
         epoch = 0
         best_val_loss = float('inf')
         validate_every = self.configs["validate_every"]
@@ -254,7 +295,7 @@ class Session:
                                 flag_to_check_if_validate_checkpoint_crash_with_regular_checkpoint = True
                                 self.save(f"checkpoint_best_{self.session_id}")
                         else:
-                            print(f"step: {step_counter}: validation becomes worse: best: {best_val_loss} | val:{val_loss}")
+                            self.logger.warn(f"step: {step_counter}: validation becomes worse: best: {best_val_loss} | val:{val_loss}", category=UserWarning)
 
                     if self.configs["create_checkpoint"] and checkpoint_every > 0 and step_counter >= next_checkpoint:
                         next_checkpoint += checkpoint_every
@@ -273,25 +314,26 @@ class Session:
 
                 final_loss /= counts
 
-                display_every = max(1, self.configs["epochs"] // 10)
-
-                if display_message and( i % display_every == 0 or i == self.configs["epochs"] - 1):
-                    if val_loss is None:
-                        if not dataloader.validation_files:
-                            val_loss = 'no validation'
-                        else:
-                            val_loss = 'validation is skipped because something is wrong'
-
-                    if hasattr(dataloader, "_DataLoader__cow_factor"):
-                        cow_factor = dataloader._DataLoader__cow_factor #type:ignore
-                        print(f"epoch {epoch} | step_counter: {total_steps}:  | avg loss: {final_loss} | avg val: {val_loss} | lr: {self.optimizer.lr:.6f} | {colorize("cow_factor:",'red', 'bold')} {colorize(str(cow_factor), 'red', 'bold')} | time: {time_}")
+                # msg_res = None
+                hist_res = ""
+                if val_loss is None:
+                    if not dataloader.validation_files:
+                        val_loss = 'no validation'
                     else:
-                        print(f"epoch {epoch} | step_counter: {total_steps}:  | avg loss: {final_loss} | avg val: {val_loss} | lr: {self.optimizer.lr:.6f} | time: {time_}")
-                    if total_histograms:
-                        for idx, histogram in enumerate(total_histograms):
-                            hmin = nx.min(histogram).item()
-                            hmax = nx.max(histogram).item()
-                            print(f"block{idx}: ideal: {1/histogram.shape[0]} | spread: {hmax-hmin} | min: {hmin} | max: {hmax}")
+                        val_loss = 'validation is skipped because something is wrong'
+
+                if hasattr(dataloader, "_DataLoader__cow_factor"):
+                    cow_factor = dataloader._DataLoader__cow_factor #type:ignore
+                    msg_res = f"epoch {epoch} | step_counter: {total_steps}:  | avg loss: {final_loss} | avg val: {val_loss} | lr: {self.optimizer.lr:.6f} | {colorize("cow_factor:",'red', 'bold')} {colorize(str(cow_factor), 'red', 'bold')} | time: {time_}"
+                else:
+                    msg_res = f"epoch {epoch} | step_counter: {total_steps}:  | avg loss: {final_loss} | avg val: {val_loss} | lr: {self.optimizer.lr:.6f} | time: {time_}"
+                if total_histograms:
+                    for idx, histogram in enumerate(total_histograms):
+                        hmin = nx.min(histogram).item()
+                        hmax = nx.max(histogram).item()
+                        hist_res += f"block{idx}: ideal: {1/histogram.shape[0]} | spread: {hmax-hmin} | min: {hmin} | max: {hmax}\n"
+
+                self.logger.info(msg_res, hist_res, print_msg=True)
 
             if self.configs["save"]:
                 infer_only = "_weights_only" if self.configs["weights_only"] else ""
@@ -305,31 +347,37 @@ class Session:
             print(f"epoch {epoch}: {e}. Time elapsed: {end-start:.5f}")
             if self.configs["save"] and self.configs["error_save"]:
                 self.save(f"valueerror_save_{self.session_id}")
-            raise
+            self.logger.error("ValueError",str(e), e)
         except OverflowError as e:
             end = time.perf_counter()
             print(f"epoch {epoch}: {e}. Time elapsed: {end-start:.5f}")
             if self.configs["save"] and self.configs["error_save"]:
                 self.save(f"overflow_save_{self.session_id}")
-            raise
+
+            self.logger.error("OverflowError",str(e), e)
         except KeyboardInterrupt as e:
             end = time.perf_counter()
             print(f"epoch {epoch}: {e}. Time elapsed: {end-start:.5f}")
             if self.configs["save"] and self.configs["error_save"]:
                 self.save(f"keyboardinterrupt_save_{self.session_id}")
-            raise
+
+            self.logger.error("KeyboardInterrupt",str(e), e)
+
         except RuntimeError as e:
             end = time.perf_counter()
             print(f"epoch {epoch}: {e}. Time elapsed: {end-start:.5f}")
             if self.configs["save"] and self.configs["error_save"]:
                 self.save(f"RuntimeError_save_{self.session_id}")
-            raise
+
+            self.logger.error("RuntimeError",str(e), e)
+
         except FloatingPointError as e:
             end = time.perf_counter()
             print(f"epoch {epoch}: {e}. Time elapsed: {end-start:.5f}")
             if self.configs["save"] and self.configs["error_save"]:
                 self.save(f"FloatingPointError_save_{self.session_id}")
-            raise
+            self.logger.error("FloatingPointError", str(e), e)
+
 
     def inference(self, context:Any, temperature=0.8, top_k=3, top_p=0.9, n=100, mem_size=16, penalty:float=.05) -> Any:
         all_caches = None

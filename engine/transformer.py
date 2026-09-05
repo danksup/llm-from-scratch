@@ -12,9 +12,8 @@ from engine.embedding import Embedding
 from engine.losses import cross_entropy, cross_entropy_gradient
 from engine.transformer_block import TransformerBlock
 from helper.singleton import sleep
+from helper.logger import Logger
 from helper.validate_and_raise import validate_choice
-import warnings
-
 
 optimizers = optim.Adam | optim.AdamW | optim.SGD
 
@@ -171,6 +170,10 @@ class Transformer:
             if not self.blocks:
                 raise ValueError("this transformer doesnt have any block.")
 
+    def __call__(self, *args: Any, **kwds: Any) -> Any:
+        self.logger:Logger = kwds["logger"]
+        return self
+        
     def __str__(self) -> str:
         return self.get_configs_str()
 
@@ -317,7 +320,6 @@ class Transformer:
 
         nx.eval(*to_eval)
 
-    
     def non_finite_check(self):
         # nan_weights = []
         texts = ""
@@ -417,7 +419,7 @@ class Transformer:
                     gradient_mean = nx.mean(current_grad)
                     if not nx.isfinite(loss).item() or not nx.isfinite(gradient_mean).item():
                         if self.gradient_scale <= 1:
-                            raise FloatingPointError("worthless")
+                            self.logger.error("non-finite :(", category=FloatingPointError)
                         
                         forward_nan = nx.isnan(loss)
                         forward_inf = nx.isinf(loss)
@@ -426,7 +428,6 @@ class Transformer:
                         backward_nan = nx.isnan(gradient_mean)
                         backward_inf = nx.isinf(gradient_mean)
 
-                        warnings.warn(f"[NON-FINITE step: {step}] non finite loss at microstep {microstep}. isnan forward/backward: {forward_nan}/{backward_nan} | isinf forward/backward: {forward_inf}/{backward_inf} |\n non-finite weights:\n{nan_weights}", UserWarning)
                         self.gradient_scale = max(1, self.gradient_scale // 2)
                         microstep = 0
                         total_loss = nx.float_32(0)
@@ -435,6 +436,7 @@ class Transformer:
                         embed_acc = nx.zeros_like(embed_acc)
                         total_histograms = None
                         self.reset_gradient()
+                        self.logger.warn(f"[NON-FINITE step: {step}] non finite loss at microstep {microstep}. isnan forward/backward: {forward_nan}/{backward_nan} | isinf forward/backward: {forward_inf}/{backward_inf}\ngradient_scale is halved: {self.gradient_scale}", f"\n non-finite weights:\n{nan_weights}", category= UserWarning)
                         continue                        
 
             if microstep == microbatch_size:
@@ -589,10 +591,7 @@ class Transformer:
         for k,v in self.get_configs().items():
             if k not in ["dtype", "symmetric_quant"]:
                 configs += f"{k}: {str(v)}\n"
-        # configs += f"vocab_size: {str(self.vocab_size)}" + "\n"
-        # configs += f"embed_dim: {str(self.embed_dim)}" + "\n"
-        # configs += f"quantized: {str(self.quantized)}" + "\n"
-        # configs += f"gradient_scale: {str(self.gradient_scale)}" + "\n"
+
         configs += "precision: full (float32)\n" if self.dtype == nx.float32 else f"precision: mixed precision ({self.dtype})\n"
         configs += f"block configs: {self.block_configs}\n"
         configs += f"check_non_finite: {self.check_non_finite}\n"

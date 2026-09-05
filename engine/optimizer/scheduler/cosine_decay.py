@@ -9,6 +9,10 @@ class CosineDecay:
     def __str__(self) -> str:
         return "CosineDecay"
 
+    @staticmethod
+    def str_name():
+        return "CosineDecay"
+
     def __call__(self, progress) -> Any:
         return self.end + 0.5 * (self.start - self.end) * (1 + nx.cos(nx.pi * progress))
 

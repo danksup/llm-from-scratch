@@ -14,7 +14,7 @@ from engine.transformer import Transformer
 
 nx.set_seed(12345)
 
-EPOCHS = 5
+EPOCHS = 1
 EMBED_DIM = 320
 CONTEXT_SIZE = 1200
 BATCH_SIZE = 5
@@ -32,7 +32,7 @@ tokenizer1 = Tokenizer.load(TOKENIZER_PATH)
 
 session_configs = {
     "epochs":EPOCHS,
-    "max_step":200,
+    "max_step":10,
     "train_split": VAL,
     "max_val_step":1,
     "eval_every":1,
@@ -42,10 +42,10 @@ session_configs = {
     "microbatch_size":32,
     "optimizer":"adamw",
     "optimizer_args":{
-        "lr": 1e-3,
+        "lr": 5e-4,
         "use_master": True,
-        "scheduler": "none",
-        "min_lr": 1e-4,
+        "scheduler": "cosine_decay",
+        "min_lr": 1e-5,
     },
     "save":True,
     "create_checkpoint":True,
@@ -61,10 +61,10 @@ model_configs = {
     "n_blocks":10,
     "embed_dim":EMBED_DIM,
     "dtype": "float16",
-    "gradient_scale":4096,
+    "gradient_scale":32768*2,
     "vocab_size": len(tokenizer1.vocab),
-    "quantized":True, #here can be True, "symmetric", False
-    "check_non_finite":False,
+    "quantized":False, #here can be True, "symmetric", False
+    "check_non_finite":True,
     "block_configs":{
         "ff_hidden_width": BASE_WIDTH,
         "ff_n_experts":N_EXPERTS,
@@ -87,7 +87,6 @@ if __name__ == "__main__":
 
     session_configs["block_size"] = len(transformer.blocks)
 
-    print("loading dataloader ", end="\r")
     dataloader = DataLoader(CORPUS_PATH, tokenizer1, session_configs["context_size"], session_configs["batch_size"], session_configs["train_split"])
 
     session1 = Session(transformer, tokenizer1, True, session_configs)

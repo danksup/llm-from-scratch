@@ -7,6 +7,7 @@ class Adam:
         self.__adamw = AdamW(lr=lr, beta1=beta1, beta2=beta2, epsilon=epsilon, weight_decay=0.0, use_master=use_master, min_lr=min_lr, scheduler=scheduler)
         self.state = self.__adamw.state
         self.lr = self.__adamw.lr
+        self.init_lr = self.__adamw.init_lr
         self.epsilon = self.__adamw.epsilon
         self.use_master = self.__adamw.use_master
         self.scheduler = self.__adamw.scheduler

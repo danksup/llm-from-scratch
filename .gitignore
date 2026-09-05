@@ -20,6 +20,10 @@ artifacts/dataloader/*
 artifacts/tokenizer/*.json
 !artifacts/tokenizer/*.tokenizer
 
+logs/*
+!logs/.gitkeep
+*.log
+
 test/*
 
 *.DS_Store

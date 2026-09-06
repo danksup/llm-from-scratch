@@ -31,7 +31,7 @@ class SGD:
         if momentum > 0.0:
             self.state = {}
     
-    def step_many(self, name_param_gradient:list[Any], max_step, total_epoch):
+    def step_many(self, name_param_gradient_decay:list[Any], max_step, total_epoch):
         if self.scheduler:
             current_step = self.t
             total_step = max_step * total_epoch
@@ -41,52 +41,57 @@ class SGD:
         self.t += 1
 
         group = {}
-
-        for x in name_param_gradient:
-            if len(x) > 3:
-                x = x[:3]
-            name,param,gradient = x
+        for x in name_param_gradient_decay:
+            if len(x) == 3:
+                x += True,
+            name,param,gradient,decay_bool = x
             shape = param.shape
-            if shape not in group:
-                group[shape] = []
-            group[shape].append((name,param,gradient))
+            grouping = (shape,decay_bool)
+            if grouping not in group:
+                group[grouping] = []
+
+            group[grouping].append((name,param,gradient,decay_bool))
+            
 
         optimized = {}
-        for shape, thing in group.items():
+        for group_tuple, thing in group.items():
+            _, should_decay = group_tuple
             names = [i[0] for i in thing]
             params = nx.stack([i[1] for i in thing])
             gradients = nx.stack([i[2] for i in thing])
 
             if self.use_master:
-                if shape not in self.masters:
-                    self.masters[shape] = {
+                if group_tuple not in self.masters:
+                    self.masters[group_tuple] = {
                         "names": names.copy() ,
                         "master": nx.copy(params),
                     }
                 else:
-                    params = self.masters[shape]["master"]
-                    assert self.masters[shape]["names"] == names
+                    params = self.masters[group_tuple]["master"]
+                    assert self.masters[group_tuple]["names"] == names
 
             if self.momentum > 0.0:
-                if shape not in self.state:
-                    self.state[shape] = {
+                if group_tuple not in self.state:
+                    self.state[group_tuple] = {
                         "v": nx.zeros_like(params, nx.float32)
                     }
 
             v = 0
             if self.momentum > 0.0:
-                v = self.state[shape]["v"]
-            new_params, new_v= self.__step(params, gradients, self.lr, self.momentum, v, self.weight_decay, self.dampening)
+                v = self.state[group_tuple]["v"]
+
+            weight_decay = self.weight_decay if should_decay else nx.float_32(0.0)
+            new_params, new_v= self.__step(params, gradients, self.lr, self.momentum, v, weight_decay, self.dampening)
 
             if self.momentum > 0:
-                self.state[shape]["v"] = new_v
+                self.state[group_tuple]["v"] = new_v
 
             if self.use_master:
                 name_list = []
                 for idx, name in enumerate(names):
                     optimized[name] = new_params[idx]
                     name_list.append(name)
-                self.masters[shape]["names"] = name_list
+                self.masters[group_tuple]["names"] = name_list
             else:
                 for idx, name in enumerate(names):
                     optimized[name] = new_params[idx]

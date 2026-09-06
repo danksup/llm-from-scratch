@@ -77,8 +77,8 @@ class AdamW:
             state_shape = self.state[group_tuple]    
             m_v_t = (state_shape["m"], state_shape["v"], self.state["t"])
 
-            weight_decay = self.weight_decay if should_decay else 0
-            new_params, m,v,_ = self.__step(m_v_t,params,gradients,self.lr,  self.epsilon, self.beta1, self.beta2, self.weight_decay)
+            weight_decay = self.weight_decay if should_decay else nx.float_32(0.0)
+            new_params, m,v,_ = self.__step(m_v_t,params,gradients,self.lr,  self.epsilon, self.beta1, self.beta2, weight_decay)
 
             del params, gradients
 

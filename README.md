@@ -59,6 +59,7 @@ logs:
 - cuda support is now using MLX (deleted cupy) -> `pip install mlx[cuda13]` if ur machine supports cuda
 - adaptive gradient scaling and better non-finite handling sep 4 2026
 - better logging sep 5 2026
+- add rmsnorm before the final projection sep 6 2026
 
 ## Ongoing:
 - parallelizing tokenizer word frequency counting

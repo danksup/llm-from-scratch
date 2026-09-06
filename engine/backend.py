@@ -580,7 +580,7 @@ def quantize(w, /, *, regular:bool=False) -> tuple[Any,...]:
 
     return quantized_w, scale, zero_point
 
-def dequantize(w,/,scales,biases, dtype=float32, *, regular:bool=False):
+def dequantize(w,/,scales,biases, dtype:Any=float32, *, regular:bool=False):
     if issubdtype(w.dtype, floating) or scales is None:
         return w
     if backend.upper()  == "MLX" and not regular:

@@ -47,7 +47,7 @@ INITIALIZERS = {
 }
 
 class Transformer:
-    def __init__(self, configs: dict[str, Any] | None = None, blocks:list|None=None, *, embedding:bool|Embedding=False):
+    def __init__(self, configs: dict[str, Any] | None = None, blocks:list|None=None, *, embedding:bool|Embedding=False, rmsfinal:bool|RMSNorm=False):
         self.blocks = []
         configs =  {} if configs is None else configs
         self.configs = configs
@@ -78,6 +78,11 @@ class Transformer:
             self.embedding = embedding
         if not isinstance(self.embedding, Embedding):
             raise ValueError(",")
+
+        if not isinstance(rmsfinal, RMSNorm):
+            self.rmsnorm_final = RMSNorm(self.embed_dim)
+        else:
+            self.rmsnorm_final = rmsfinal
         
         self.gradient_scale = configs.get("gradient_scale", 4096)
         self.max_gradient_scale = self.gradient_scale
@@ -189,6 +194,7 @@ class Transformer:
         if self.quantized and not self.symmetric_quant:
             embedding_size *= 4
         total += embedding_size
+        total += self.rmsnorm_final.gamma.size
         return total
 
     def forward(self, inputs:Any, return_cache= True, is_training=True) -> Any:
@@ -242,19 +248,25 @@ class Transformer:
         lookup_table = self.embedding.lookup_table
         if self.quantized:
             lookup_table = nx.dequantize(lookup_table, self.embedding.table_scale,self.embedding.bias, self.dtype, regular=self.symmetric_quant)
-        scores = last_output @ lookup_table.T
+
+        rmsnorm_out, rms_cache = self.rmsnorm_final._forward(last_output, self.rmsnorm_final.gamma,self.rmsnorm_final.epsilon)
+        scores = rmsnorm_out.astype(self.dtype) @ lookup_table.T
         del lookup_table
 
         if return_cache:
-            return scores, last_output, all_masks, all_caches, total_router_loss, histograms
+            all_caches += rms_cache,
+            return scores, rmsnorm_out, all_masks, all_caches, total_router_loss, histograms
         return scores, total_router_loss
 
-    def backward(self, err_signal:Any,  all_masks,all_caches) -> Any:
+    def backward(self, err_signal:Any,  all_masks, all_caches:list) -> Any:
         '''
         Args:
             traces error contribution and then optimize
         '''
         current_grad = err_signal
+        rmsnorm_final_cache = all_caches.pop()
+        current_grad, rmsnorm_final_d_gamma = self.rmsnorm_final._backward(current_grad, rmsnorm_final_cache, self.rmsnorm_final.gamma)
+        self.rmsnorm_final.d_gamma = rmsnorm_final_d_gamma if getattr(self.rmsnorm_final, "d_gamma", None) is None else self.rmsnorm_final.d_gamma + rmsnorm_final_d_gamma
         for block, masks,caches in zip(self.blocks[::-1], all_masks[::-1],all_caches[::-1]):
             current_grad = current_grad.astype(self.dtype)
             _,T,_ = current_grad.shape
@@ -320,12 +332,43 @@ class Transformer:
 
         nx.eval(*to_eval)
 
-    def non_finite_check(self):
+    def network_non_finite_check(self, additional:dict[str,list[Any]]|None=None):
         # nan_weights = []
         texts = ""
+        non_finite = False
         layers = ["ff", "attention", "rmsnorm1", "rmsnorm2"]
         weights = [["router", "Wcombined", "Wout"],[ "Wqkv", "Wo"],[ "gamma"],[ "gamma"]]
         dweights = [ ["d_router", "dWcombined","dWout"], ["dWo", "dWqkv"],[ "d_gamma"],["d_gamma"]]
+
+        if additional:
+            for key,val in additional.items():
+                layer = getattr(self, key)
+                for weight in val:
+                    weight_ = getattr(layer, weight)
+                    if not nx.isfinite(weight_).all():
+                        texts += f"{weight}"
+                        non_finite = True
+
+        if not nx.isfinite(self.embedding.lookup_table).all():
+            non_finite = True
+            texts += "embedding_lookup_table"
+
+        if hasattr(self.embedding, "d_lookup_table"):
+            if self.embedding.d_lookup_table is not None:
+                if not nx.isfinite(self.embedding.d_lookup_table).all():
+                    non_finite = True
+                    texts += "embedding_d_lookup_table"
+
+        if not nx.isfinite(self.rmsnorm_final.gamma).all():
+            non_finite = True
+            texts += "rmsnorm_final_gamma"
+        
+        if hasattr(self.rmsnorm_final, "d_gamma"):
+            if self.rmsnorm_final.d_gamma is not None:
+                if not nx.isfinite(self.rmsnorm_final.d_gamma).all():
+                    non_finite = True
+                    texts += "rmsnorm_final_d_gamma"
+
         for idx, block in enumerate(self.blocks):
             text = f"block{idx}: "
             ltext = len(text)
@@ -335,17 +378,27 @@ class Transformer:
                     weight_ = getattr(layer_, weight)
                     if not nx.isfinite(weight_).all():
                         text += f"{layer}_{weight}"
+                        non_finite = True
 
                 for dweight in dweights[layer_i]:
                     dweight_ = getattr(layer_, dweight)
                     if not nx.isfinite(dweight_).all():
                         text += f"{layer}_{dweight} "
+                        non_finite = True
+
             if ltext == len(text):
                 continue
             texts += f"{text}\n"
-        return texts
+
+        return non_finite, texts
 
     def reset_gradient(self):
+        if hasattr(self.embedding, "d_lookup_table"):
+            delattr(self.embedding, "d_lookup_table")
+
+        if hasattr(self.rmsnorm_final, "d_gamma"):
+            delattr(self.rmsnorm_final, "d_gamma")
+
         layers = ["ff", "attention", "rmsnorm1", "rmsnorm2"]
         dweights = [ ["d_router", "dWcombined","dWout"], ["dWo", "dWqkv"],[ "d_gamma"],["d_gamma"]]
         for block in self.blocks:
@@ -361,8 +414,17 @@ class Transformer:
         microstep = 0
         step = 0
         total_histograms = None
-        embed_acc = nx.zeros((self.vocab_size, self.embed_dim), nx.float32)
         clean_step = 0
+
+        def reset_and_halve_grad_scale():
+            nonlocal total_loss, count, microstep, total_histograms, clean_step
+            total_loss = nx.float_32(0)
+            count = 0
+            microstep = 0
+            total_histograms = None
+            clean_step = 0
+            self.gradient_scale = max(1, self.gradient_scale//2)
+            self.reset_gradient()
 
         for contexts, next_tokens in dataloader.prefetch_batch(dataloader.train_files):
             contexts = nx.array(nx.tolist(contexts), nx.int32)
@@ -405,14 +467,15 @@ class Transformer:
             embedding_gradient = nx.add_at(embedding_gradient, contexts, current_grad)
 
             total_embedding_gradient = embedding_gradient + d_table
-            embed_acc += total_embedding_gradient
+            # embed_acc += total_embedding_gradient
+            self.embedding.d_lookup_table = total_embedding_gradient if getattr(self.embedding, "d_lookup_table", None) is None else self.embedding.d_lookup_table + total_embedding_gradient
 
             total_loss += loss * next_tokens.size
             count += next_tokens.size
             microstep += 1
 
             if microstep % eval_every == 0 or microstep == microbatch_size:
-                to_eval = [total_loss, self.embedding.lookup_table, embed_acc, total_histograms]
+                to_eval = [total_loss, self.embedding.lookup_table, self.embedding.d_lookup_table, self.rmsnorm_final.gamma, self.rmsnorm_final.d_gamma, total_histograms]
                 self.eval_networks(to_eval)
 
                 if self.check_non_finite:
@@ -423,23 +486,23 @@ class Transformer:
                         
                         forward_nan = nx.isnan(loss)
                         forward_inf = nx.isinf(loss)
-                        nan_weights = self.non_finite_check()
+                        nan_weights = self.network_non_finite_check()[1]
 
                         backward_nan = nx.isnan(gradient_mean)
                         backward_inf = nx.isinf(gradient_mean)
 
-                        self.gradient_scale = max(1, self.gradient_scale // 2)
-                        microstep = 0
-                        total_loss = nx.float_32(0)
-                        count = 0
-                        clean_step = 0
-                        embed_acc = nx.zeros_like(embed_acc)
-                        total_histograms = None
-                        self.reset_gradient()
+                        reset_and_halve_grad_scale()
                         self.logger.warn(f"[NON-FINITE step: {step}] non finite loss at microstep {microstep}. isnan forward/backward: {forward_nan}/{backward_nan} | isinf forward/backward: {forward_inf}/{backward_inf}\ngradient_scale is halved: {self.gradient_scale}", f"\n non-finite weights:\n{nan_weights}", category= UserWarning)
                         continue                        
 
             if microstep == microbatch_size:
+                if self.check_non_finite:
+                    check = self.network_non_finite_check()
+                    if check[0]:
+                        reset_and_halve_grad_scale()
+                        self.logger.warn(f"[NON-FINITE step: {step}] non finite loss at microstep {microstep}. \ngradient_scale is halved: {self.gradient_scale}", f"\n non-finite weights:\n{check[1]}")
+                        continue         
+                    
                 all_network_params = []
                 for i,block in enumerate(self.blocks):
                     dWqkv = block.attention.dWqkv.astype(nx.float32) / self.gradient_scale / microbatch_size
@@ -449,10 +512,17 @@ class Transformer:
                     d_router = block.ff.d_router.astype(nx.float32) / self.gradient_scale / microbatch_size
                     d_gamma1 = block.rmsnorm1.d_gamma.astype(nx.float32) / self.gradient_scale / microbatch_size
                     d_gamma2 = block.rmsnorm2.d_gamma.astype(nx.float32) / self.gradient_scale / microbatch_size
-                    Wqkv = nx.dequantize(block.attention.Wqkv, block.attention.scales[0], block.attention.biases[0], regular=self.symmetric_quant)
-                    Wo = nx.dequantize(block.attention.Wo, block.attention.scales[1], block.attention.biases[1], regular=self.symmetric_quant)
-                    Wcombined = nx.dequantize(block.ff.Wcombined, block.ff.scales[0], block.ff.biases[0], regular=self.symmetric_quant)
-                    Wout = nx.dequantize(block.ff.Wout, block.ff.scales[1], block.ff.biases[1], regular=self.symmetric_quant)
+
+                    if self.quantized:
+                        Wqkv = nx.dequantize(block.attention.Wqkv, block.attention.scales[0], block.attention.biases[0], regular=self.symmetric_quant)
+                        Wo = nx.dequantize(block.attention.Wo, block.attention.scales[1], block.attention.biases[1], regular=self.symmetric_quant)
+                        Wcombined = nx.dequantize(block.ff.Wcombined, block.ff.scales[0], block.ff.biases[0], regular=self.symmetric_quant)
+                        Wout = nx.dequantize(block.ff.Wout, block.ff.scales[1], block.ff.biases[1], regular=self.symmetric_quant)
+                    else:
+                        Wqkv = block.attention.Wqkv.astype(nx.float32)
+                        Wo = block.attention.Wo.astype(nx.float32)
+                        Wcombined = block.ff.Wcombined.astype(nx.float32)
+                        Wout = block.ff.Wout.astype(nx.float32)
                     all_network_params.extend(
                         [(f"Wqkv_{i}", Wqkv, dWqkv),
                         (f"Wo_{i}", Wo, dWo),
@@ -465,9 +535,16 @@ class Transformer:
                     del dWqkv, dWo, dWcombined, dWout, d_router, d_gamma1, d_gamma2
                     del block.attention.dWqkv, block.attention.dWo, block.ff.dWcombined, block.ff.dWout, block.ff.d_router, block.rmsnorm1.d_gamma, block.rmsnorm2.d_gamma
 
+                lookup_table = self.embedding.lookup_table.astype(nx.float32)
+                if self.quantized:
+                    lookup_table = nx.dequantize(lookup_table, self.embedding.table_scale, self.embedding.bias, regular=self.symmetric_quant)
+                all_network_params.extend([("embedding",lookup_table, self.embedding.d_lookup_table / microbatch_size)])
 
-                lookup_table = nx.dequantize(self.embedding.lookup_table, self.embedding.table_scale, self.embedding.bias, regular=self.symmetric_quant)
-                all_network_params.extend([("embedding",lookup_table, embed_acc / microbatch_size)])
+                if getattr(self.rmsnorm_final, "d_gamma", None) is not None:
+                    d_gamma = self.rmsnorm_final.d_gamma.astype(nx.float32) / self.gradient_scale / microbatch_size #type:ignore
+                    all_network_params.extend([("rmsnorm_final", self.rmsnorm_final.gamma.astype(nx.float32), d_gamma)])
+                    del d_gamma
+                    del self.rmsnorm_final.d_gamma
 
                 optimized = optimizer.step_many(all_network_params, max_step, total_epoch)
 
@@ -504,11 +581,9 @@ class Transformer:
                     del embedding
                 else:
                     self.embedding.lookup_table = optimized["embedding"].astype(self.dtype)
-                embed_acc = nx.zeros_like(embed_acc)
+                del self.embedding.d_lookup_table
 
-                for i in range(len(total_histograms)):
-                    total_histograms[i] = total_histograms[i]
-
+                self.rmsnorm_final.gamma = optimized["rmsnorm_final"]
                 step += 1
 
                 #TODO: fix this hardcoding
@@ -516,7 +591,7 @@ class Transformer:
                 if clean_step > 0 and clean_step % 1000 == 0:
                     self.gradient_scale = min(self.gradient_scale * 2, self.max_gradient_scale)
 
-                self.eval_networks(include_gradients=False, optimizer=optimizer)
+                self.eval_networks([self.rmsnorm_final.gamma], include_gradients=False, optimizer=optimizer)
 
                 yield total_loss.item(), count, total_histograms, step
                 total_loss = nx.float_32(0)
@@ -524,7 +599,6 @@ class Transformer:
                 microstep = 0
                 total_histograms = None
                 nx.clear_cache()
-
 
     def validate(self, dataloader:DataLoader, val_step:int|None=None):
         total_loss = nx.float_32(0.0)
@@ -568,11 +642,12 @@ class Transformer:
             all_caches[idx] = (cache_k, cache_v)
             output = ff_out
 
+        rmsfinal_out, _ = self.rmsnorm_final._forward(output, self.rmsnorm_final.gamma, self.rmsnorm_final.epsilon)
         if self.quantized:
-            #TODO this becomes nan, tho the lookup table and the scale themselves arent (fixed)
-            scores = nx.quantized_matmul(output, self.embedding.lookup_table, self.embedding.table_scale, self.embedding.bias, transpose=True, regular=as_symmetric) #type:ignore
+            scores = nx.quantized_matmul(rmsfinal_out, self.embedding.lookup_table, self.embedding.table_scale, self.embedding.bias, transpose=True, regular=as_symmetric) #type:ignore
         else:
-            scores = output @ self.embedding.lookup_table.T
+
+            scores = rmsfinal_out @ self.embedding.lookup_table.T
 
         return scores, all_caches
 
@@ -680,6 +755,7 @@ class Transformer:
             block_copy.append(block.copy())
 
         embedding_copy = self.embedding.copy()
-        transformer_copy = Transformer(configs, block_copy, embedding=embedding_copy)
+        rmsfinal_copy = self.rmsnorm_final.copy()
+        transformer_copy = Transformer(configs, block_copy, embedding=embedding_copy, rmsfinal=rmsfinal_copy)
 
         return transformer_copy

@@ -16,7 +16,7 @@ from engine.tokenizer import Tokenizer
 from engine.transformer import Transformer
 from helper.singleton import colorize, sleep
 from engine.transformer_block import TransformerBlock
-from engine.moe import MoE
+from engine.rmsnorm import RMSNorm
 from engine.embedding import Embedding
 
 from helper.validate_and_raise import validate_choice, validate_match
@@ -105,7 +105,7 @@ class Session:
         self.logger = Logger(str(self.session_id), "logs")
 
         self.tokenizer = tokenizer
-        self.transformer = transformer(logger=self.logger)
+        self.transformer:Transformer = transformer(logger=self.logger)
 
         validate_match(transformer.vocab_size, len(tokenizer.vocab), f"between {transformer.vocab_size} in transformer and {len(tokenizer.vocab)} in tokenizer.")
 
@@ -304,7 +304,7 @@ class Session:
                             continue
                         self.save(f"checkpoint_latest_{self.session_id}")
 
-                    print(f"step: {step_counter}                                            ",end="\r" )
+                    print(f"step: {step_counter} | loss: {final_loss/counts:.5f}                                            ",end="\r" )
 
                 if total_histograms is not None:
                     for histo_idx in range(len(total_histograms)):
@@ -477,11 +477,14 @@ class Session:
             embedding = {"embedding":self.transformer.embedding.lookup_table}
             tensors = weights | embedding
 
+        tensors |= {"rmsnorm_final":self.transformer.rmsnorm_final.gamma}
+
         metadata = {
             "tokenizer_id": str(self.tokenizer.tokenizer_id),
             "session_configs": str(self.configs),
             "transformer_configs": str(self.transformer.configs),
-            "block_configs": str(self.transformer.get_block_configs())
+            "block_configs": str(self.transformer.get_block_configs()),
+            "rmsnorm_final_configs": str(self.transformer.rmsnorm_final.configs)
         }
         nx.save_safetensors(Path(f"artifacts/sessions/session_{filename}.safetensors"), tensors, metadata)
 
@@ -514,6 +517,9 @@ class Session:
             if requantize:
                 embedding_lookuptable, new_scale, new_bias = nx.quantize(nx.dequantize(embedding_lookuptable, embedding_quants[0], embedding_quants[1], regular=True))
                 embedding_quants = new_scale, new_bias
+
+        rmsfinal_gamma = session["rmsnorm_final"] #type:ignore
+        rmsfinal_config = ast.literal_eval(metadata["rmsnorm_final_configs"]) #type:ignore
         
         for i in range(n_block):
             configs = block_configs[i]
@@ -555,7 +561,8 @@ class Session:
             blocks.append(block)
 
         embedding = Embedding.from_weights(lookuptable=embedding_lookuptable, quants=embedding_quants, dtype=dtype)
-        transformer = Transformer(transformer_configs, blocks, embedding=embedding)
+        rmsnorm_final = RMSNorm.from_weight(rmsfinal_config, rmsfinal_gamma)
+        transformer = Transformer(transformer_configs, blocks, embedding=embedding, rmsfinal=rmsnorm_final)
 
         session_id = session_configs["session_id"]
         session = cls(transformer=transformer, tokenizer=tokenizer, init_optimizer=False, session_id=session_id)

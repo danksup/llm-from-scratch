@@ -61,6 +61,6 @@ class Logger:
         time_string = now.strftime("%Y-%m-%d %H:%M:%S")
 
         total_msg = msg + "\n" + log_msg if log_msg is not None else msg
-        log_msg = f"[{time_string}] [{action_msg}]: {total_msg}\n"
+        log_msg = f"[{time_string}] [{action_msg}]: {total_msg}\n\n"
         with open(self.filepath, "a", encoding='utf-8') as f:
             f.write(log_msg)

@@ -57,8 +57,6 @@ class MoE:
         Wcombined, Wout, router = ff_params
 
         wcombined_scale, wout_scale, wcombined_bias, wout_bias = quantization  #type:ignore
-        # Wcombined = dequantize(Wcombined, wcombined_scale, x.dtype)
-        # Wout = dequantize(Wout, wout_scale, x.dtype)
 
         top_k = min(top_k, n_experts)
         capacity = math.ceil(capacity_factor * N * top_k / n_experts)
@@ -105,15 +103,21 @@ class MoE:
         safe_gates = nx.where(valid, flatten_top_gates, nx.zeros_like(flatten_top_gates))
         expert_gate = nx.add_at(expert_gate, (flatten_top_expert_indices, safe_slot), safe_gates)
 
-        # projected = expert_input @ Wcombined
-        projected = nx.quantized_matmul(expert_input, Wcombined, scales=wcombined_scale, biases=wcombined_bias, regular=use_symmetric) #(E, capacity, 2H)
+        if wcombined_scale is not None:
+            projected = nx.quantized_matmul(expert_input, Wcombined, scales=wcombined_scale, biases=wcombined_bias, regular=use_symmetric) #(E, capacity, 2H)
+        else:
+            projected = expert_input @ Wcombined
+
         gate_half = projected[..., :H]
         value_half = projected[..., H:]
         s = swish(gate_half, x.dtype)
 
         hidden = s * value_half #(E, capacity, H)
-        # raw_output = hidden @ Wout #(E, capacity, D)
-        raw_output = nx.quantized_matmul(hidden, Wout, scales=wout_scale, biases=wout_bias, regular=use_symmetric) #(E, capacity, D)
+
+        if wout_scale is not None:
+            raw_output = nx.quantized_matmul(hidden, Wout, scales=wout_scale, biases=wout_bias, regular=use_symmetric) #(E, capacity, D)
+        else:
+            raw_output = hidden @ Wout #(E, capacity, D)
 
         gated_output = raw_output * expert_gate[..., None]
         final_output = gated_output[flatten_top_expert_indices, safe_slot]

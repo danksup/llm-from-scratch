@@ -105,7 +105,11 @@ class AttentionFull:
 
         output = output.reshape(B, -1, T, head_dim)
         output_concat = output.transpose(0, 2, 1, 3).reshape(B, T, embed_dim)
-        output_projected = nx.quantized_matmul(output_concat, Wo, wo_scale, wo_bias, regular=use_symmetric) #BTD
+
+        if wo_scale is not None:
+            output_projected = nx.quantized_matmul(output_concat, Wo, wo_scale, wo_bias, regular=use_symmetric) #BTD
+        else:
+            output_projected = output_concat @ Wo
 
         cache =  (x, Q, K, V, weights, output_concat)
         return output_projected, cache
@@ -161,7 +165,11 @@ class AttentionFull:
         G = gradient.reshape(-1, embed_dim)
 
         dWo = H.T @ G
-        dx = nx.quantized_matmul(dQKV, Wqkv, wqkv_scale, wqkv_bias, regular=use_symmetric)
+
+        if wqkv_scale is not None:
+            dx = nx.quantized_matmul(dQKV, Wqkv, wqkv_scale, wqkv_bias, regular=use_symmetric)
+        else:
+            dx = dQKV @ Wqkv
 
         # print("dx", dx.dtype)
         del x, output_concat, freqs, Wqkv, Wo

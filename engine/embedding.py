@@ -19,6 +19,8 @@ class Embedding:
             if quantized:
                 self.lookup_table, self.table_scale, self.bias = nx.quantize(self.lookup_table, regular=use_symmetric)
 
+        self.d_lookup_table = None
+
     def __eq__(self, value: object) -> bool:
         if not isinstance(value, Embedding):
             return NotImplemented

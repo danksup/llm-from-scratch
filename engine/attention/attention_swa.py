@@ -123,8 +123,11 @@ class AttentionSWA:
 
         output = output[:,:,:,:,0,:]
         output_concat = output.transpose(0, 3, 1, 2, 4).reshape(B, T, embed_dim)
-        output_projected = nx.quantized_matmul(output_concat, Wo, wo_scale, wo_bias) #B,T,D #dtype
 
+        if wo_scale is not None:
+            output_projected = nx.quantized_matmul(output_concat, Wo, wo_scale, wo_bias) #B,T,D #dtype
+        else:
+            output_projected = output_concat @ Wo
         cache = (x, Q, windows_K, windows_V, weights_softmax, output_concat)
         return output_projected, cache
 
@@ -136,8 +139,10 @@ class AttentionSWA:
 
         wqkv_scale, wo_scale, wqkv_bias, wo_bias = quantization
 
-        Wqkv = nx.dequantize(Wqkv, wqkv_scale,wqkv_bias, x.dtype)
-        Wo = nx.dequantize(Wo, wo_scale,wo_bias, x.dtype)
+        if wqkv_scale is not None :
+            Wqkv = nx.dequantize(Wqkv, wqkv_scale,wqkv_bias, x.dtype)
+        if wo_scale is not None:
+            Wo = nx.dequantize(Wo, wo_scale,wo_bias, x.dtype)
 
         B, T, D = x.shape
         W = min(W, T-1)
@@ -254,7 +259,11 @@ class AttentionSWA:
         weights = nx.softmax(scores)
         output = weights @ repeats_cached_v
         output_concat = output.transpose(0, 2, 1, 3).reshape(B, T, self.embed_dim)
-        output_projected = nx.quantized_matmul(output_concat, self.Wo, wo_scale, wo_bias) #BTD
+
+        if wo_scale is not None:
+            output_projected = nx.quantized_matmul(output_concat, self.Wo, wo_scale, wo_bias) #BTD
+        else:
+            output_projected = output_concat @ self.Wo
 
         return output_projected, cached_k, cached_v
 

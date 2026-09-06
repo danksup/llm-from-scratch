@@ -220,7 +220,11 @@ class AttentionFull:
         weights = weights.astype(x.dtype)
         output = weights @ repeats_cached_v
         output_concat = output.transpose(0, 2, 1, 3).reshape(B, T, self.embed_dim)
-        output_projected = nx.quantized_matmul(output_concat, self.Wo, wo_scale, wo_bias, regular=use_symmetric) #BTD
+
+        if wo_scale is not None:
+            output_projected = nx.quantized_matmul(output_concat, self.Wo, wo_scale, wo_bias, regular=use_symmetric) #BTD
+        else:
+            output_projected = output_concat @ self.Wo
 
         return output_projected, cached_k, cached_v
 

@@ -322,11 +322,8 @@ class Session:
                     else:
                         val_loss = 'validation is skipped because something is wrong'
 
-                if hasattr(dataloader, "_DataLoader__cow_factor"):
-                    cow_factor = dataloader._DataLoader__cow_factor #type:ignore
-                    msg_res = f"epoch {epoch} | step_counter: {total_steps}:  | avg loss: {final_loss} | avg val: {val_loss} | lr: {self.optimizer.lr:.6f} | {colorize("cow_factor:",'red', 'bold')} {colorize(str(cow_factor), 'red', 'bold')} | time: {time_}"
-                else:
-                    msg_res = f"epoch {epoch} | step_counter: {total_steps}:  | avg loss: {final_loss} | avg val: {val_loss} | lr: {self.optimizer.lr:.6f} | time: {time_}"
+                msg_res = f"epoch {epoch} | step_counter: {total_steps}:  | avg loss: {final_loss} | avg val: {val_loss} | lr: {self.optimizer.lr:.6f} | time: {time_}"
+                
                 if total_histograms:
                     for idx, histogram in enumerate(total_histograms):
                         hmin = nx.min(histogram).item()
@@ -380,6 +377,9 @@ class Session:
 
 
     def inference(self, context:Any, temperature=0.8, top_k=3, top_p=0.9, n=100, mem_size=16, penalty:float=.05) -> Any:
+        if temperature < 0:
+            warnings.warn(colorize("temp < 0 = greedy (like temp = 0)", "yellow"))
+
         all_caches = None
         position = 0
         memory = []
@@ -397,7 +397,7 @@ class Session:
 
         next_token = nx.array([[token]], dtype=nx.int32)
 
-        for i in range(n-1):
+        for _ in range(n-1):
             logits, all_caches = self.transformer.inference(next_token,self.configs["context_size"], all_caches, position, use_symmetric=as_symmetric)
             raw_token = self._sample(logits, memory, temperature, top_k, top_p, penalty)
 
@@ -413,21 +413,18 @@ class Session:
             next_token = nx.array([[token]], dtype=nx.int32)
             position += 1
 
-        # print(memory)
-
     def _sample(self, logits, memory, temperature=0.8, top_k=3, top_p=0.9, penalty=0.05):
         if memory:
             memory = nx.array(memory, dtype=nx.int32)
             mem_array = nx.unique(memory, return_counts=True)
             mem_unique = mem_array[0]
             mem_count = mem_array[1]
-            # print(memory)
-            # logits = logits.at[..., mem_unique].subtract(mem_count * penalty)
             logits = nx.substract_at(logits, (..., mem_unique), mem_count * penalty)
-            # logits[...,mem_unique] -= mem_count * penalty
 
-        probs = nx.softmax(logits[0, -1]/temperature)
-        # print(logits.shape)
+        if temperature <= 0:
+            probs = nx.softmax(logits[0,-1])
+        else:
+            probs = nx.softmax(logits[0, -1]/temperature)
 
         #top k
         top_k = min(top_k, len(probs))

@@ -11,7 +11,8 @@ from engine.dataloader import DataLoader
 from engine.embedding import Embedding
 from engine.losses import cross_entropy, cross_entropy_gradient
 from engine.transformer_block import TransformerBlock
-from helper.singleton import sleep
+from helper.singleton import sleep, colorize
+import warnings
 from helper.logger import Logger
 from helper.validate_and_raise import validate_choice
 
@@ -283,7 +284,7 @@ class Transformer:
             scales = (block.attention.scales + block.attention.biases, block.ff.scales + block.ff.biases)
             dx, dWout, dWcombined, d_router, dWqkv, dWo, d_gamma1, d_gamma2 = block._backward(current_grad, mask1=mask1, mask2=mask2, p=P, attention=attn_str,
                                                                 caches_attn=caches_attn, caches_ff=caches_ff, caches_rmsnorm1=caches_rmsnorm1, caches_rmsnorm2=caches_rmsnorm2,
-                                                                attn_configs = attn_configs, attn_params=attn_params, gamma1=block.rmsnorm1.gamma, gamma2=block.rmsnorm2.gamma, ff_params=ff_params, moe_configs=moe_configs, quantization=scales, use_symmetric=self.symmetric_quant)
+                                                                attn_configs = attn_configs, attn_params=attn_params, gamma1=block.rmsnorm1.gamma, gamma2=block.rmsnorm2.gamma, ff_params=ff_params, moe_configs=moe_configs, gradient_scale=self.gradient_scale, quantization=scales, use_symmetric=self.symmetric_quant)
 
 
             block.ff.dWout = dWout if getattr(block.ff, "dWout", None) is None else block.ff.dWout + dWout
@@ -646,8 +647,11 @@ class Transformer:
         if self.quantized:
             scores = nx.quantized_matmul(rmsfinal_out, self.embedding.lookup_table, self.embedding.table_scale, self.embedding.bias, transpose=True, regular=as_symmetric) #type:ignore
         else:
-
             scores = rmsfinal_out @ self.embedding.lookup_table.T
+
+        # print(scores)
+        # if not nx.isfinite(scores).any():
+        #     warnings.warn(colorize("master is disabled when using full precision", "yellow"), UserWarning)
 
         return scores, all_caches
 

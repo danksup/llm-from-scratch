@@ -133,7 +133,7 @@ class MoE:
 
 
     @staticmethod
-    def backward(gradient , caches, moe_configs, ff_params, quantization:tuple[Any,...]|None=None, *, use_symmetric:bool=False):
+    def backward(gradient , caches, moe_configs, ff_params, gradient_scale, quantization:tuple[Any,...]|None=None, *, use_symmetric:bool=False):
         flatten_x, router_prob, top_expert_indices, top_gates32 , flatten_top_expert_indices, assignement_tokens, valid, safe_slot, expert_input, expert_gate, projected, hidden, raw_output, normalized_histogram, scores = caches
         Wout, Wcombined = ff_params
 
@@ -212,7 +212,7 @@ class MoE:
         d_scores = softmax_derivative(router_prob, d_router_prob) #(N,E)
         d_z_loss = ((2 * C) / N) * nx.logsumexp(scores, -1, keepdims=True) * router_prob
         # print("d_scores", d_scores.dtype)
-        d_scores += d_z_loss
+        d_scores += d_z_loss * gradient_scale
 
 
         d_router = flatten_x.astype(nx.float32).T @ d_scores #(D,E) #fp32

@@ -206,10 +206,7 @@ class DataLoader:
                         context.extend( chungus[0:need])
                     else:
                         context = chungus[0:need]
-                    # if self.__test_mode:
-                    #     yield self.__function_that_turns_n_tokens_in_random_sequence_into_the_token_for_the_word_cow_randomly(context)
-                    # else:
-                    #     yield context
+
                     yield context
                     context = None
                     chungus = chungus[need:]
@@ -289,30 +286,3 @@ class DataLoader:
     def estimate_step(self, total_tokens,  microbatch_size:int=1):
         return total_tokens // self.context_size // self.batch_size // microbatch_size
 
-    def __function_that_turns_n_tokens_in_random_sequence_into_the_token_for_the_word_cow_randomly(self, token):
-        self.__cow_factor = min(getattr(self, "__cow_factor", 0.1), 0.5)
-        if random.random() < self.__cow_factor:
-            cow  = self.tokenizer.encode("cow")
-            len_token = len(token)
-            if len(token) == len(cow):
-                return cow
-            else:
-                n_cow_base =  max(len_token//8, 1)
-                considering_cow_factor = n_cow_base + int(n_cow_base * self.__cow_factor)
-                how_much = random.randint(0, considering_cow_factor)
-                cow_length = len(cow)
-
-                if how_much == 0:
-                    self.__cow_factor += 0.123456789
-
-                for _ in range(how_much):
-                    random_place = random.randint(0, len_token - 1 - cow_length)
-
-                    if token[random_place:random_place+cow_length] == cow and (token[random_place - cow_length:random_place] != cow if random_place > (cow_length-1) else True):
-                        self.__cow_factor += 0.05
-                    else:
-                        for cow_piece in range(cow_length):
-                            token[random_place+cow_piece] = cow[cow_piece]
-        else:
-            self.__cow_factor += 0.01
-        return token

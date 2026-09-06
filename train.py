@@ -19,7 +19,7 @@ EMBED_DIM = 320
 CONTEXT_SIZE = 1200
 BATCH_SIZE = 5
 BASE_WIDTH = 4 * EMBED_DIM
-N_HEADS = 10
+N_HEADS = 8
 N_KV_HEADS = max(1, N_HEADS // 2)
 N_EXPERTS = 6
 CF = 1.25
@@ -32,7 +32,7 @@ tokenizer1 = Tokenizer.load(TOKENIZER_PATH)
 
 session_configs = {
     "epochs":EPOCHS,
-    "max_step":20,
+    "max_step":500,
     "train_split": VAL,
     "max_val_step":1,
     "eval_every":1,
@@ -42,14 +42,14 @@ session_configs = {
     "microbatch_size":32,
     "optimizer":"adamw",
     "optimizer_args":{
-        "lr": 5e-4,
+        "lr": 1e-3,
         "use_master": True,
         "scheduler": "cosine_decay",
-        "min_lr": 1e-5,
+        "min_lr": 5e-4,
     },
     "save":True,
     "create_checkpoint":True,
-    "checkpoint_every":1000,
+    "checkpoint_every":100,
     "weights_only": True,
     "backend": {
         "mlx_disable_compile":False,
@@ -58,7 +58,7 @@ session_configs = {
 }
 
 model_configs = {
-    "n_blocks":10,
+    "n_blocks":12,
     "embed_dim":EMBED_DIM,
     "dtype": "float16",
     "gradient_scale":4096,

@@ -524,13 +524,13 @@ class Transformer:
                         Wcombined = block.ff.Wcombined.astype(nx.float32)
                         Wout = block.ff.Wout.astype(nx.float32)
                     all_network_params.extend(
-                        [(f"Wqkv_{i}", Wqkv, dWqkv),
-                        (f"Wo_{i}", Wo, dWo),
-                        (f"ff_wcombined_{i}", Wcombined,dWcombined),
-                        (f"ff_wout_{i}", Wout, dWout),
-                        (f"ff_router_{i}", block.ff.router.astype(nx.float32), d_router),
-                        (f"rmsnorm1_gamma_{i}", block.rmsnorm1.gamma.astype(nx.float32), d_gamma1),
-                        (f"rmsnorm2_gamma_{i}", block.rmsnorm2.gamma.astype(nx.float32), d_gamma2)])
+                        [(f"Wqkv_{i}", Wqkv, dWqkv, True),
+                        (f"Wo_{i}", Wo, dWo, True),
+                        (f"ff_wcombined_{i}", Wcombined,dWcombined, True),
+                        (f"ff_wout_{i}", Wout, dWout, True),
+                        (f"ff_router_{i}", block.ff.router.astype(nx.float32), d_router, True),
+                        (f"rmsnorm1_gamma_{i}", block.rmsnorm1.gamma.astype(nx.float32), d_gamma1, False),
+                        (f"rmsnorm2_gamma_{i}", block.rmsnorm2.gamma.astype(nx.float32), d_gamma2, False)])
                     del Wqkv, Wo, Wcombined, Wout
                     del dWqkv, dWo, dWcombined, dWout, d_router, d_gamma1, d_gamma2
                     del block.attention.dWqkv, block.attention.dWo, block.ff.dWcombined, block.ff.dWout, block.ff.d_router, block.rmsnorm1.d_gamma, block.rmsnorm2.d_gamma
@@ -538,11 +538,11 @@ class Transformer:
                 lookup_table = self.embedding.lookup_table.astype(nx.float32)
                 if self.quantized:
                     lookup_table = nx.dequantize(lookup_table, self.embedding.table_scale, self.embedding.bias, regular=self.symmetric_quant)
-                all_network_params.extend([("embedding",lookup_table, self.embedding.d_lookup_table / microbatch_size)])
+                all_network_params.extend([("embedding",lookup_table, self.embedding.d_lookup_table / microbatch_size, False)])
 
                 if getattr(self.rmsnorm_final, "d_gamma", None) is not None:
                     d_gamma = self.rmsnorm_final.d_gamma.astype(nx.float32) / self.gradient_scale / microbatch_size #type:ignore
-                    all_network_params.extend([("rmsnorm_final", self.rmsnorm_final.gamma.astype(nx.float32), d_gamma)])
+                    all_network_params.extend([("rmsnorm_final", self.rmsnorm_final.gamma.astype(nx.float32), d_gamma, False)])
                     del d_gamma
                     del self.rmsnorm_final.d_gamma
 

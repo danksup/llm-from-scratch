@@ -33,7 +33,7 @@ class SGD:
     
     def step_many(self, name_param_gradient:list[Any], max_step, total_epoch):
         if self.scheduler:
-            current_step = self.state["t"]
+            current_step = self.t
             total_step = max_step * total_epoch
             progress = min(1, current_step / total_step) 
             self.lr = self.schedule(progress)
@@ -41,7 +41,11 @@ class SGD:
         self.t += 1
 
         group = {}
-        for name,param,gradient in name_param_gradient:
+
+        for x in name_param_gradient:
+            if len(x) > 3:
+                x = x[:3]
+            name,param,gradient = x
             shape = param.shape
             if shape not in group:
                 group[shape] = []

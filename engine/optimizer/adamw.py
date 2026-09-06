@@ -2,7 +2,7 @@ import engine.backend as nx
 from typing import Any, Callable
 
 class AdamW:
-    def __init__(self, lr=1e-3, beta1:float=0.9, beta2:float=0.999, epsilon:float=1e-8, weight_decay:float=0.01, use_master:bool=True, scheduler:None|Callable=None, min_lr:None | float= None) -> None:
+    def __init__(self, lr=1e-3, beta1:float=0.9, beta2:float=0.999, epsilon:float=1e-8, weight_decay:float=0.01, use_master:bool=True, scheduler:None|Callable=None, min_lr:None | float= None, *, _all_not_decayed:bool=False) -> None:
         assert lr >= 0, "lr must be non-negative"
         assert beta1 >= 0 and beta1 < 1, "allowed beta1 range: [0,1)"
         assert beta2 >= 0 and beta2 < 1, "allowed beta2 range: [0,1)"
@@ -27,8 +27,10 @@ class AdamW:
         self.epsilon = nx.float_32(epsilon)
         self.weight_decay = nx.float_32(weight_decay)
         self.use_master = use_master
+
+        self.__all_not_decayed = _all_not_decayed
     
-    def step_many(self, name_param_gradient:list[Any], max_step:int, total_epoch:int) -> dict[Any,Any]:
+    def step_many(self, name_param_gradient_decay:list[Any], max_step:int, total_epoch:int) -> dict[Any,Any]:
 
         if self.scheduler:
             current_step = self.state["t"]
@@ -40,44 +42,55 @@ class AdamW:
         self.state["t"] = self.state.get("t", nx.array(0, dtype=nx.int32)) + 1
 
         group = {}
-        for name,param,gradient in name_param_gradient:
+        for x in name_param_gradient_decay:
+            if len(x) == 3:
+                x += True,
+            name,param,gradient,decay_bool = x
             shape = param.shape
-            if shape not in group:
-                group[shape] = []
-            group[shape].append((name,param,gradient))
-        
+            if self.__all_not_decayed:
+                decay_bool = False
+            grouping = (shape,decay_bool)
+            if grouping not in group:
+                group[grouping] = []
+
+            group[grouping].append((name,param,gradient,decay_bool))
+                
         optimized = {}
-        for shape, thing in group.items():
+        for group_tuple, thing in group.items():
+            _, should_decay = group_tuple
             names = [i[0] for i in thing]
             params = nx.stack([i[1] for i in thing])
             gradients = nx.stack([i[2] for i in thing])
-            if shape not in self.state:
-                self.state[shape] = {
+
+            if group_tuple not in self.state:
+                self.state[group_tuple] = {
                     "names": names.copy() ,
                     "m": nx.zeros_like(params, nx.float32),
                     "v": nx.zeros_like(params,  nx.float32),
                 }
                 if self.use_master:
-                    self.state[shape]["master"] = nx.copy(params)
+                    self.state[group_tuple]["master"] = nx.copy(params)
             else:
                 if self.use_master:
-                    params = self.state[shape]["master"]
-                    assert self.state[shape]["names"] == names
-            state_shape = self.state[shape]    
+                    params = self.state[group_tuple]["master"]
+                    assert self.state[group_tuple]["names"] == names
+            state_shape = self.state[group_tuple]    
             m_v_t = (state_shape["m"], state_shape["v"], self.state["t"])
+
+            weight_decay = self.weight_decay if should_decay else 0
             new_params, m,v,_ = self.__step(m_v_t,params,gradients,self.lr,  self.epsilon, self.beta1, self.beta2, self.weight_decay)
 
             del params, gradients
 
-            self.state[shape] = {"m":m, "v":v}
+            self.state[group_tuple] = {"m":m, "v":v}
             if self.use_master:
-                self.state[shape]["master"] = new_params
+                self.state[group_tuple]["master"] = new_params
 
             name_list = []
             for idx, name in enumerate(names):
                 optimized[name] = new_params[idx]
                 name_list.append(name)
-            self.state[shape]["names"] = name_list
+            self.state[group_tuple]["names"] = name_list
             
             del new_params
 

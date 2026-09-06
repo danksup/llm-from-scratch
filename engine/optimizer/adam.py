@@ -4,7 +4,7 @@ from engine.optimizer.adamw import AdamW
 
 class Adam:
     def __init__(self, lr=1e-3, beta1:float=0.9, beta2:float=0.999, epsilon:float=1e-8, use_master:bool=True,scheduler:None | Callable = None, min_lr:None | float= None) -> None:
-        self.__adamw = AdamW(lr=lr, beta1=beta1, beta2=beta2, epsilon=epsilon, weight_decay=0.0, use_master=use_master, min_lr=min_lr, scheduler=scheduler)
+        self.__adamw = AdamW(lr=lr, beta1=beta1, beta2=beta2, epsilon=epsilon, weight_decay=0.0, use_master=use_master, min_lr=min_lr, scheduler=scheduler, _all_not_decayed=True)
         self.state = self.__adamw.state
         self.lr = self.__adamw.lr
         self.init_lr = self.__adamw.init_lr

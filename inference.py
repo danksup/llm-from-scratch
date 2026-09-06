@@ -1,5 +1,5 @@
 import os
-backend = os.environ["BACKEND"] = "mlx"
+backend = os.environ["BACKEND"] = "auto"
 import engine.backend as nx
 from engine.sessions import Session
 from engine.tokenizer import Tokenizer
@@ -8,7 +8,7 @@ import random
 nx.set_seed(random.randrange(0,99999))
 
 tokenizer = Tokenizer.load("artifacts/tokenizer/tokenizer32768_1624612680len.tokenizer")
-session_path = "artifacts/sessions/session_checkpoint_latest_734896b2-2715-4a8e-8254-1a3a88898c96.safetensors"
+session_path = "artifacts/sessions/session_89028864_param_1_epochs_weights_only_bfe970e9-3bf5-42be-8369-5ad933c72b7b.safetensors"
 
 session = Session.load(session_path, tokenizer)
 context = "i jsut wanna keep calling your name"
@@ -17,7 +17,7 @@ context = nx.array(tokenizer.encode(context), nx.uint32)
 
 context = context.reshape(-1, context.shape[0])
 
-TEMPERATURE = .8
+TEMPERATURE = .0
 TOP_K = 30
 TOP_P = .8
 N = 100

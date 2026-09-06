@@ -97,6 +97,20 @@ str_to_dtype = {
 floating_type = [float64, float32, float16, bfloat16]
 floating_type_str = [dtype_to_srt[i] for i in floating_type]
 
+def using_backend():
+    backend_str = backend
+    if backend == "MLX":
+        compute_api = ""
+        if _nx.cuda.is_available():
+            compute_api = "cuda"
+        elif _nx.metal.is_available():
+            compute_api = "metal"
+        else:
+            compute_api = "erm..."
+        backend_str += f"({compute_api})"
+
+    return backend_str
+
 def set_seed(seed:int):
     global rng
     if backend in ["MLX"]:

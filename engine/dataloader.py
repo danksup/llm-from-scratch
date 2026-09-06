@@ -12,7 +12,7 @@ import uuid
 
 
 class DataLoader:
-    def __init__(self, filepath:str, tokenizer:Tokenizer, context_size:int=1024, batch_size:int=10, train_split:float|Literal['all']=0.9, *, __test_mode:bool = False) -> None:
+    def __init__(self, filepath:str, tokenizer:Tokenizer, context_size:int=1024, batch_size:int=10, train_split:float|Literal['all']=0.9) -> None:
         '''
         Args:
             filepath: filepath
@@ -45,10 +45,6 @@ class DataLoader:
             self.type_code = 'H'
         else:
             self.type_code = 'I'
-
-        self.__test_mode = __test_mode
-        if __test_mode:
-            self.__cow_factor = 0.1
 
     @staticmethod
     def get_files(filepath:str="data"):

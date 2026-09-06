@@ -30,7 +30,7 @@ DEFAULT_CONFIGS = {
     "epochs": 1,
     "max_step":5000,
     "max_val_step":None,
-    "eval_every":5,
+    "eval_every":1,
     "validate_every":1000,
     "context_size": 256,
     "batch_size": 5,
@@ -175,22 +175,11 @@ class Session:
             configs_str["save"]= colorize("False", "red")
             configs_str["create_checkpoint"] = "disabled because save is false"
 
-        backend = nx.backend
         if nx.backend == "MLX":
             if self.configs["backend"]["mlx_disable_compile"]:
                 configs_str["backend"]["mlx_disable_compile"] = colorize("True", "red")
 
-            compute_api = ""
-
-            if nx._nx.cuda.is_available():
-                compute_api = "cuda"
-            elif nx._nx.metal.is_available():
-                compute_api = "metal"
-            else:
-                compute_api = "erm..."
-            backend += f"({compute_api})"
-
-        configs_str["using"] = backend
+        configs_str["using"] = nx.using_backend()
 
         for key,val in configs_str.items():
             if isinstance(val, dict):
@@ -208,6 +197,7 @@ class Session:
     def mini_info(self) -> str:
         info = ""
         info += f"param: {self.transformer.count_params()}\n"
+        info += f"using: {nx.using_backend()}\n"
         info += "precision: full (float32)\n" if self.transformer.dtype == nx.float32 else f"precision: mixed precision ({self.transformer.dtype})\n"
 
         if self.optimizer is not None :
@@ -221,13 +211,13 @@ class Session:
                 info += f"{key}: {val} \n"
 
         for key,val in self.configs.items():
-            if key in ["session_id", "epochs", "max_step", "using"]:
+            if key in ["session_id", "epochs", "max_step"]:
                 info += f"{key}: {val} \n"
 
         if self.configs["train_split"] == 1 or self.configs["validate_every"] == 0:
             info += f"validation: {colorize("disabled", "red")}\n"
 
-        if self.configs["create_checkpoint"] == 0 or self.configs["create_checkpoint"] == 0:
+        if not self.configs["create_checkpoint"] or self.configs["checkpoint_every"] == 0:
             info += f"checkpoint: {colorize("disabled", "red")}\n"
 
         if not self.configs['save']:
@@ -259,6 +249,8 @@ class Session:
         validate_every = self.configs["validate_every"]
         checkpoint_every = self.configs["checkpoint_every"]
         start = time.perf_counter()
+        msg_res = ""
+        hist_res = ""
         try:
             for i in range(self.configs["epochs"]):
                 epoch = i
@@ -314,7 +306,6 @@ class Session:
 
                 final_loss /= counts
 
-                # msg_res = None
                 hist_res = ""
                 if val_loss is None:
                     if not dataloader.validation_files:
@@ -339,41 +330,61 @@ class Session:
                 if savefile_name == "":
                     savefile_name = filename
                 self.save(savefile_name)
+
         except ValueError as e:
             end = time.perf_counter()
             print(f"epoch {epoch}: {e}. Time elapsed: {end-start:.5f}")
             if self.configs["save"] and self.configs["error_save"]:
                 self.save(f"valueerror_save_{self.session_id}")
-            self.logger.error("ValueError",str(e), e)
+
+            if msg_res == "":
+                msg_res = "-"
+            if hist_res == "":
+                hist_res = None
+            self.logger.error(msg_res,hist_res, e)
         except OverflowError as e:
             end = time.perf_counter()
             print(f"epoch {epoch}: {e}. Time elapsed: {end-start:.5f}")
             if self.configs["save"] and self.configs["error_save"]:
                 self.save(f"overflow_save_{self.session_id}")
 
-            self.logger.error("OverflowError",str(e), e)
+            if msg_res == "":
+                msg_res = "-"
+            if hist_res == "":
+                hist_res = None
+            self.logger.error(msg_res,hist_res, e)
         except KeyboardInterrupt as e:
             end = time.perf_counter()
             print(f"epoch {epoch}: {e}. Time elapsed: {end-start:.5f}")
             if self.configs["save"] and self.configs["error_save"]:
                 self.save(f"keyboardinterrupt_save_{self.session_id}")
-
-            self.logger.error("KeyboardInterrupt",str(e), e)
+            if msg_res == "":
+                msg_res = "-"
+            if hist_res == "":
+                hist_res = None
+            self.logger.error(msg_res,hist_res, e)
 
         except RuntimeError as e:
             end = time.perf_counter()
             print(f"epoch {epoch}: {e}. Time elapsed: {end-start:.5f}")
             if self.configs["save"] and self.configs["error_save"]:
                 self.save(f"RuntimeError_save_{self.session_id}")
-
-            self.logger.error("RuntimeError",str(e), e)
+            if msg_res == "":
+                msg_res = "-"
+            if hist_res == "":
+                hist_res = None
+            self.logger.error(msg_res,hist_res, e)
 
         except FloatingPointError as e:
             end = time.perf_counter()
             print(f"epoch {epoch}: {e}. Time elapsed: {end-start:.5f}")
             if self.configs["save"] and self.configs["error_save"]:
                 self.save(f"FloatingPointError_save_{self.session_id}")
-            self.logger.error("FloatingPointError", str(e), e)
+            if msg_res == "":
+                msg_res = "-"
+            if hist_res == "":
+                hist_res = None
+            self.logger.error(msg_res, hist_res, e)
 
 
     def inference(self, context:Any, temperature=0.8, top_k=3, top_p=0.9, n=100, mem_size=16, penalty:float=.05) -> Any:
@@ -387,7 +398,7 @@ class Session:
         logits, all_caches = self.transformer.inference(context,self.configs["context_size"], all_caches, position, use_symmetric=as_symmetric)
         position = context.shape[1]
 
-        raw_token = self._sample(logits, memory,  temperature, top_k, top_p)
+        raw_token = self._sample(logits, memory,  temperature, top_k, top_p, penalty)
         memory.append(raw_token)
         token = raw_token.item()
         decoded = self.tokenizer.decode([token])
@@ -422,7 +433,7 @@ class Session:
             logits = nx.substract_at(logits, (..., mem_unique), mem_count * penalty)
 
         if temperature <= 0:
-            probs = nx.softmax(logits[0,-1])
+            return nx.argmax(logits[0, -1], -1)
         else:
             probs = nx.softmax(logits[0, -1]/temperature)
 

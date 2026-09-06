@@ -599,7 +599,7 @@ class Transformer:
                 count = 0
                 microstep = 0
                 total_histograms = None
-                nx.clear_cache()
+                # nx.clear_cache()
 
     def validate(self, dataloader:DataLoader, val_step:int|None=None):
         total_loss = nx.float_32(0.0)

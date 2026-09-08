@@ -424,7 +424,8 @@ class Session:
             next_token = nx.array([[token]], dtype=nx.int32)
             position += 1
 
-    def _sample(self, logits, memory, temperature=0.8, top_k=3, top_p=0.9, penalty=0.05):
+    @staticmethod
+    def _sample(logits, memory, temperature=0.8, top_k=3, top_p=0.9, penalty=0.05):
         if memory:
             memory = nx.array(memory, dtype=nx.int32)
             mem_array = nx.unique(memory, return_counts=True)

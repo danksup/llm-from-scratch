@@ -428,8 +428,8 @@ class Transformer:
             self.reset_gradient()
 
         for contexts, next_tokens in dataloader.prefetch_batch(dataloader.train_files):
-            contexts = nx.array(nx.tolist(contexts), nx.int32)
-            next_tokens = nx.array(nx.tolist(next_tokens), nx.int32)
+            contexts = nx.array(contexts).reshape(dataloader.batch_size, dataloader.context_size)
+            next_tokens = nx.array(next_tokens).reshape(dataloader.batch_size, dataloader.context_size)
 
             if step >= max_step:
                 break
@@ -648,10 +648,6 @@ class Transformer:
             scores = nx.quantized_matmul(rmsfinal_out, self.embedding.lookup_table, self.embedding.table_scale, self.embedding.bias, transpose=True, regular=as_symmetric) #type:ignore
         else:
             scores = rmsfinal_out @ self.embedding.lookup_table.T
-
-        # print(scores)
-        # if not nx.isfinite(scores).any():
-        #     warnings.warn(colorize("master is disabled when using full precision", "yellow"), UserWarning)
 
         return scores, all_caches
 

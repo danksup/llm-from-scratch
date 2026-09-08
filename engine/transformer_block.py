@@ -99,8 +99,6 @@ class TransformerBlock:
 
     #TODO:compiled, dtype consistency fix/check
     def inference_forward(self, x, max_cache_len, cached_k=None, cached_v=None,  position=0, * ,use_symmetric=False):
-        # print("x", x.dtype)
-
         rmsnorm1_out, _ = RMSNorm._forward(x, self.rmsnorm1.gamma, self.rmsnorm1.epsilon)
         rmsnorm1_out = rmsnorm1_out.astype(x.dtype)
 

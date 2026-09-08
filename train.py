@@ -15,11 +15,11 @@ from engine.transformer import Transformer
 nx.set_seed(12345)
 
 EPOCHS = 1
-EMBED_DIM = 256
+EMBED_DIM = 320
 CONTEXT_SIZE = 1200
-BATCH_SIZE = 6
+BATCH_SIZE = 5
 BASE_WIDTH = 4 * EMBED_DIM
-N_HEADS = 8
+N_HEADS = 10
 N_KV_HEADS = max(1, N_HEADS // 2)
 N_EXPERTS = 10
 CF = 1.25
@@ -32,7 +32,7 @@ tokenizer1 = Tokenizer.load(TOKENIZER_PATH)
 
 session_configs = {
     "epochs":EPOCHS,
-    "max_step":1,
+    "max_step":3,
     "train_split": VAL,
     "max_val_step":1,
     "eval_every":1,

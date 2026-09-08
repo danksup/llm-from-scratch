@@ -1,10 +1,10 @@
 import array
 import random
 from multiprocessing import Process, Queue
+from queue import Empty
 from pathlib import Path
 from typing import Any, Iterator, Literal
 
-import engine.backend as nx
 from engine.tokenizer import Tokenizer
 
 from helper.validate_and_raise import validate_match
@@ -12,7 +12,7 @@ import uuid
 
 
 class DataLoader:
-    def __init__(self, filepath:str, tokenizer:Tokenizer, context_size:int=1024, batch_size:int=10, train_split:float|Literal['all']=0.9) -> None:
+    def __init__(self, filepath:str, tokenizer:Tokenizer, context_size:int=1024, batch_size:int=10, train_split:float=0.9) -> None:
         '''
         Args:
             filepath: filepath
@@ -26,13 +26,10 @@ class DataLoader:
         self.tokenizer = tokenizer
         self.filepath = filepath
 
-        assert isinstance(train_split, (float,int)) or train_split == "all", f"provide either float or \"all\" for train_split argument. got {train_split} of type {type(train_split)} instead"
+        assert isinstance(train_split, (float,int)), f"provide either float for train_split argument. got {train_split} of type {type(train_split)} instead"
 
         if isinstance(train_split, (float,int)):
             assert 0 < train_split <= 1.0, f"provide a value within (0,1] for train split. got {train_split} instead"
-
-        if train_split == "all":
-            train_split = 1.0
 
         train_files, validation_files = self.split_files(filepath, train_split)
 
@@ -47,7 +44,7 @@ class DataLoader:
             self.type_code = 'I'
 
     @staticmethod
-    def get_files(filepath:str="data"):
+    def get_files(filepath:str|Path="data"):
         path = Path(filepath)
         files = []
 
@@ -85,39 +82,64 @@ class DataLoader:
         return total_tokens
 
     @staticmethod
-    def split_files(filepath:str, split_value:float=.9):
-        files = DataLoader.get_files(filepath)
+    def split_files(filepath:str|Path, split_value:float=.9):
+        path = Path(filepath)
+        files = DataLoader.get_files(path)
 
         assert len(files) > 0, "no files found in directory."
 
         if split_value < 1.0:
             assert len(files) >= 2, "at least 2 files are needed if using validation."
 
-        file_sizes = nx.array([i.stat().st_size for i in files], nx.uint64)
-        target_train = (nx.sum(file_sizes) * split_value).item()
-        sorted_sizes = nx.argsort(file_sizes).tolist()[::-1]
+        file_sizes = [i.stat().st_size for i in files]
+        target_train = sum(file_sizes) * split_value
+        
+        sorted_sizes = [i[0] for i in sorted(enumerate(file_sizes), key=lambda x: x[1], reverse=True)]
 
         train_files = []
         validate_files = []
 
         cum = 0
-
         for i in sorted_sizes:
-            curr_size = file_sizes[i]
-            take = cum + curr_size
-            distance_take = abs(target_train - take)
-            distance_no = abs(target_train - cum)
-
-            if distance_take < distance_no:
-                if i == sorted_sizes[-1] and split_value < 1.0:
-                    validate_files.append(files[i])
-                    break
-                train_files.append(files[i])
-                cum = take
-            else:
+            if files[i].name.startswith("validation_"):
                 validate_files.append(files[i])
+            elif files[i].name.startswith("train_"):
+                train_files.append(files[i])
+                cum += file_sizes[i]
+            else:
+                curr_size = file_sizes[i]
+                take = cum + curr_size
+                distance_take = abs(target_train - take)
+                distance_no = abs(target_train - cum)
+
+                if distance_take < distance_no:
+                    if not validate_files and i == sorted_sizes[-1] and split_value < 1.0:
+                        validate_files.append(files[i])
+                        break
+                    train_files.append(files[i])
+                    cum = take
+                else:
+                    validate_files.append(files[i])
 
         return train_files, validate_files
+
+    def add_file(self, file_path:str|Path, where:Literal['train', "validation"]):
+        path = Path(file_path)
+        if path.is_file() and path.suffix in [".txt", ".tokenized"]:
+            file_list = getattr(self, f"{where}_files")
+            file_list.append(path)
+
+    def add_files(self, file_path, where:Literal['train', 'validation', 'split']):
+        path = Path(file_path)
+        if path.is_dir():
+            match where:
+                case 'split':
+                    train, val = self.split_files(path, self.train_split)
+                    self.train_files.extend(train)
+                    self.validation_files.extend(val)
+                case 'train' | "validation":
+                    for i in path.iterdir():
+                        self.add_file(i, where)
 
     @staticmethod
     def stream_file(files:list[Path], permutation:list[int]) -> Iterator[Path]:
@@ -210,48 +232,64 @@ class DataLoader:
                 leftover_temp_context = chungus
 
     def get_pairs(self, files:list[Path],  chunk_size:int= 1024000):
-        context_batches = []
-        target_batches = []
+        context_batches = array.array(self.type_code)
+        target_batches =  array.array(self.type_code)
 
         permutation = [i for i in range(len(files))]
         random.shuffle(permutation)
         for token in self.stream_token(files, permutation, chunk_size=chunk_size):
             if token is None:
                 continue
-            # print(type(token))
-            context_batches.append(token[:-1])
-            target_batches.append(token[1:])
+            context_batches.extend(token[:-1])
+            target_batches.extend(token[1:])
 
-            if len(context_batches) == self.batch_size:
+            if len(context_batches) == self.batch_size * self.context_size:
                 yield context_batches,target_batches
-                context_batches = []
-                target_batches = []
+                context_batches = array.array(self.type_code)
+                target_batches = array.array(self.type_code)
 
     def worker(self, Q:Queue, files:list[Path], chunk_size:int= 1024000):
-        for batch in self.get_pairs(files, chunk_size):
-            # Q.put(nx.tolist(batch))
-            Q.put(batch)
-        Q.put(None)
+        try:
+            for batch in self.get_pairs(files, chunk_size):
+                Q.put(batch)
+            Q.put(None)
+        except Exception as e:
+            Q.put(e)
 
     def prefetch_batch(self, files:list[Path], max_queue_size:int=20, chunk_size:int= 1024000):
         queue = Queue(max_queue_size)
-        process  = Process(target=self.worker, args=(queue, files, chunk_size))
+        process  = Process(target=self.worker, args=(queue, files, chunk_size), daemon=True)
 
         try:
             process.start()
             while True:
-                item = queue.get()
+                try:
+                    item = queue.get(timeout=10)
+                except Empty as e:
+                    if not process.is_alive():
+                        raise RuntimeError("idk")
+                    else:
+                        continue
+
                 if item is None:
                     break
+                elif isinstance(item, Exception):
+                    raise item
+                
                 yield item
         finally:
             if process.is_alive():
                 process.terminate()
-        process.join()
+            queue.cancel_join_thread()
+            queue.close()
+            process.join()
 
     def tokenize(self, file:Path):
         filename = file.stem
-        with open(Path(f"artifacts/dataloader/{filename}.tokenized"), "wb") as f:
+        
+        path = Path(f"artifacts/dataloader/{filename}.tokenized")
+        path.parent.mkdir(parents=True, exist_ok=True)
+        with open(path, "wb") as f:
             f.write(b"tokenized")
             f.write((1).to_bytes(4, "little"))
             f.write(self.tokenizer.tokenizer_id.bytes) #type:ignore
@@ -266,8 +304,9 @@ class DataLoader:
 
         if len(files) > 1 and one_file:
             filename = f"{len(files)}_files"
-
-            with open(Path(f"artifacts/dataloader/{filename}.tokenized"), "wb") as f:
+            path = Path(f"artifacts/dataloader/{filename}.tokenized")
+            path.parent.mkdir(parents=True, exist_ok=True)
+            with open(path, "wb") as f:
                 f.write(b"tokenized")
                 f.write((1).to_bytes(4, "little"))
                 f.write(self.tokenizer.tokenizer_id.bytes) #type:ignore

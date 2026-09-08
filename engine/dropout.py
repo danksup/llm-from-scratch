@@ -1,6 +1,5 @@
 import engine.backend as nx
 
-
 class Dropout:
     @staticmethod
     def _forward(x, p, is_training):

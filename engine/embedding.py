@@ -32,7 +32,6 @@ class Embedding:
         use_symmetric = self.quantized and getattr(self, "use_symmetric", False)   
         if self.quantized:
             qtized = nx.dequantize(embed, scales=self.table_scale[token_list], biases=self.bias[token_list], dtype=self.dtype, regular=use_symmetric) if self.table_scale is not None else embed #type:ignore
-            # print(qtized)
             return qtized
         return embed
 

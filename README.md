@@ -60,7 +60,9 @@ logs:
 - adaptive gradient scaling and better non-finite handling sep 4 2026
 - better logging sep 5 2026
 - add rmsnorm before the final projection sep 6 2026
-- global grad clipping sep 10 2026
+-  sep 10 2026:
+   -  global grad clipping
+   -  QKnorm
 
 ## Ongoing:
 - reducing the occurence of intermediate matrix creation as much as possible

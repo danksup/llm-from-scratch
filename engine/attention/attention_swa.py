@@ -4,9 +4,11 @@ from engine.rope import rope_forward, rope_inverse
 from typing import Any, Callable
 import engine.initializers as initializer
 from engine.rope import precompute_freqs
+from engine.rmsnorm import RMSNorm
 
+#TODO: do the thing
 class AttentionSWA:
-    def __init__(self,embed_dim:int, n_heads:int, n_kv_heads:int=-1, W=8, dtype:Any=nx.float16, initializer:Callable=initializer.glorot_uniform, quantized:bool=False, *,init=True) -> None:
+    def __init__(self,embed_dim:int, n_heads:int, Q_norm:RMSNorm, K_norm:RMSNorm, n_kv_heads:int=-1, W=8, dtype:Any=nx.float16, initializer:Callable=initializer.glorot_uniform, quantized:bool=False, *,init=True) -> None:
         self.n_kv_heads = n_kv_heads
 
         if n_kv_heads < 0:
@@ -35,12 +37,17 @@ class AttentionSWA:
         self.scales = (None, None)
         self.biases = (None,None)
 
+        wqkv_shape = embed_dim + 2 * n_kv_heads * self.head_dim, embed_dim
+        wo_shape = embed_dim,embed_dim
+
+        self.Q_norm = Q_norm
+        self.K_norm = K_norm
+
+
         if init:
-            wqkv_shape = embed_dim + 2 * n_kv_heads * self.head_dim, embed_dim
             self.Wqkv = initializer(wqkv_shape, dtype=dtype)
             assert nx.isfinite(self.Wqkv).all(), f"non-finite detected when initializing attentipn.Wqkv."
 
-            wo_shape = embed_dim,embed_dim
             self.Wo = initializer(wo_shape, dtype=dtype)
             assert nx.isfinite(self.Wo).all(), f"non-finite detected when initializing attentipn.Wo."
 
@@ -51,20 +58,26 @@ class AttentionSWA:
                 self.biases = (wqkv_bias, wo_bias)
 
 
-        self.dWqkv = None
-        self.dWo = None
+        self.dWqkv = nx.zeros(wqkv_shape)
+        self.dWo = nx.zeros(wo_shape)
+
+    def zeroes_gradient(self):
+        self.dWqkv = nx.zeros_like(self.dWqkv)
+        self.dWo = nx.zeros_like(self.dWo)
+        # self.Q_norm.d_gamma = nx.zeros_like(self.Q_norm.d_gamma)
+        # self.K_norm.d_gamma = nx.zeros_like(self.K_norm.d_gamma)
 
     @staticmethod
     def self_type() -> str:
         return "swa"
 
     @classmethod
-    def multihead(cls,embed_dim, n_heads, W, dtype, initializer):
-        mha = cls(embed_dim, n_heads=n_heads, n_kv_heads=n_heads, W=W, dtype=dtype, initializer=initializer)
+    def multihead(cls,embed_dim, n_heads, W, dtype, initializer, Q_norm:RMSNorm, K_norm:RMSNorm,):
+        mha = cls(embed_dim, n_heads=n_heads, n_kv_heads=n_heads, W=W, dtype=dtype, initializer=initializer, Q_norm=Q_norm, K_norm=K_norm)
         return mha
     @classmethod
-    def multiquery(cls,embed_dim, n_heads, W, dtype, initializer):
-        mqa = cls(embed_dim, n_heads=n_heads, n_kv_heads=1, W=W, dtype=dtype, initializer=initializer)
+    def multiquery(cls,embed_dim, n_heads, W, dtype, initializer, Q_norm:RMSNorm, K_norm:RMSNorm,):
+        mqa = cls(embed_dim, n_heads=n_heads, n_kv_heads=1, W=W, dtype=dtype, initializer=initializer, Q_norm=Q_norm, K_norm=K_norm)
         return mqa
 
     @staticmethod
@@ -212,12 +225,9 @@ class AttentionSWA:
 
     #TODO:compiled, dtype fix, quantization
     def inference_forward(self, x, max_cache_len, freqs, quantization, cached_k=None, cached_v=None, position = 0,  *, use_symmetric:bool=False):
-        scale = nx.float_32(nx.sqrt(self.head_dim))
-
         wqkv_scale, wo_scale, wqkv_bias, wo_bias = quantization #type:ignore
-
         if wqkv_scale is not None:
-            combined = nx.quantized_matmul(x, self.Wqkv, wqkv_scale, wqkv_bias, transpose=True)
+            combined = nx.quantized_matmul(x, self.Wqkv, wqkv_scale,wqkv_bias, transpose=True, regular=use_symmetric)
         else:
             combined =  x @ self.Wqkv.T  # dtype
         B, T, _ = x.shape
@@ -225,8 +235,9 @@ class AttentionSWA:
         K = combined[..., self.embed_dim: self.embed_dim + (self.n_kv_heads * self.head_dim)]
 
         K = K.reshape(B, T, self.n_kv_heads, self.head_dim).transpose(0,2,1,3)
+        K, _ = RMSNorm._forward(K, self.K_norm.gamma, self.K_norm.epsilon)
         K = rope_forward(K, freqs, position)
-        K = K.astype(nx.float32)
+
         if cached_k is not None :
             cached_k = nx.concatenate([cached_k, K], axis = 2)
         else:
@@ -245,23 +256,22 @@ class AttentionSWA:
 
             cached_v = cached_v[:, :, -max_cache_len:, :]
 
-
         Q = combined[..., :self.embed_dim]
         Q = Q.reshape(B, T, self.n_heads, self.head_dim).transpose(0,2,1,3)
+        Q, _ = RMSNorm._forward(Q, self.Q_norm.gamma, self.Q_norm.epsilon)
         Q = rope_forward(Q, freqs, position)
-
-        Q = Q.astype(nx.float32)
 
         repeats_cached_k = nx.repeat(cached_k, self.n_rep, axis=1 )
         repeats_cached_v = nx.repeat(cached_v, self.n_rep, axis=1 )
 
-        scores = (Q @ repeats_cached_k.transpose(0,1,3,2)) / scale
+        scores = (Q @ repeats_cached_k.transpose(0,1,3,2)).astype(nx.float32) / nx.float_32(nx.sqrt(self.head_dim))
         weights = nx.softmax(scores)
+        weights = weights.astype(x.dtype)
         output = weights @ repeats_cached_v
         output_concat = output.transpose(0, 2, 1, 3).reshape(B, T, self.embed_dim)
 
         if wo_scale is not None:
-            output_projected = nx.quantized_matmul(output_concat, self.Wo, wo_scale, wo_bias) #BTD
+            output_projected = nx.quantized_matmul(output_concat, self.Wo, wo_scale, wo_bias, regular=use_symmetric) #BTD
         else:
             output_projected = output_concat @ self.Wo
 
@@ -275,11 +285,16 @@ class AttentionSWA:
         return padded_position < W
 
     @classmethod
-    def from_weight(cls, configs, weights,quants, dtype) -> "AttentionSWA":
+    def from_weight(cls, configs, weights, quants,attn_QK_gamma, dtype) -> "AttentionSWA":
         embed_dim, n_kv_heads, n_heads, _, _,W, _ = configs
         wqkv, wo = weights
 
-        attn = cls(embed_dim, n_heads, n_kv_heads,W,dtype, init=False)
+        Q_norm_gamma,Q_norm_configs, K_norm_gamma, K_norm_configs = attn_QK_gamma
+        Q_norm = RMSNorm.from_weight(Q_norm_configs, Q_norm_gamma)
+        K_norm = RMSNorm.from_weight(K_norm_configs, K_norm_gamma)
+
+
+        attn = cls(embed_dim, n_heads, Q_norm, K_norm, n_kv_heads,W,dtype, init=False)
         attn.Wqkv = wqkv
         attn.Wo = wo
 
@@ -291,7 +306,9 @@ class AttentionSWA:
         return attn
 
     def copy(self):
-        attn_copy = AttentionSWA(self.embed_dim, self.n_heads, self.n_kv_heads,self.W, self.dtype, quantized=self.quantized, init=False)
+        Q_norm_copy = self.Q_norm.copy()
+        K_norm_copy = self.K_norm.copy()
+        attn_copy = AttentionSWA(self.embed_dim, self.n_heads, Q_norm_copy, K_norm_copy, self.n_kv_heads,self.W, self.dtype, quantized=self.quantized, init=False)
         attn_copy.Wqkv = nx.copy(self.Wqkv)
         attn_copy.Wo = nx.copy(self.Wo)
         if self.quantized:

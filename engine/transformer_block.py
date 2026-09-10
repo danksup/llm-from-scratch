@@ -24,7 +24,12 @@ class TransformerBlock:
         self.ff = ff
         self.rmsnorm1 = rmsnorm1
         self.rmsnorm2 = rmsnorm2
-        
+
+    def zeroes_gradient(self):
+        self.attention.zeroes_gradient()
+        self.ff.zeroes_gradient()
+        self.rmsnorm1.zeroes_gradient()
+        self.rmsnorm2.zeroes_gradient()
 
     def __str__(self) -> str:
         param_count = self.count_param()
@@ -78,7 +83,7 @@ class TransformerBlock:
 
     @staticmethod
     @nx.compile
-    def _backward(gradient:Any, mask1:Any, mask2:Any, attention:str, p, caches_attn:tuple[Any,...], caches_ff:tuple[Any,...], caches_rmsnorm1:tuple[Any,...], caches_rmsnorm2:tuple[Any,...], attn_configs:tuple[Any,...], attn_params:tuple[Any,...], gamma1:Any, gamma2:Any, ff_params:tuple, moe_configs,gradient_scale, quantization:tuple[Any,...]|None=None, *, use_symmetric:bool=False) -> tuple[Any, Any, Any, Any, Any, Any, Any, Any]:
+    def _backward(gradient:Any, mask1:Any, mask2:Any, attention:str, p, caches_attn:tuple[Any,...], caches_ff:tuple[Any,...], caches_rmsnorm1:tuple[Any,...], caches_rmsnorm2:tuple[Any,...], attn_configs:tuple[Any,...], attn_params:tuple[Any,...], gamma1:Any, gamma2:Any, ff_params:tuple, moe_configs,gradient_scale, quantization:tuple[Any,...]|None=None, *, use_symmetric:bool=False) -> tuple[Any, Any, Any, Any, Any, Any, Any, Any,Any, Any]:
         d_ff_drop = Dropout._backward(gradient, mask2, p) #grad dtype
         dx_ff,  dWcombined, dWout, d_router = MoE.backward(d_ff_drop, caches_ff, moe_configs, ff_params,gradient_scale, quantization[1], use_symmetric=use_symmetric) #out:fp32 #type:ignore
 
@@ -88,14 +93,14 @@ class TransformerBlock:
 
         d_attn_out = d_attn_out.astype(gradient.dtype)
         d_attn_drop = Dropout._backward(d_attn_out, mask1, p)
-        d_attn, dWqkv, dWo = ATTN_TYPE[attention]._backward(d_attn_drop, caches_attn, attn_configs, attn_params, quantization[0], use_symmetric=use_symmetric) #type:ignore
+        d_attn, dWqkv, dWo, Q_norm_d_gamma, K_norm_d_gamma = ATTN_TYPE[attention]._backward(d_attn_drop, caches_attn, attn_configs, attn_params, quantization[0], use_symmetric=use_symmetric) #type:ignore
 
         d_attn = d_attn.astype(nx.float32)
         d_rmsn1, d_gamma1 = RMSNorm._backward(d_attn,caches_rmsnorm1,gamma1)
 
         dx = d_rmsn1 + d_attn_out
 
-        return dx, dWout, dWcombined, d_router, dWqkv,dWo, d_gamma1, d_gamma2
+        return dx, dWout, dWcombined, d_router, dWqkv,dWo, d_gamma1, d_gamma2, Q_norm_d_gamma, K_norm_d_gamma
 
     #TODO:compiled, dtype consistency fix/check
     def inference_forward(self, x, max_cache_len, cached_k=None, cached_v=None,  position=0, * ,use_symmetric=False):
@@ -119,14 +124,16 @@ class TransformerBlock:
         return {
             "attn_type": self.attention.self_type(),
             "attention": list(self.attention.configs)[0:-1],
+            "attention_Q_norm": self.attention.Q_norm.configs,
+            "attention_K_norm": self.attention.K_norm.configs,
             "ff":self.ff.configs,
             "rmsnorm1": self.rmsnorm1.configs,
             "rmsnorm2": self.rmsnorm2.configs,
         }
 
     @classmethod
-    def from_weights(cls, attn_type, attn_configs, attn_weights,attn_quants, ff_configs, ff_weights,ff_quants, rmsnorm1_configs,gamma1, rmsnorm2_configs,gamma2, dtype):
-        attn = ATTN_TYPE[attn_type].from_weight(attn_configs, attn_weights, quants=attn_quants, dtype=dtype)
+    def from_weights(cls, attn_type, attn_configs, attn_weights, attn_quants, attn_QK_gamma, ff_configs, ff_weights,ff_quants, rmsnorm1_configs,gamma1, rmsnorm2_configs,gamma2, dtype):
+        attn = ATTN_TYPE[attn_type].from_weight(attn_configs, attn_weights, attn_QK_gamma, quants=attn_quants, dtype=dtype)
         ff = MoE.from_weight(configs=ff_configs, weights=ff_weights, quants=ff_quants, dtype=dtype)
         rmsnorm1 = RMSNorm.from_weight(rmsnorm1_configs, gamma1)
         rmsnorm2 = RMSNorm.from_weight(rmsnorm2_configs, gamma2)

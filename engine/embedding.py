@@ -9,9 +9,10 @@ class Embedding:
         self.dtype = dtype
         self.quantized = quantized
 
+        table_shape = n, self.embed_dim
         if init:
             init_ = 0.02
-            self.lookup_table = nx.uniform(low=-init_, high=init_, size=(n, self.embed_dim), dtype=dtype)
+            self.lookup_table = nx.uniform(low=-init_, high=init_, size=table_shape, dtype=dtype)
 
             self.table_scale = None
             self.use_symmetric = use_symmetric
@@ -19,7 +20,10 @@ class Embedding:
             if quantized:
                 self.lookup_table, self.table_scale, self.bias = nx.quantize(self.lookup_table, regular=use_symmetric)
 
-        self.d_lookup_table = None
+        self.d_lookup_table = nx.zeros(table_shape)
+
+    def zeroes_gradient(self):
+        self.d_lookup_table = nx.zeros_like(self.d_lookup_table)
 
     def __eq__(self, value: object) -> bool:
         if not isinstance(value, Embedding):

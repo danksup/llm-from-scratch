@@ -3,13 +3,16 @@ import engine.backend as nx
 
 
 class RMSNorm:
-    def __init__(self, embed_dim:int, epsilon:float=1e-5, *, init=True) -> None:
+    def __init__(self, size:int, epsilon:float=1e-5, *, init=True) -> None:
         self.epsilon = nx.float_32(epsilon)
         if init:
-            self.gamma = nx.ones((embed_dim,), dtype=nx.float32)
-        self.d_gamma = None
-        self.configs = embed_dim, epsilon
+            self.gamma = nx.ones((size,), dtype=nx.float32)
+        self.d_gamma = nx.zeros((size,))
+        self.configs = size, epsilon
 
+    def zeroes_gradient(self):
+        self.d_gamma = nx.zeros_like(self.d_gamma, dtype=nx.float32)
+    
     @staticmethod
     def _forward(x:nx.ArrayLike, gamma:nx.ArrayLike, epsilon:Any) -> tuple[nx.ArrayLike, tuple[Any,...]]:
         '''
@@ -27,7 +30,8 @@ class RMSNorm:
     @staticmethod
     def _backward(gradient:nx.ArrayLike, caches:tuple[Any,...], gamma:nx.ArrayLike) -> tuple[nx.ArrayLike,...]:
         normalized, rms, x32  = caches
-        d_gamma = nx.sum(gradient * normalized, axis=(0, 1), dtype=nx.float32)
+        axis = tuple(range(gradient.ndim - 1))
+        d_gamma = nx.sum(gradient * normalized, axis=axis, dtype=nx.float32)
         dx_norm = gradient * gamma
         d = x32.shape[-1]
         sum_term = nx.sum(dx_norm * normalized, axis=-1, keepdims=True)
@@ -49,8 +53,8 @@ class RMSNorm:
 
     @classmethod
     def from_weight(cls, configs, gamma):
-        D, epsilon = configs
-        rms = cls(D, epsilon, init=False)
+        size, epsilon = configs
+        rms = cls(size, epsilon, init=False)
         rms.gamma = gamma
 
         return rms

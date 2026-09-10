@@ -545,6 +545,12 @@ class Session:
             rmsnorm2_configs = configs["rmsnorm2"]
             rmsnorm2_gamma = session[f"{i}.rmsnorm2.gamma"] #type:ignore
 
+            Q_norm_configs = configs["attention_Q_norm"]
+            Q_norm_gamma = session[f"{i}.Q.norm.gamma"] #type:ignore
+            K_norm_configs = configs["attention_K_norm"]
+            K_norm_gamma = session[f"{i}.K.norm.gamma"] #type:ignore
+            attn_QK_norm = Q_norm_gamma,Q_norm_configs, K_norm_gamma,K_norm_configs
+
             if quantized:
                 attn_quants = ((session[f"{i}.attention.Wqkv.scales"],session[f"{i}.attention.Wo.scales"]), (session[f"{i}.attention.Wqkv.biases"],session[f"{i}.attention.Wo.biases"])) #type:ignore
                 ff_quants = ((session[f"{i}.ff.Wcombined.scales"],session[f"{i}.ff.Wout.scales"]), (session[f"{i}.ff.Wcombined.biases"],session[f"{i}.ff.Wout.biases"])) #type:ignore
@@ -566,7 +572,7 @@ class Session:
                 attn_params = (session[f"{i}.attention.Wqkv"], session[f"{i}.attention.Wo"]) #type:ignore
                 ff_params = (session[f"{i}.ff.router"],session[f"{i}.ff.Wcombined"], session[f"{i}.ff.Wout"]) #type:ignore
 
-            block = TransformerBlock.from_weights(attn_type=attn_type, attn_configs=attn_configs, attn_weights=attn_params,attn_quants=attn_quants, ff_configs=ff_configs, ff_weights=ff_params,ff_quants=ff_quants, rmsnorm1_configs=rmsnorm1_configs, rmsnorm2_configs=rmsnorm2_configs, gamma1=rmsnorm1_gamma, gamma2=rmsnorm2_gamma, dtype=dtype)
+            block = TransformerBlock.from_weights(attn_type=attn_type, attn_configs=attn_configs, attn_weights=attn_params,attn_quants=attn_quants,attn_QK_gamma=attn_QK_norm, ff_configs=ff_configs, ff_weights=ff_params,ff_quants=ff_quants, rmsnorm1_configs=rmsnorm1_configs, rmsnorm2_configs=rmsnorm2_configs, gamma1=rmsnorm1_gamma, gamma2=rmsnorm2_gamma, dtype=dtype)
             blocks.append(block)
 
         embedding = Embedding.from_weights(lookuptable=embedding_lookuptable, quants=embedding_quants, dtype=dtype)

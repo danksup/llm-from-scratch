@@ -70,7 +70,6 @@ class Transformer:
 
         self.check_non_finite = configs.get("check_non_finite", True)
         
-        # assert self.quantized in [True, False, "symmetric"], f"True= mlx:affine, else symmetric; symmetric= use symmetric regardless of backend type; False = floats; got {self.quantized} of type {type(self.quantized)} instead."
         validate_choice(self.quantized, "quantized", [True, False, "symmetric"])
 
         if not isinstance(embedding, Embedding):
@@ -108,7 +107,6 @@ class Transformer:
                 overrided = this | override
 
                 attn_variant = overrided["attn_variant"]
-                # assert attn_variant in ATTN_VARIANT, f"[block {i}] invalid input: \"{attn_variant}\" of type {type(attn_variant)} for attn_variant. valid attn_variant: {", ".join(ATTN_VARIANT.keys())}"
                 validate_choice(attn_variant, "attn_variant", ATTN_VARIANT)
 
                 attn_type_str = overrided["attn_type"]
@@ -119,7 +117,6 @@ class Transformer:
 
                 attn_type = ATTN_TYPE[attn_type_str]["attn"]
 
-                # assert overrided["attn_init"] in INITIALIZERS, f"your configs contain invalid input: {overrided["attn_init"]} of type {type(overrided["attn_init"])}. expected for this config: {", ".join(list(INITIALIZERS))}"
                 validate_choice(overrided["attn_init"], "attn_init", INITIALIZERS)
                 validate_choice(overrided["ff_init"], "ff_init", INITIALIZERS)
 
@@ -142,24 +139,27 @@ class Transformer:
                 n_heads = overrided["attn_n_heads"]
                 attn = None
                 W = overrided.get("attn_windows", None)
+
+                head_dim = D // n_heads
+                Q_norm = RMSNorm(head_dim)
+                K_norm = RMSNorm(head_dim)
                 match (attn_type_str, attn_variant):
                     case ("swa", "gqa"):
                         n_kv_heads = overrided["attn_n_kv_heads"]
-                        #def __init__(self,embed_dim:int, n_heads:int, n_kv_heads:int=-1, W=8, dtype:Any=nx.float16, initializer:Callable=initializer.glorot_uniform)
-                        attn = attn_type(embed_dim=D, n_heads=n_heads, n_kv_heads=n_kv_heads, W=W, dtype=self.dtype, initializer=attn_init, quantized=self.quantized, use_symmetric=self.symmetric_quant)
+                        attn = attn_type(embed_dim=D, n_heads=n_heads, Q_norm=Q_norm, K_norm=K_norm, n_kv_heads=n_kv_heads, W=W, dtype=self.dtype, initializer=attn_init, quantized=self.quantized, use_symmetric=self.symmetric_quant)
                     case ("swa", "mha"):
-                        attn = attn_type.multihead(D, n_heads, W, self.dtype, attn_init, quantized=self.quantized, use_symmetric=self.symmetric_quant)
+                        attn = attn_type.multihead(D, n_heads, W, self.dtype, attn_init, quantized=self.quantized, use_symmetric=self.symmetric_quant, Q_norm=Q_norm, K_norm=K_norm,)
                     case ("swa", "mqa"):
-                        attn = attn_type.multiquery(D, n_heads, W, self.dtype, attn_init,quantized=self.quantized, use_symmetric=self.symmetric_quant)
+                        attn = attn_type.multiquery(D, n_heads, W, self.dtype, attn_init,quantized=self.quantized, use_symmetric=self.symmetric_quant, Q_norm=Q_norm, K_norm=K_norm,)
                     case ("swa", invalid):
                         raise ValueError(f"[block {i}] invalid variant of \"{invalid}\". valid variants: {", ".join(ATTN_VARIANT)}")
                     case ("full", "gqa"):
                         n_kv_heads = overrided["attn_n_kv_heads"]
-                        attn = attn_type(embed_dim=D, n_heads=n_heads, n_kv_heads=n_kv_heads,  dtype=self.dtype, initializer=attn_init,quantized=self.quantized, use_symmetric=self.symmetric_quant)
+                        attn = attn_type(embed_dim=D, n_heads=n_heads, n_kv_heads=n_kv_heads,  dtype=self.dtype, initializer=attn_init,quantized=self.quantized, use_symmetric=self.symmetric_quant, Q_norm=Q_norm, K_norm=K_norm,)
                     case ("full", "mha"):
-                        attn = attn_type.multihead(embed_dim=D, n_heads=n_heads,  dtype=self.dtype, initializer=attn_init,quantized=self.quantized, use_symmetric=self.symmetric_quant)
+                        attn = attn_type.multihead(embed_dim=D, n_heads=n_heads,  dtype=self.dtype, initializer=attn_init,quantized=self.quantized, use_symmetric=self.symmetric_quant, Q_norm=Q_norm, K_norm=K_norm,)
                     case ("full", "mqa"):
-                        attn = attn_type.multiquery(embed_dim=D, n_heads=n_heads,  dtype=self.dtype, initializer=attn_init,quantized=self.quantized, use_symmetric=self.symmetric_quant)
+                        attn = attn_type.multiquery(embed_dim=D, n_heads=n_heads,  dtype=self.dtype, initializer=attn_init,quantized=self.quantized, use_symmetric=self.symmetric_quant, Q_norm=Q_norm, K_norm=K_norm,)
                     case ("full", invalid):
                         raise ValueError(f"[block {i}] invalid variant of \"{invalid}\". valid variants: {", ".join(ATTN_VARIANT)}")
                     case _:
@@ -227,7 +227,7 @@ class Transformer:
                 elif attn_str == "full":
                     if block.causal_mask is None or block.causal_mask.shape != (T, T):
                         block.causal_mask = block.attention.compute_mask(T)
-                attn_params = block.attention.Wqkv, block.attention.Wo
+                attn_params = block.attention.Wqkv, block.attention.Wo, block.attention.Q_norm.gamma, block.attention.K_norm.gamma
                 ff_params = block.ff.Wcombined, block.ff.Wout, block.ff.router
                 scales = (block.attention.scales + block.attention.biases, block.ff.scales + block.ff.biases)
                 ff_out ,masks, caches, router_loss, normalized_histogram = block._forward(output, block.causal_mask, attn_str ,block.attention.configs, attn_params, block.ff.configs, ff_params, epsilon, gamma1, gamma2, P, is_training, scales, use_symmetric=self.symmetric_quant)
@@ -237,7 +237,6 @@ class Transformer:
                 all_caches.append(caches)
                 histograms[idx] = nx.zeros_like(normalized_histogram)
                 histograms[idx] += normalized_histogram
-                # self.eval_networks()
             except TypeError as e:
                 print(f"[block {idx}] TypeError")
                 raise TypeError(e)
@@ -280,22 +279,24 @@ class Transformer:
             ff_params = (block.ff.Wout, block.ff.Wcombined)
             attn_str = block.attention.self_type()
             attn_configs = block.attention.configs
-            attn_params = block.attention.Wqkv, block.attention.Wo
+            attn_params = block.attention.Wqkv, block.attention.Wo, block.attention.Q_norm.gamma, block.attention.K_norm.gamma
             scales = (block.attention.scales + block.attention.biases, block.ff.scales + block.ff.biases)
-            dx, dWout, dWcombined, d_router, dWqkv, dWo, d_gamma1, d_gamma2 = block._backward(current_grad, mask1=mask1, mask2=mask2, p=P, attention=attn_str,
+            dx, dWout, dWcombined, d_router, dWqkv, dWo, d_gamma1, d_gamma2,Q_norm_d_gamma, K_norm_d_gamma = block._backward(current_grad, mask1=mask1, mask2=mask2, p=P, attention=attn_str,
                                                                 caches_attn=caches_attn, caches_ff=caches_ff, caches_rmsnorm1=caches_rmsnorm1, caches_rmsnorm2=caches_rmsnorm2,
                                                                 attn_configs = attn_configs, attn_params=attn_params, gamma1=block.rmsnorm1.gamma, gamma2=block.rmsnorm2.gamma, ff_params=ff_params, moe_configs=moe_configs, gradient_scale=self.gradient_scale, quantization=scales, use_symmetric=self.symmetric_quant)
 
 
-            block.ff.dWout = dWout if getattr(block.ff, "dWout", None) is None else block.ff.dWout + dWout
-            block.ff.dWcombined = dWcombined if getattr(block.ff, "dWcombined", None) is None else block.ff.dWcombined + dWcombined
-            block.ff.d_router = d_router if getattr(block.ff, "d_router", None) is None else block.ff.d_router + d_router
+            block.ff.dWout += dWout
+            block.ff.dWcombined += dWcombined
+            block.ff.d_router += d_router
 
-            block.attention.dWqkv = dWqkv if getattr(block.attention, "dWqkv", None) is None else block.attention.dWqkv + dWqkv
-            block.attention.dWo = dWo if getattr(block.attention, "dWo", None) is None else block.attention.dWo + dWo
+            block.attention.dWqkv += dWqkv
+            block.attention.dWo += dWo
+            block.attention.Q_norm.d_gamma +=  Q_norm_d_gamma
+            block.attention.K_norm.d_gamma +=  K_norm_d_gamma
 
-            block.rmsnorm1.d_gamma = d_gamma1 if getattr(block.rmsnorm1, "d_gamma", None) is None else block.rmsnorm1.d_gamma + d_gamma1
-            block.rmsnorm2.d_gamma = d_gamma2 if getattr(block.rmsnorm2, "d_gamma", None) is None else block.rmsnorm2.d_gamma + d_gamma2
+            block.rmsnorm1.d_gamma += d_gamma1
+            block.rmsnorm2.d_gamma += d_gamma2
 
             current_grad = dx
 
@@ -306,118 +307,70 @@ class Transformer:
         if others is not None:
             to_eval.extend(others)
 
-        for block in self.blocks:
-            to_eval.append(block.attention.Wqkv)
-            to_eval.append(block.attention.Wo)
-            to_eval.append(block.ff.Wcombined)
-            to_eval.append(block.ff.Wout)
-            to_eval.append(block.ff.router)
-            to_eval.append(block.rmsnorm1.gamma)
-            to_eval.append(block.rmsnorm2.gamma)
+        for layer_obj, param_name, _ in self.get_weights():
+            weight_obj = getattr(layer_obj, param_name)
+            to_eval.append(weight_obj)
 
-            if include_gradients:
-                to_eval.append(block.attention.dWqkv)
-                to_eval.append(block.attention.dWo)
-                to_eval.append(block.ff.dWcombined)
-                to_eval.append(block.ff.dWout)
-                to_eval.append(block.ff.d_router)
-                to_eval.append(block.rmsnorm1.d_gamma)
-                to_eval.append(block.rmsnorm2.d_gamma)
-            else:
-                if optimizer is not None:
-                    to_eval.append(optimizer.lr)
-                    if hasattr(optimizer, "state"):
-                        to_eval.append(optimizer.state)
-                    if hasattr(optimizer, "masters"):
-                        to_eval.append(optimizer.masters) #type:ignore
+        if include_gradients:
+            for layer_obj, param_name,_ in self.get_gradients():
+                dweight_obj = getattr(layer_obj, param_name)
+                to_eval.append(dweight_obj)
+        else:
+            if optimizer is not None:
+                to_eval.append(optimizer.lr)
+                if hasattr(optimizer, "state"):
+                    to_eval.append(optimizer.state)
+                if hasattr(optimizer, "masters"):
+                    to_eval.append(optimizer.masters) #type:ignore
 
         nx.eval(*to_eval)
 
-    def network_non_finite_check(self, additional:dict[str,list[Any]]|None=None):
-        # nan_weights = []
-        texts = ""
-        non_finite = False
-        layers = ["ff", "attention", "rmsnorm1", "rmsnorm2"]
-        weights = [["router", "Wcombined", "Wout"],[ "Wqkv", "Wo"],[ "gamma"],[ "gamma"]]
-        dweights = [ ["d_router", "dWcombined","dWout"], ["dWo", "dWqkv"],[ "d_gamma"],["d_gamma"]]
-
-        if additional:
-            for key,val in additional.items():
-                layer = getattr(self, key)
-                for weight in val:
-                    weight_ = getattr(layer, weight)
-                    if not nx.isfinite(weight_).all():
-                        texts += f"{weight}"
-                        non_finite = True
-
-        if not nx.isfinite(self.embedding.lookup_table).all():
-            non_finite = True
-            texts += "embedding_lookup_table"
-
-        if hasattr(self.embedding, "d_lookup_table"):
-            if self.embedding.d_lookup_table is not None:
-                if not nx.isfinite(self.embedding.d_lookup_table).all():
-                    non_finite = True
-                    texts += "embedding_d_lookup_table"
-
-        if not nx.isfinite(self.rmsnorm_final.gamma).all():
-            non_finite = True
-            texts += "rmsnorm_final_gamma"
-        
-        if hasattr(self.rmsnorm_final, "d_gamma"):
-            if self.rmsnorm_final.d_gamma is not None:
-                if not nx.isfinite(self.rmsnorm_final.d_gamma).all():
-                    non_finite = True
-                    texts += "rmsnorm_final_d_gamma"
-
-        for idx, block in enumerate(self.blocks):
-            text = f"block{idx}: "
-            ltext = len(text)
+    def get_block_weights(self, layers, params):
+        for i, block in enumerate(self.blocks):
             for layer_i, layer in enumerate(layers):
-                layer_ = getattr(block, layer)
-                for weight in weights[layer_i]:
-                    weight_ = getattr(layer_, weight, None)
-                    if weight is not None and not nx.isfinite(weight_).all():
-                        text += f"{layer}_{weight}"
-                        non_finite = True
+                layer_obj = getattr(block, layer)
+                for param_name in params[layer_i]:
+                    if isinstance(param_name, list):
+                        attr, param_name_list = param_name
+                        layer_obj_list = getattr(layer_obj, attr, None)
+                        if layer_obj_list is not None:
+                            if getattr(layer_obj_list, param_name_list, None) is not None:
+                                yield layer_obj_list, param_name_list, f"{i}.{layer}.{attr}.{param_name_list}"
+   
+                    else:
+                        if getattr(layer_obj, param_name, None) is not None:
+                                yield layer_obj, param_name, f"{i}.{layer}.{param_name}"
 
-                for dweight in dweights[layer_i]:
-                    dweight_ = getattr(layer_, dweight, None)
-                    if dweight is not None and not nx.isfinite(dweight_).all():
-                        text += f"{layer}_{dweight} "
-                        non_finite = True
+    def get_weights(self, *, block_only:bool=False):
+        if not block_only:
+            if getattr(self.embedding, "lookup_table", None) is not None:
+                yield self.embedding, "lookup_table", "embedding.lookup_table"
 
-            if ltext == len(text):
-                continue
-            texts += f"{text}\n"
+            if getattr(self.rmsnorm_final, "gamma", None) is not None:
+                yield self.rmsnorm_final, "gamma", "rmsnorm_final.gamma"
 
-        return non_finite, texts
+        layers = ["ff", "attention", "rmsnorm1", "rmsnorm2"]
+        weights = [["router", "Wcombined", "Wout"],[ "Wqkv", "Wo", ["Q_norm", "gamma"], ["K_norm", "gamma"]],[ "gamma"],[ "gamma"]]
+        for a,b,c in self.get_block_weights(layers, weights):
+            yield a,b,c
 
     def get_gradients(self):
         if getattr(self.embedding, "d_lookup_table", None) is not None:
-            yield self.embedding, "d_lookup_table"
+            yield self.embedding, "d_lookup_table", "embedding.d_lookup_table"
 
         if getattr(self.rmsnorm_final, "d_gamma", None) is not None:
-            yield self.rmsnorm_final, "d_gamma"
+            yield self.rmsnorm_final, "d_gamma", "rmsnorm_final.d_gamma"
 
         layers = ["ff", "attention", "rmsnorm1", "rmsnorm2"]
-        dweights = [ ["d_router", "dWcombined","dWout"], ["dWo", "dWqkv"],[ "d_gamma"],["d_gamma"]]
-        for block in self.blocks:
-            for layer_i, layer in enumerate(layers):
-                layer_ = getattr(block, layer)
-                for dweight in dweights[layer_i]:
-                    if getattr(layer_, dweight, None) is not None:
-                        yield layer_, dweight
-
-    def reset_gradient(self):
-        for layer, param_name in self.get_gradients():
-            delattr(layer, param_name)
+        dweights = [ ["d_router", "dWcombined","dWout"], ["dWo", "dWqkv", ["K_norm", "d_gamma"], ["Q_norm", "d_gamma"]],[ "d_gamma"],["d_gamma"]]
+        for a,b,c in self.get_block_weights(layers, dweights): 
+            yield a,b,c
 
     def gradient_clipping_factor(self, microbatch_size, max_norm=nx.float_32(0.5)):
         summed = nx.array(0, nx.float32)
 
-        for layer, param_name in self.get_gradients():
-            param = getattr(layer, param_name)
+        for layer, param_name, _ in self.get_gradients(): 
+            param = getattr(layer, param_name) 
             if param_name == "d_lookup_table":
                 summed += nx.sum(nx.square(param.astype(nx.float32) / microbatch_size))
             else:
@@ -428,6 +381,52 @@ class Transformer:
         scale = nx.minimum(nx.float_32(1.0), raw_scale)
 
         return scale
+
+    def network_non_finite_check(self, additional:dict[str,list[Any]]|None=None):
+        texts = ""
+        non_finite = False
+
+        failures = {}
+        failures["-"] = []
+        for i in range(self.configs["n_blocks"]):
+            failures[i] = []
+
+        if additional:
+            for key,val in additional.items():
+                layer = getattr(self, key)
+                for weight in val:
+                    weight_ = getattr(layer, weight)
+                    if not nx.isfinite(weight_).all():
+                        failures["-"].append(f"{weight}")
+                        non_finite = True
+
+        weights = self.get_weights()
+        for layer_obj, param_name, name in weights:
+            weight = getattr(layer_obj, param_name)
+            if not nx.isfinite(weight).all():
+                non_finite = True
+                block_i = name.split(".")[0]
+                try:
+                    block_i = int(block_i)
+                    failures[block_i].append(name)
+                except ValueError:
+                    failures["-"].append(name)
+
+        gradients = self.get_gradients()
+        for layer_obj, param_name,name  in gradients:
+            gradient = getattr(layer_obj, param_name)
+            if not nx.isfinite(gradient).all():
+                non_finite = True
+                block_i = name.split(".")[0]
+                try:
+                    block_i = int(block_i)
+                    failures[block_i].append(name)
+                except ValueError:
+                    failures["-"].append(name)
+
+        for key, val in failures.items():
+            texts += f"block_{key}: {val}"
+        return non_finite, texts
 
     def train(self, dataloader:DataLoader, optimizer:optimizers, total_epoch:int, max_step:int=50000, eval_every:int=5, microbatch_size:int=16):
         total_loss = nx.float_32(0.0)
@@ -445,7 +444,9 @@ class Transformer:
             total_histograms = None
             clean_step = 0
             self.gradient_scale = max(1, self.gradient_scale//2)
-            self.reset_gradient()
+
+            for block in self.blocks:
+                block.zeroes_gradient()
 
         for contexts, next_tokens in dataloader.prefetch_batch(dataloader.train_files):
             contexts = nx.array(contexts).reshape(dataloader.batch_size, dataloader.context_size)
@@ -488,8 +489,7 @@ class Transformer:
             embedding_gradient = nx.add_at(embedding_gradient, contexts, current_grad)
 
             total_embedding_gradient = embedding_gradient + d_table
-            # embed_acc += total_embedding_gradient
-            self.embedding.d_lookup_table = total_embedding_gradient if getattr(self.embedding, "d_lookup_table", None) is None else self.embedding.d_lookup_table + total_embedding_gradient
+            self.embedding.d_lookup_table += total_embedding_gradient
 
             total_loss += loss * next_tokens.size
             count += next_tokens.size
@@ -531,9 +531,13 @@ class Transformer:
                     
                     dWqkv = block.attention.dWqkv.astype(nx.float32) / self.gradient_scale / microbatch_size * gscale
                     dWo = block.attention.dWo.astype(nx.float32) / self.gradient_scale / microbatch_size * gscale
+                    Q_norm_d_gamma = block.attention.Q_norm.d_gamma.astype(nx.float32) / self.gradient_scale / microbatch_size * gscale
+                    K_norm_d_gamma = block.attention.K_norm.d_gamma.astype(nx.float32) / self.gradient_scale / microbatch_size * gscale
+
                     dWcombined = block.ff.dWcombined.astype(nx.float32) / self.gradient_scale / microbatch_size * gscale
                     dWout = block.ff.dWout.astype(nx.float32) / self.gradient_scale / microbatch_size * gscale
                     d_router = block.ff.d_router.astype(nx.float32) / self.gradient_scale / microbatch_size * gscale
+
                     d_gamma1 = block.rmsnorm1.d_gamma.astype(nx.float32) / self.gradient_scale / microbatch_size* gscale
                     d_gamma2 = block.rmsnorm2.d_gamma.astype(nx.float32) / self.gradient_scale / microbatch_size* gscale
 
@@ -547,9 +551,12 @@ class Transformer:
                         Wo = block.attention.Wo.astype(nx.float32)
                         Wcombined = block.ff.Wcombined.astype(nx.float32)
                         Wout = block.ff.Wout.astype(nx.float32)
+
                     all_network_params.extend(
                         [(f"Wqkv_{i}", Wqkv, dWqkv, True),
                         (f"Wo_{i}", Wo, dWo, True),
+                        (f"Q_norm_gamma_{i}", block.attention.Q_norm.gamma, Q_norm_d_gamma, False),
+                        (f"K_norm_gamma_{i}", block.attention.K_norm.gamma, K_norm_d_gamma, False),
                         (f"ff_wcombined_{i}", Wcombined,dWcombined, True),
                         (f"ff_wout_{i}", Wout, dWout, True),
                         (f"ff_router_{i}", block.ff.router.astype(nx.float32), d_router, True),
@@ -557,7 +564,7 @@ class Transformer:
                         (f"rmsnorm2_gamma_{i}", block.rmsnorm2.gamma.astype(nx.float32), d_gamma2, False)])
                     del Wqkv, Wo, Wcombined, Wout
                     del dWqkv, dWo, dWcombined, dWout, d_router, d_gamma1, d_gamma2
-                    del block.attention.dWqkv, block.attention.dWo, block.ff.dWcombined, block.ff.dWout, block.ff.d_router, block.rmsnorm1.d_gamma, block.rmsnorm2.d_gamma
+                    block.zeroes_gradient()
 
                 lookup_table = self.embedding.lookup_table.astype(nx.float32)
                 if self.quantized:
@@ -568,7 +575,7 @@ class Transformer:
                     d_gamma = self.rmsnorm_final.d_gamma.astype(nx.float32) / self.gradient_scale / microbatch_size * gscale #type:ignore
                     all_network_params.extend([("rmsnorm_final", self.rmsnorm_final.gamma.astype(nx.float32), d_gamma, False)])
                     del d_gamma
-                    del self.rmsnorm_final.d_gamma
+                    self.rmsnorm_final.zeroes_gradient()
 
                 optimized = optimizer.step_many(all_network_params, max_step, total_epoch)
 
@@ -598,6 +605,8 @@ class Transformer:
                     block.ff.router = optimized[f"ff_router_{i}"]
                     block.rmsnorm1.gamma = optimized[f"rmsnorm1_gamma_{i}"]
                     block.rmsnorm2.gamma = optimized[f"rmsnorm2_gamma_{i}"]
+                    block.attention.Q_norm.gamma = optimized[f"Q_norm_gamma_{i}"]
+                    block.attention.K_norm.gamma = optimized[f"K_norm_gamma_{i}"]
 
                 if self.quantized:
                     embedding = optimized[f"embedding"]
@@ -605,7 +614,7 @@ class Transformer:
                     del embedding
                 else:
                     self.embedding.lookup_table = optimized["embedding"].astype(self.dtype)
-                del self.embedding.d_lookup_table
+                self.embedding.zeroes_gradient()
 
                 self.rmsnorm_final.gamma = optimized["rmsnorm_final"]
                 step += 1
@@ -736,12 +745,10 @@ class Transformer:
             else:
                 if flatten == "dict":
                     all_weights = {}
-                    for idx, block in enumerate(self.blocks):
-                        for layer_i, layer in enumerate(layers):
-                            layer_ = getattr(block, layer)
-                            for weight in weights[layer_i]:
-                                weight_ = getattr(layer_, weight)
-                                all_weights[f"{idx}.{layer}.{weight}"] = weight_
+                    weights = self.get_weights(block_only=True)
+                    for layer_obj, param_name, name in weights:
+                        weight = getattr(layer_obj, param_name)
+                        all_weights[name] = weight
                 else:
                     a:dict[str,nx.ArrayLike] = self.get_all_weights("dict") #type:ignore
                     return list(a.values())

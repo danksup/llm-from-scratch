@@ -4,9 +4,10 @@ from engine.rope import rope_forward, rope_inverse
 from typing import Any, Callable
 import engine.initializers as initializer
 from engine.rope import precompute_freqs
+from engine.rmsnorm import RMSNorm
 
 class AttentionFull:
-    def __init__(self,embed_dim:int, n_heads:int, n_kv_heads:int=-1,  dtype:Any=nx.float16,  initializer:Callable=initializer.glorot_uniform, quantized:bool=False, *, use_symmetric=False, init=True) -> None:
+    def __init__(self,embed_dim:int, n_heads:int,Q_norm:RMSNorm, K_norm:RMSNorm,  n_kv_heads:int=-1, dtype:Any=nx.float16,  initializer:Callable=initializer.glorot_uniform, quantized:bool=False, *, use_symmetric=False, init=True) -> None:
         self.n_kv_heads = n_kv_heads
 
         if n_kv_heads < 0:
@@ -31,12 +32,13 @@ class AttentionFull:
         self.scales = (None, None)
         self.biases = (None,None)
 
+        wqkv_shape = embed_dim + 2 * n_kv_heads * self.head_dim, embed_dim
+        wo_shape = embed_dim,embed_dim
+
         if init:
-            wqkv_shape = embed_dim + 2 * n_kv_heads * self.head_dim, embed_dim
             self.Wqkv = initializer(wqkv_shape, dtype=dtype)
             assert nx.isfinite(self.Wqkv).all(), f"non-finite detected when initializing attentipn.Wqkv."
 
-            wo_shape = embed_dim,embed_dim
             self.Wo = initializer(wo_shape, dtype=dtype)
             assert nx.isfinite(self.Wo).all(), f"non-finite detected when initializing attentipn.Wo."
 
@@ -47,23 +49,32 @@ class AttentionFull:
                 self.scales = (wqkv_scale, wo_scale)
                 self.biases = (wqkv_bias, wo_bias)
 
-        self.dWqkv = None
-        self.dWo = None
+        self.dWqkv = nx.zeros(wqkv_shape)
+        self.dWo = nx.zeros(wo_shape)
+
+        self.Q_norm = Q_norm
+        self.K_norm = K_norm
+
+    def zeroes_gradient(self):
+        self.dWqkv = nx.zeros_like(self.dWqkv)
+        self.dWo = nx.zeros_like(self.dWo)
+        self.Q_norm.d_gamma = nx.zeros_like(self.Q_norm.d_gamma)
+        self.K_norm.d_gamma = nx.zeros_like(self.K_norm.d_gamma)
 
     @staticmethod
     def self_type() -> str:
         return "full"
 
     @classmethod
-    def multihead(cls, embed_dim, n_heads, dtype, initializer, quantized, *, use_symmetric=False):
+    def multihead(cls, embed_dim, n_heads, dtype, initializer, quantized, Q_norm, K_norm, *, use_symmetric=False):
         if quantized:
             pass
-        mha = cls(embed_dim, n_heads=n_heads, n_kv_heads=n_heads, dtype=dtype, initializer=initializer, quantized=quantized, use_symmetric=use_symmetric)
+        mha = cls(embed_dim, n_heads=n_heads,Q_norm=Q_norm, K_norm=K_norm, n_kv_heads=n_heads, dtype=dtype, initializer=initializer, quantized=quantized, use_symmetric=use_symmetric)
         return mha
 
     @classmethod
-    def multiquery(cls, embed_dim, n_heads, dtype, initializer, quantized, *, use_symmetric=False):
-        mqa = cls(embed_dim, n_heads=n_heads, n_kv_heads=1, dtype=dtype, initializer=initializer, quantized=quantized, use_symmetric=use_symmetric)
+    def multiquery(cls, embed_dim, n_heads, dtype, initializer, quantized, Q_norm, K_norm, *, use_symmetric=False):
+        mqa = cls(embed_dim, n_heads=n_heads,Q_norm=Q_norm, K_norm=K_norm,  n_kv_heads=1, dtype=dtype, initializer=initializer, quantized=quantized, use_symmetric=use_symmetric)
         return mqa
 
     @staticmethod
@@ -72,7 +83,7 @@ class AttentionFull:
         #Wqkv.T (D, D + 2 * n_kv_heads * H)
         #combined (B, T, D + 2 * n_kv_heads * H)
         embed_dim, n_kv_heads, n_heads, n_rep, head_dim, freqs = attn_configs
-        Wqkv, Wo = attn_params
+        Wqkv, Wo, Q_norm_gamma, K_norm_gamma = attn_params
 
         wqkv_scale, wo_scale, wqkv_bias, wo_bias = quantization
 
@@ -89,6 +100,9 @@ class AttentionFull:
         Q = Q.reshape(B, T, n_heads, head_dim).transpose(0,2,1,3)
         K = K.reshape(B, T, n_kv_heads, head_dim).transpose(0,2,1,3)
         V = V.reshape(B, T, n_kv_heads, head_dim).transpose(0,2,1,3)
+
+        Q, Q_norm_caches = RMSNorm._forward(Q, Q_norm_gamma, 1e-5)
+        K, K_norm_caches = RMSNorm._forward(K, K_norm_gamma, 1e-5)
         Q = rope_forward(Q, freqs)
         K = rope_forward(K, freqs)
 
@@ -111,14 +125,14 @@ class AttentionFull:
         else:
             output_projected = output_concat @ Wo
 
-        cache =  (x, Q, K, V, weights, output_concat)
+        cache =  (x, Q, Q_norm_caches, K, K_norm_caches, V, weights, output_concat)
         return output_projected, cache
 
     @staticmethod
     def _backward(gradient:nx.ArrayLike, caches:tuple[Any,...], attn_configs:tuple[Any,...], attn_params: tuple[Any,...], quantization:tuple[Any,...]|None=None,  *, use_symmetric:bool=False) -> tuple[nx.ArrayLike,...]:
-        x, Q, K, V, weights, output_concat = caches
+        x, Q,Q_norm_caches, K,K_norm_caches, V, weights, output_concat = caches
         embed_dim, n_kv_heads, n_heads, n_rep, head_dim, freqs = attn_configs
-        Wqkv, Wo = attn_params
+        Wqkv, Wo, Q_norm_gamma, K_norm_gamma = attn_params
 
         wqkv_scale, wo_scale, wqkv_bias, wo_bias = quantization #type:ignore
 
@@ -148,6 +162,8 @@ class AttentionFull:
         dQ = dQ.reshape(B, -1, T, head_dim)
         dQ = rope_inverse(dQ, freqs)
         dK = rope_inverse(dK, freqs)
+        dQ, Q_norm_d_gamma = RMSNorm._backward(dQ, Q_norm_caches, Q_norm_gamma)
+        dK, K_norm_d_gamma = RMSNorm._backward(dK, K_norm_caches, K_norm_gamma)
 
         dQ = dQ.transpose(0, 2, 1, 3).reshape(B, T, embed_dim)
         dK = dK.transpose(0, 2, 1, 3).reshape(B, T, n_kv_heads * head_dim)
@@ -173,7 +189,7 @@ class AttentionFull:
 
         # print("dx", dx.dtype)
         del x, output_concat, freqs, Wqkv, Wo
-        return dx,dWqkv,dWo
+        return dx,dWqkv,dWo,Q_norm_d_gamma,K_norm_d_gamma
 
     #TODO:compiled, dtype fix, quantization
     def inference_forward(self, x, max_cache_len, freqs, quantization, cached_k=None, cached_v=None, position = 0,  *, use_symmetric:bool=False):
@@ -187,6 +203,7 @@ class AttentionFull:
         K = combined[..., self.embed_dim: self.embed_dim + (self.n_kv_heads * self.head_dim)]
 
         K = K.reshape(B, T, self.n_kv_heads, self.head_dim).transpose(0,2,1,3)
+        K, _ = RMSNorm._forward(K, self.K_norm.gamma, self.K_norm.epsilon)
         K = rope_forward(K, freqs, position)
 
         if cached_k is not None :
@@ -207,9 +224,9 @@ class AttentionFull:
 
             cached_v = cached_v[:, :, -max_cache_len:, :]
 
-
         Q = combined[..., :self.embed_dim]
         Q = Q.reshape(B, T, self.n_heads, self.head_dim).transpose(0,2,1,3)
+        Q, _ = RMSNorm._forward(Q, self.Q_norm.gamma, self.Q_norm.epsilon)
         Q = rope_forward(Q, freqs, position)
 
         repeats_cached_k = nx.repeat(cached_k, self.n_rep, axis=1 )
@@ -233,11 +250,15 @@ class AttentionFull:
         return nx.triu(nx.ones((T, T), dtype=nx.bool_), k=1)
 
     @classmethod
-    def from_weight(cls, configs, weights,quants, dtype) -> "AttentionFull":
+    def from_weight(cls, configs, weights,quants, attn_QK_gamma, dtype) -> "AttentionFull":
         embed_dim, n_kv_heads, n_heads, _, _, = configs
         wqkv, wo = weights
+        Q_norm_gamma,Q_norm_configs, K_norm_gamma, K_norm_configs = attn_QK_gamma
 
-        attn = cls(embed_dim, n_heads, n_kv_heads,dtype, init=False)
+        Q_norm = RMSNorm.from_weight(Q_norm_configs, Q_norm_gamma)
+        K_norm = RMSNorm.from_weight(K_norm_configs, K_norm_gamma)
+
+        attn = cls(embed_dim, n_heads, Q_norm, K_norm, n_kv_heads,dtype, init=False)
         attn.Wqkv = wqkv
         attn.Wo = wo
 
@@ -249,7 +270,9 @@ class AttentionFull:
         return attn
 
     def copy(self):
-        attn_copy = AttentionFull(self.embed_dim, self.n_heads, self.n_kv_heads, self.dtype, quantized=self.quantized, init=False)
+        Q_norm_copy = self.Q_norm.copy()
+        K_norm_copy = self.K_norm.copy()
+        attn_copy = AttentionFull(self.embed_dim, self.n_heads, Q_norm_copy, K_norm_copy, self.n_kv_heads, self.dtype, quantized=self.quantized, init=False)
         attn_copy.Wqkv = nx.copy(self.Wqkv)
         attn_copy.Wo = nx.copy(self.Wo)
         if self.quantized:

@@ -4,6 +4,7 @@ from multiprocessing import Process, Queue
 from queue import Empty
 from pathlib import Path
 from typing import Any, Iterator, Literal
+import mmap
 
 from engine.tokenizer import Tokenizer
 

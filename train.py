@@ -19,9 +19,9 @@ EMBED_DIM = 320
 CONTEXT_SIZE = 1200
 BATCH_SIZE = 5
 BASE_WIDTH = 4 * EMBED_DIM
-N_HEADS = 10
+N_HEADS = 8
 N_KV_HEADS = max(1, N_HEADS // 2)
-N_EXPERTS = 10
+N_EXPERTS = 8
 CF = 1.25
 VAL = 1
 TOP_K = 2
@@ -32,7 +32,7 @@ tokenizer1 = Tokenizer.load(TOKENIZER_PATH)
 
 session_configs = {
     "epochs":EPOCHS,
-    "max_step":3,
+    "max_step":50,
     "train_split": VAL,
     "max_val_step":1,
     "eval_every":1,

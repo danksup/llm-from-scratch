@@ -56,21 +56,25 @@ logs:
 - int8 weight-only quantization aug 17 2026 
 - replace pickle with safetensors aug 30 2026
 - byte-level BPE sep 2 2026
-- cuda support is now using MLX (deleted cupy) -> `pip install mlx[cuda13]` if ur machine supports cuda
+- cuda support is now using MLX (deleted cupy) -> `pip install mlx[cuda12]` or `pip install mlx[cuda13]` if ur machine supports cuda
 - adaptive gradient scaling and better non-finite handling sep 4 2026
 - better logging sep 5 2026
 - add rmsnorm before the final projection sep 6 2026
+- global grad clipping sep 10 2026
 
 ## Ongoing:
+- reducing the occurence of intermediate matrix creation as much as possible
 - parallelizing tokenizer word frequency counting
 - optimizing/cleanup/docs
 
 ## TODO (not in order):
 - moe noise
+- QK norm
 - inference optimization 
 - conversation memory
   
 #### Maybe:
+- mmap for dataloader
 - autograd
 
 ## Bugs:

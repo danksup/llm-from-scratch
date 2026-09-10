@@ -376,14 +376,14 @@ class Transformer:
             for layer_i, layer in enumerate(layers):
                 layer_ = getattr(block, layer)
                 for weight in weights[layer_i]:
-                    weight_ = getattr(layer_, weight)
-                    if not nx.isfinite(weight_).all():
+                    weight_ = getattr(layer_, weight, None)
+                    if weight is not None and not nx.isfinite(weight_).all():
                         text += f"{layer}_{weight}"
                         non_finite = True
 
                 for dweight in dweights[layer_i]:
-                    dweight_ = getattr(layer_, dweight)
-                    if not nx.isfinite(dweight_).all():
+                    dweight_ = getattr(layer_, dweight, None)
+                    if dweight is not None and not nx.isfinite(dweight_).all():
                         text += f"{layer}_{dweight} "
                         non_finite = True
 
@@ -393,12 +393,12 @@ class Transformer:
 
         return non_finite, texts
 
-    def reset_gradient(self):
-        if hasattr(self.embedding, "d_lookup_table"):
-            delattr(self.embedding, "d_lookup_table")
+    def get_gradients(self):
+        if getattr(self.embedding, "d_lookup_table", None) is not None:
+            yield self.embedding, "d_lookup_table"
 
-        if hasattr(self.rmsnorm_final, "d_gamma"):
-            delattr(self.rmsnorm_final, "d_gamma")
+        if getattr(self.rmsnorm_final, "d_gamma", None) is not None:
+            yield self.rmsnorm_final, "d_gamma"
 
         layers = ["ff", "attention", "rmsnorm1", "rmsnorm2"]
         dweights = [ ["d_router", "dWcombined","dWout"], ["dWo", "dWqkv"],[ "d_gamma"],["d_gamma"]]
@@ -406,8 +406,28 @@ class Transformer:
             for layer_i, layer in enumerate(layers):
                 layer_ = getattr(block, layer)
                 for dweight in dweights[layer_i]:
-                    if hasattr(layer_, dweight):
-                        delattr(layer_, dweight)
+                    if getattr(layer_, dweight, None) is not None:
+                        yield layer_, dweight
+
+    def reset_gradient(self):
+        for layer, param_name in self.get_gradients():
+            delattr(layer, param_name)
+
+    def gradient_clipping_factor(self, microbatch_size, max_norm=nx.float_32(0.5)):
+        summed = nx.array(0, nx.float32)
+
+        for layer, param_name in self.get_gradients():
+            param = getattr(layer, param_name)
+            if param_name == "d_lookup_table":
+                summed += nx.sum(nx.square(param.astype(nx.float32) / microbatch_size))
+            else:
+                summed += nx.sum(nx.square(param.astype(nx.float32) / self.gradient_scale / microbatch_size))
+
+        l2_norm = nx.sqrt(summed)
+        raw_scale = max_norm / (l2_norm + nx.float_32(1e-6))
+        scale = nx.minimum(nx.float_32(1.0), raw_scale)
+
+        return scale
 
     def train(self, dataloader:DataLoader, optimizer:optimizers, total_epoch:int, max_step:int=50000, eval_every:int=5, microbatch_size:int=16):
         total_loss = nx.float_32(0.0)
@@ -505,14 +525,17 @@ class Transformer:
                         continue         
                     
                 all_network_params = []
+                gscale = self.gradient_clipping_factor(microbatch_size)
+
                 for i,block in enumerate(self.blocks):
-                    dWqkv = block.attention.dWqkv.astype(nx.float32) / self.gradient_scale / microbatch_size
-                    dWo = block.attention.dWo.astype(nx.float32) / self.gradient_scale / microbatch_size
-                    dWcombined = block.ff.dWcombined.astype(nx.float32) / self.gradient_scale / microbatch_size
-                    dWout = block.ff.dWout.astype(nx.float32) / self.gradient_scale / microbatch_size
-                    d_router = block.ff.d_router.astype(nx.float32) / self.gradient_scale / microbatch_size
-                    d_gamma1 = block.rmsnorm1.d_gamma.astype(nx.float32) / self.gradient_scale / microbatch_size
-                    d_gamma2 = block.rmsnorm2.d_gamma.astype(nx.float32) / self.gradient_scale / microbatch_size
+                    
+                    dWqkv = block.attention.dWqkv.astype(nx.float32) / self.gradient_scale / microbatch_size * gscale
+                    dWo = block.attention.dWo.astype(nx.float32) / self.gradient_scale / microbatch_size * gscale
+                    dWcombined = block.ff.dWcombined.astype(nx.float32) / self.gradient_scale / microbatch_size * gscale
+                    dWout = block.ff.dWout.astype(nx.float32) / self.gradient_scale / microbatch_size * gscale
+                    d_router = block.ff.d_router.astype(nx.float32) / self.gradient_scale / microbatch_size * gscale
+                    d_gamma1 = block.rmsnorm1.d_gamma.astype(nx.float32) / self.gradient_scale / microbatch_size* gscale
+                    d_gamma2 = block.rmsnorm2.d_gamma.astype(nx.float32) / self.gradient_scale / microbatch_size* gscale
 
                     if self.quantized:
                         Wqkv = nx.dequantize(block.attention.Wqkv, block.attention.scales[0], block.attention.biases[0], regular=self.symmetric_quant)
@@ -539,10 +562,10 @@ class Transformer:
                 lookup_table = self.embedding.lookup_table.astype(nx.float32)
                 if self.quantized:
                     lookup_table = nx.dequantize(lookup_table, self.embedding.table_scale, self.embedding.bias, regular=self.symmetric_quant)
-                all_network_params.extend([("embedding",lookup_table, self.embedding.d_lookup_table / microbatch_size, False)])
+                all_network_params.extend([("embedding",lookup_table, self.embedding.d_lookup_table / microbatch_size * gscale, False)])
 
                 if getattr(self.rmsnorm_final, "d_gamma", None) is not None:
-                    d_gamma = self.rmsnorm_final.d_gamma.astype(nx.float32) / self.gradient_scale / microbatch_size #type:ignore
+                    d_gamma = self.rmsnorm_final.d_gamma.astype(nx.float32) / self.gradient_scale / microbatch_size * gscale #type:ignore
                     all_network_params.extend([("rmsnorm_final", self.rmsnorm_final.gamma.astype(nx.float32), d_gamma, False)])
                     del d_gamma
                     del self.rmsnorm_final.d_gamma

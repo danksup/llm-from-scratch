@@ -71,7 +71,6 @@ logs:
 
 ## TODO (not in order):
 - moe noise
-- QK norm
 - inference optimization 
 - conversation memory
   

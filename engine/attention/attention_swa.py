@@ -8,7 +8,7 @@ from engine.rmsnorm import RMSNorm
 
 #TODO: do the thing
 class AttentionSWA:
-    def __init__(self,embed_dim:int, n_heads:int, Q_norm:RMSNorm, K_norm:RMSNorm, n_kv_heads:int=-1, W=8, dtype:Any=nx.float16, initializer:Callable=initializer.glorot_uniform, quantized:bool=False, *,init=True) -> None:
+    def __init__(self,embed_dim:int, n_heads:int, Q_norm:RMSNorm, K_norm:RMSNorm, n_kv_heads:int=-1, W=8, dtype:Any=nx.float16, initializer:Callable=initializer.glorot_uniform, quantized:bool=False, *,use_symmetric:bool=False, init=True) -> None:
         self.n_kv_heads = n_kv_heads
 
         if n_kv_heads < 0:
@@ -51,9 +51,11 @@ class AttentionSWA:
             self.Wo = initializer(wo_shape, dtype=dtype)
             assert nx.isfinite(self.Wo).all(), f"non-finite detected when initializing attentipn.Wo."
 
+            self.use_symmetric = use_symmetric
+
             if quantized:
-                self.Wqkv, wqkv_scale, wqkv_bias = nx.quantize(self.Wqkv)
-                self.Wo, wo_scale, wo_bias = nx.quantize(self.Wo)
+                self.Wqkv, wqkv_scale, wqkv_bias = nx.quantize(self.Wqkv, regular=use_symmetric)
+                self.Wo, wo_scale, wo_bias = nx.quantize(self.Wo, regular=use_symmetric)
                 self.scales = (wqkv_scale, wo_scale)
                 self.biases = (wqkv_bias, wo_bias)
 
@@ -72,23 +74,23 @@ class AttentionSWA:
         return "swa"
 
     @classmethod
-    def multihead(cls,embed_dim, n_heads, W, dtype, initializer, Q_norm:RMSNorm, K_norm:RMSNorm,):
-        mha = cls(embed_dim, n_heads=n_heads, n_kv_heads=n_heads, W=W, dtype=dtype, initializer=initializer, Q_norm=Q_norm, K_norm=K_norm)
+    def multihead(cls,embed_dim, n_heads, W, dtype, initializer, Q_norm:RMSNorm, K_norm:RMSNorm,*, use_symmetric=False):
+        mha = cls(embed_dim, n_heads=n_heads, n_kv_heads=n_heads, W=W, dtype=dtype, initializer=initializer, Q_norm=Q_norm, K_norm=K_norm, use_symmetric=use_symmetric)
         return mha
     @classmethod
-    def multiquery(cls,embed_dim, n_heads, W, dtype, initializer, Q_norm:RMSNorm, K_norm:RMSNorm,):
-        mqa = cls(embed_dim, n_heads=n_heads, n_kv_heads=1, W=W, dtype=dtype, initializer=initializer, Q_norm=Q_norm, K_norm=K_norm)
+    def multiquery(cls,embed_dim, n_heads, W, dtype, initializer, Q_norm:RMSNorm, K_norm:RMSNorm, *, use_symmetric=False):
+        mqa = cls(embed_dim, n_heads=n_heads, n_kv_heads=1, W=W, dtype=dtype, initializer=initializer, Q_norm=Q_norm, K_norm=K_norm, use_symmetric=use_symmetric)
         return mqa
 
     @staticmethod
-    def _forward(x:nx.ArrayLike, causal_mask:nx.ArrayLike, configs:tuple[Any,...], params:tuple[Any,...], quantization):
+    def _forward(x:nx.ArrayLike, causal_mask:nx.ArrayLike, configs:tuple[Any,...], params:tuple[Any,...], quantization, *, use_symmetric=False):
         embed_dim, n_kv_heads, n_heads, n_rep, head_dim, W, freqs = configs
-        Wqkv, Wo = params
+        Wqkv, Wo, Q_norm_gamma, K_norm_gamma = params
 
         wqkv_scale, wo_scale, wqkv_bias, wo_bias = quantization
 
         if wqkv_scale is not None:
-            combined = nx.quantized_matmul(x, Wqkv, wqkv_scale,wqkv_bias, transpose=True)
+            combined = nx.quantized_matmul(x, Wqkv, wqkv_scale,wqkv_bias, transpose=True, regular=use_symmetric)
         else:
             combined = x @ Wqkv.T
 
@@ -102,6 +104,8 @@ class AttentionSWA:
         K = K.reshape(B, T, n_kv_heads, head_dim).transpose(0,2,1,3) #(B, n_kv_heads, T, Dh)
         V = V.reshape(B, T, n_kv_heads, head_dim).transpose(0,2,1,3) #(B, n_kv_heads, T, Dh)
 
+        Q, Q_norm_caches = RMSNorm._forward(Q, Q_norm_gamma, 1e-5)
+        K, K_norm_caches = RMSNorm._forward(K, K_norm_gamma, 1e-5)
         Q = rope_forward(Q, freqs)
         K = rope_forward(K, freqs)
 
@@ -138,24 +142,24 @@ class AttentionSWA:
         output_concat = output.transpose(0, 3, 1, 2, 4).reshape(B, T, embed_dim)
 
         if wo_scale is not None:
-            output_projected = nx.quantized_matmul(output_concat, Wo, wo_scale, wo_bias) #B,T,D #dtype
+            output_projected = nx.quantized_matmul(output_concat, Wo, wo_scale, wo_bias, regular=use_symmetric) #B,T,D #dtype
         else:
             output_projected = output_concat @ Wo
-        cache = (x, Q, windows_K, windows_V, weights_softmax, output_concat)
+        cache = (x, Q, windows_K, windows_V,Q_norm_caches,K_norm_caches, weights_softmax, output_concat)
         return output_projected, cache
 
     @staticmethod
-    def _backward(gradient:nx.ArrayLike, caches:tuple[Any,...], attn_configs:tuple[Any,...], attn_params: tuple[Any,...], quantization) :#-> tuple[nx.ArrayLike,...]:
-        x, Q, windows_K, windows_V, weights_softmax, output_concat = caches
+    def _backward(gradient:nx.ArrayLike, caches:tuple[Any,...], attn_configs:tuple[Any,...], attn_params: tuple[Any,...], quantization, * , use_symmetric=False) :#-> tuple[nx.ArrayLike,...]:
+        x, Q, windows_K, windows_V, Q_norm_caches,K_norm_caches, weights_softmax, output_concat = caches
         embed_dim, n_kv_heads, n_heads, n_rep, head_dim, W, freqs = attn_configs
-        Wqkv, Wo = attn_params
+        Wqkv, Wo, Q_norm_gamma, K_norm_gamma = attn_params
 
         wqkv_scale, wo_scale, wqkv_bias, wo_bias = quantization
 
         if wqkv_scale is not None :
-            Wqkv = nx.dequantize(Wqkv, wqkv_scale,wqkv_bias, x.dtype)
+            Wqkv = nx.dequantize(Wqkv, wqkv_scale,wqkv_bias, x.dtype, regular=use_symmetric)
         if wo_scale is not None:
-            Wo = nx.dequantize(Wo, wo_scale,wo_bias, x.dtype)
+            Wo = nx.dequantize(Wo, wo_scale,wo_bias, x.dtype, regular=use_symmetric)
 
         B, T, D = x.shape
         W = min(W, T-1)
@@ -202,6 +206,8 @@ class AttentionSWA:
 
         dQ = rope_inverse(dQ, freqs) #grad dtype
         dK = rope_inverse(dK, freqs) #grad dtype
+        dQ,Q_norm_d_gamma = RMSNorm._backward(dQ, Q_norm_caches, Q_norm_gamma)
+        dK,K_norm_d_gamma = RMSNorm._backward(dK, K_norm_caches, K_norm_gamma)
 
         dQ = dQ.transpose(0, 2, 1, 3).reshape(B, T, embed_dim)
         dK = dK.transpose(0, 2, 1, 3).reshape(B, T, n_kv_heads * head_dim)
@@ -221,7 +227,7 @@ class AttentionSWA:
         dx = dQKV @ Wqkv
 
         del x, output_concat, freqs, Wqkv, Wo
-        return dx,dWqkv,dWo
+        return dx,dWqkv,dWo, Q_norm_d_gamma, K_norm_d_gamma
 
     #TODO:compiled, dtype fix, quantization
     def inference_forward(self, x, max_cache_len, freqs, quantization, cached_k=None, cached_v=None, position = 0,  *, use_symmetric:bool=False):

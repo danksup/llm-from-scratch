@@ -1,14 +1,12 @@
-from typing import Any, Union
+from typing import Any
 
 import engine.attention as attn
 import engine.backend as nx
-import engine.initializers as init
 from engine.dropout import Dropout
 from engine.moe import MoE
 from engine.rmsnorm import RMSNorm
 
 Attention = attn.AttentionFull | attn.AttentionSWA
-import time
 
 ATTN_TYPE = {
     "swa": attn.AttentionSWA,

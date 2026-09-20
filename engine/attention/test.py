@@ -7,7 +7,7 @@ from engine.rope import precompute_freqs
 from engine.rmsnorm import RMSNorm
 
 #TODO: do the thing
-class AttentionSWA:
+class AttentionSWA_OLD:
     def __init__(self,embed_dim:int, n_heads:int, Q_norm:RMSNorm, K_norm:RMSNorm, n_kv_heads:int=-1, W=8, dtype:Any=nx.float16, initializer:Callable=initializer.glorot_uniform, quantized:bool=False, *,use_symmetric:bool=False, init=True) -> None:
         self.n_kv_heads = n_kv_heads
 
@@ -189,32 +189,15 @@ class AttentionSWA:
 
         dQ = dQ.reshape(B, -1, T, head_dim)
 
-        d_windows_K = nx.einsum("bkrtw,bkrtd->bktwd", d_scores, Q) #(B, n_kv_heads, T, W+1, Dh)
+        d_windows_K = nx.einsum("bkrtw,bkrtd->bktwd", d_scores, Q) #(B,n_kv_heads,T, W+1, Dh)
 
         del Q, d_scores, d_scores_6d, windows_K_6d,  windows_K
 
-        pad = [(0,0), (0,0), (0,0), (0,T), (0,0)]
-        padded_d_window_K = nx.pad(d_windows_K, pad)
-        padded_d_window_V = nx.pad(d_windows_V, pad)
-
-        flatten_padded_d_window_K = padded_d_window_K.reshape(B, n_kv_heads, -1, head_dim)
-        flatten_padded_d_window_V = padded_d_window_V.reshape(B, n_kv_heads, -1, head_dim)
-
-        staggered_K = flatten_padded_d_window_K[:,:,:-T,:]
-        staggered_V = flatten_padded_d_window_V[:,:,:-T,:]
-
-        staggered_K = staggered_K.reshape(B,n_kv_heads, T, W + T, head_dim)
-        staggered_V = staggered_V.reshape(B,n_kv_heads, T, W + T, head_dim)
-
-        d_padded_K = nx.sum(staggered_K, axis=2)
-        d_padded_V = nx.sum(staggered_V, axis=2)
-
-        # d_padded_K = nx.zeros((B, n_kv_heads, T+W, head_dim), dtype=d_windows_K.dtype)
-        # d_padded_V = nx.zeros((B, n_kv_heads, T+W, head_dim), dtype=d_windows_V.dtype)
-
-        # for slot in range(W + 1):
-        #     d_padded_K[:, :, slot:slot + T, :] += d_windows_K[:, :, :, slot, :]
-        #     d_padded_V[:, :, slot:slot + T, :] += d_windows_V[:, :, :, slot, :]
+        d_padded_K = nx.zeros((B, n_kv_heads, T+W, head_dim), dtype=d_windows_K.dtype)
+        d_padded_V = nx.zeros((B, n_kv_heads, T+W, head_dim), dtype=d_windows_V.dtype)
+        for slot in range(W + 1):
+            d_padded_K[:, :, slot:slot + T, :] += d_windows_K[:, :, :, slot, :]
+            d_padded_V[:, :, slot:slot + T, :] += d_windows_V[:, :, :, slot, :]
 
         dK = d_padded_K[:, :, W:, :]
         dV = d_padded_V[:, :, W:, :]
@@ -308,7 +291,7 @@ class AttentionSWA:
         return padded_position < W
 
     @classmethod
-    def from_weight(cls, configs, weights, quants,attn_QK_gamma, dtype) -> "AttentionSWA":
+    def from_weight(cls, configs, weights, quants,attn_QK_gamma, dtype) -> "AttentionSWA_OLD":
         embed_dim, n_kv_heads, n_heads, _, _,W, _ = configs
         wqkv, wo = weights
 
@@ -331,7 +314,7 @@ class AttentionSWA:
     def copy(self):
         Q_norm_copy = self.Q_norm.copy()
         K_norm_copy = self.K_norm.copy()
-        attn_copy = AttentionSWA(self.embed_dim, self.n_heads, Q_norm_copy, K_norm_copy, self.n_kv_heads,self.W, self.dtype, quantized=self.quantized, init=False)
+        attn_copy = AttentionSWA_OLD(self.embed_dim, self.n_heads, Q_norm_copy, K_norm_copy, self.n_kv_heads,self.W, self.dtype, quantized=self.quantized, init=False)
         attn_copy.Wqkv = nx.copy(self.Wqkv)
         attn_copy.Wo = nx.copy(self.Wo)
         if self.quantized:

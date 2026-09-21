@@ -250,7 +250,7 @@ class AttentionFull:
         return nx.triu(nx.ones((T, T), dtype=nx.bool_), k=1)
 
     @classmethod
-    def from_weight(cls, configs, weights,quants, attn_QK_gamma, dtype) -> "AttentionFull":
+    def from_weight(cls, configs, weights, quants, attn_QK_gamma, dtype) -> "AttentionFull":
         embed_dim, n_kv_heads, n_heads, _, _, = configs
         wqkv, wo = weights
         Q_norm_gamma,Q_norm_configs, K_norm_gamma, K_norm_configs = attn_QK_gamma

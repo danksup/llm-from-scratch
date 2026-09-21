@@ -10,7 +10,7 @@ import random
 nx.set_seed(random.randrange(0,99999))
 
 tokenizer = Tokenizer.load("artifacts/tokenizer/tokenizer32768_1624612680len.tokenizer")
-session_path = "artifacts/sessions/session_111894080_param_1_epochs_weights_only_29d87e76-fa44-4045-a57a-88884b6666fe.safetensors"
+session_path = "artifacts/sessions/session_111894080_param_1_epochs_weights_only_6aa07769-d301-41d1-be1c-6d3ff57ede27.safetensors"
 
 session = Session.load(session_path, tokenizer)
 context = "i jsut wanna keep calling your name"

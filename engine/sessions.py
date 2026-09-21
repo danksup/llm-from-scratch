@@ -529,7 +529,7 @@ class Session:
 
         rmsfinal_gamma = session["rmsnorm_final"] #type:ignore
         rmsfinal_config = ast.literal_eval(metadata["rmsnorm_final_configs"]) #type:ignore
-        
+
         for i in range(n_block):
             configs = block_configs[i]
 
@@ -546,9 +546,9 @@ class Session:
             rmsnorm2_gamma = session[f"{i}.rmsnorm2.gamma"] #type:ignore
 
             Q_norm_configs = configs["attention_Q_norm"]
-            Q_norm_gamma = session[f"{i}.Q.norm.gamma"] #type:ignore
+            Q_norm_gamma = session[f"{i}.attention.Q_norm.gamma"] #type:ignore
             K_norm_configs = configs["attention_K_norm"]
-            K_norm_gamma = session[f"{i}.K.norm.gamma"] #type:ignore
+            K_norm_gamma = session[f"{i}.attention.K_norm.gamma"] #type:ignore
             attn_QK_norm = Q_norm_gamma,Q_norm_configs, K_norm_gamma,K_norm_configs
 
             if quantized:

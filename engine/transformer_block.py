@@ -131,7 +131,8 @@ class TransformerBlock:
 
     @classmethod
     def from_weights(cls, attn_type, attn_configs, attn_weights, attn_quants, attn_QK_gamma, ff_configs, ff_weights,ff_quants, rmsnorm1_configs,gamma1, rmsnorm2_configs,gamma2, dtype):
-        attn = ATTN_TYPE[attn_type].from_weight(attn_configs, attn_weights, attn_QK_gamma, quants=attn_quants, dtype=dtype)
+        #def from_weight(cls, configs, weights, quants, attn_QK_gamma, dtype) -> "AttentionFull":
+        attn = ATTN_TYPE[attn_type].from_weight(configs=attn_configs, weights=attn_weights, quants=attn_quants, attn_QK_gamma=attn_QK_gamma, dtype=dtype)
         ff = MoE.from_weight(configs=ff_configs, weights=ff_weights, quants=ff_quants, dtype=dtype)
         rmsnorm1 = RMSNorm.from_weight(rmsnorm1_configs, gamma1)
         rmsnorm2 = RMSNorm.from_weight(rmsnorm2_configs, gamma2)

@@ -8,7 +8,7 @@ from engine.rmsnorm import RMSNorm
 
 #TODO: do the thing
 class AttentionChunked:
-    def __init__(self,embed_dim:int, n_heads:int, Q_norm:RMSNorm, K_norm:RMSNorm, n_kv_heads:int=-1, W=8, dtype:Any=nx.float16, initializer:Callable=initializer.glorot_uniform, quantized:bool=False, *,use_symmetric:bool=False, init=True) -> None:
+    def __init__(self,embed_dim:int, n_heads:int, Q_norm:RMSNorm, K_norm:RMSNorm, n_kv_heads:int=-1, chunk_size=8, dtype:Any=nx.float16, initializer:Callable=initializer.glorot_uniform, quantized:bool=False, *,use_symmetric:bool=False, init=True) -> None:
         self.n_kv_heads = n_kv_heads
 
         if n_kv_heads < 0:
@@ -23,14 +23,14 @@ class AttentionChunked:
         self.head_dim = head_dim
         assert self.head_dim % 2 == 0,  f"rope needs headdim to be multiple of 2, get headdim of {self.head_dim} instead. math: embed_dim // n_heads -> {embed_dim} // {n_heads} = {embed_dim//n_heads}"
 
-        self.W = W
+        self.chunk_size = chunk_size
         self.dtype = dtype
 
         self.n_rep = self.n_heads // self.n_kv_heads
 
         self.freqs = precompute_freqs(self.head_dim, 16384)
 
-        self.configs = self.embed_dim, self.n_kv_heads, self.n_heads, self.n_rep, head_dim, self.W, self.freqs
+        self.configs = self.embed_dim, self.n_kv_heads, self.n_heads, self.n_rep, head_dim, self.chunk_size, self.freqs
 
         self.quantized = quantized
 
@@ -74,17 +74,17 @@ class AttentionChunked:
         return "chunked"
 
     @classmethod
-    def multihead(cls,embed_dim, n_heads, W, dtype, initializer, Q_norm:RMSNorm, K_norm:RMSNorm,*, use_symmetric=False):
-        mha = cls(embed_dim, n_heads=n_heads, n_kv_heads=n_heads, W=W, dtype=dtype, initializer=initializer, Q_norm=Q_norm, K_norm=K_norm, use_symmetric=use_symmetric)
+    def multihead(cls,embed_dim, n_heads, chunk_size, dtype, initializer, Q_norm:RMSNorm, K_norm:RMSNorm,*, use_symmetric=False):
+        mha = cls(embed_dim, n_heads=n_heads, n_kv_heads=n_heads, chunk_size=chunk_size, dtype=dtype, initializer=initializer, Q_norm=Q_norm, K_norm=K_norm, use_symmetric=use_symmetric)
         return mha
     @classmethod
-    def multiquery(cls,embed_dim, n_heads, W, dtype, initializer, Q_norm:RMSNorm, K_norm:RMSNorm, *, use_symmetric=False):
-        mqa = cls(embed_dim, n_heads=n_heads, n_kv_heads=1, W=W, dtype=dtype, initializer=initializer, Q_norm=Q_norm, K_norm=K_norm, use_symmetric=use_symmetric)
+    def multiquery(cls,embed_dim, n_heads, chunk_size, dtype, initializer, Q_norm:RMSNorm, K_norm:RMSNorm, *, use_symmetric=False):
+        mqa = cls(embed_dim, n_heads=n_heads, n_kv_heads=1, chunk_size=chunk_size, dtype=dtype, initializer=initializer, Q_norm=Q_norm, K_norm=K_norm, use_symmetric=use_symmetric)
         return mqa
 
     @staticmethod
     def _forward(x:nx.ArrayLike, causal_mask:nx.ArrayLike, configs:tuple[Any,...], params:tuple[Any,...], quantization, *, use_symmetric=False):
-        embed_dim, n_kv_heads, n_heads, n_rep, head_dim, W, freqs = configs
+        embed_dim, n_kv_heads, n_heads, _, head_dim, chunk_size, freqs = configs
         Wqkv, Wo, Q_norm_gamma, K_norm_gamma = params
 
         wqkv_scale, wo_scale, wqkv_bias, wo_bias = quantization
@@ -99,7 +99,7 @@ class AttentionChunked:
         V = combined[..., embed_dim + (n_kv_heads * head_dim):] #shape: (B, T, n_kv_heads * H)
 
         B, T, _ = x.shape
-        W = min(W, T-1)
+        chunk_size = min(chunk_size, T-1)
         Q = Q.reshape(B, T, n_heads, head_dim).transpose(0,2,1,3) #(B,n_heads,T, Dh)
         K = K.reshape(B, T, n_kv_heads, head_dim).transpose(0,2,1,3) #(B, n_kv_heads, T, Dh)
         V = V.reshape(B, T, n_kv_heads, head_dim).transpose(0,2,1,3) #(B, n_kv_heads, T, Dh)
@@ -109,18 +109,18 @@ class AttentionChunked:
         Q = rope_forward(Q, freqs)
         K = rope_forward(K, freqs)
 
-        remainder = (W - (T % W)) % W
+        remainder = (chunk_size - (T % chunk_size)) % chunk_size
         pad = [(0,0), (0,0), (0, remainder), (0,0)]
         Q = nx.pad(Q, pad) # (B, n_heads, T + remainder, Dh)
         K = nx.pad(K, pad) # (B, n_kv_heads, T + remainder, Dh)
         V = nx.pad(V, pad) # (B, n_kv_heads, T + remainder, Dh)
 
-        n_chunk = Q.shape[2] // W
-        Q = Q.reshape(B, n_heads, n_chunk, W, head_dim)
-        K = K.reshape(B, n_kv_heads, n_chunk, W, head_dim)
-        V = V.reshape(B, n_kv_heads, n_chunk, W, head_dim)
+        n_chunk = Q.shape[2] // chunk_size
+        Q = Q.reshape(B, n_heads, n_chunk, chunk_size, head_dim)
+        K = K.reshape(B, n_kv_heads, n_chunk, chunk_size, head_dim)
+        V = V.reshape(B, n_kv_heads, n_chunk, chunk_size, head_dim)
 
-        front = nx.zeros((B, n_kv_heads, 1, W, head_dim), Q.dtype)
+        front = nx.zeros((B, n_kv_heads, 1, chunk_size, head_dim), Q.dtype)
 
         preprendix = nx.concatenate([front,K[:,:,:-1,:,:]], axis=2)
         K_chunked = nx.concatenate([preprendix, K], axis=3) #(B, n_kv_heads, n_chunk, 2W, head_dim)
@@ -136,9 +136,9 @@ class AttentionChunked:
         scores = scores.astype(nx.float32) /  nx.sqrt(head_dim, dtype=nx.float32)
         scores = nx.where(causal_mask == 0, -1e9, scores)
         weights_softmax = nx.softmax(scores)
-        weights = weights_softmax.astype(x.dtype) #(B, n_heads, n_chunk,WQ, 2WK)
+        weights = weights_softmax.astype(x.dtype) #(B, n_heads, n_chunk, WQ, 2WK)
 
-        output = weights @ V_chunked_repeat #(B, n_heads, n_chunk, W, Dh)
+        output = weights @ V_chunked_repeat #(B, n_heads, n_chunk, chunk_size, Dh)
         output_unchunked = output.reshape(B,n_heads,-1,head_dim) #(B, n_heads, n_chunk * 2WQ, Dh)
         output_unchunked = output_unchunked[:,:,:T,:] #(B, n_heads, T, Dh)
         output_unchunked = output_unchunked.transpose(0,2,1,3).reshape(B,T,-1)
@@ -150,49 +150,10 @@ class AttentionChunked:
         cache = (x, Q, K_chunked, V_chunked, Q_norm_caches,K_norm_caches, weights_softmax, output_unchunked)
         return output_projected, cache
 
-        # pad = [(0,0), (0,0),(W,0), (0,0)]
-        # P = T + W
-        # stride = (head_dim * n_kv_heads * P, P * head_dim, head_dim, head_dim, 1)
-        # padded_K = nx.pad(K, pad, constant_value=0)  #(B, n_kv_head, T+W, Dh)
-        # padded_V = nx.pad(V, pad, constant_value=0) #(B,n_kv_head,T+W, Dh)
-        # shape = (padded_K.shape[0], padded_K.shape[1], T, W + 1, head_dim) #(B, n_kv_head, T, W+1, Dh)
-
-        # windows_K = nx.as_strided(padded_K, shape=shape,strides=stride) #shape=shape dtype
-        # windows_V = nx.as_strided(padded_V, shape=shape,strides=stride) #shape=shape dtype
-
-        # Q = Q.reshape(B, n_kv_heads, n_rep, T, head_dim)
-
-        # Q_6d = Q[:,:,:,:,None,:] #(B, n_kv_heads, n_rep, T,1, Dh)
-        # windows_K_6d = windows_K[:,:,None,:,:,:] #(B, n_kv_head, 1, T, W+1, Dh)
-        # scores = Q_6d @ windows_K_6d.transpose(0,1,2,3,5,4) #B, n_kv_heads, n_rep, T, 1, W+1 #dtype
-
-        # scores = scores[:,:,:,:,0,:].reshape(B, -1, T, W+1)
-        # scores = scores.astype(nx.float32) /  nx.sqrt(head_dim, dtype=nx.float32)
-        # scores = nx.where(causal_mask, -nx.inf, scores)
-        # weights_softmax = nx.softmax(scores) #(B, n_heads, T, W+1) #fp32
-
-        # weights = weights_softmax.astype(x.dtype)
-        # weights = weights.reshape(B, n_kv_heads, n_rep, T, W+1)
-
-        # weights_6d = weights[:,:,:,:,None,:]     #(B, n_kv_head, n_rep, T, 1, W+1)
-        # windows_V_6d = windows_V[:,:,None,:,:,:] #(B, n_kv_head, 1, T, W+1, Dh)
-
-        # output = weights_6d @ windows_V_6d #(B,K,R,T,1,D)
-
-        # output = output[:,:,:,:,0,:]
-        # output_concat = output.transpose(0, 3, 1, 2, 4).reshape(B, T, embed_dim)
-
-        # if wo_scale is not None:
-        #     output_projected = nx.quantized_matmul(output_concat, Wo, wo_scale, wo_bias, regular=use_symmetric) #B,T,D #dtype
-        # else:
-        #     output_projected = output_concat @ Wo
-        # cache = (x, Q, windows_K, windows_V,Q_norm_caches,K_norm_caches, weights_softmax, output_concat)
-        # return output_projected, cache
-
     @staticmethod
     def _backward(gradient:nx.ArrayLike, caches:tuple[Any,...], attn_configs:tuple[Any,...], attn_params: tuple[Any,...], quantization, * , use_symmetric=False) :#-> tuple[nx.ArrayLike,...]:
         x, Q, K_chunked, V_chunked, Q_norm_caches,K_norm_caches, weights_softmax, output_unchunked = caches
-        embed_dim, n_kv_heads, n_heads, n_rep, head_dim, W, freqs = attn_configs
+        embed_dim, n_kv_heads, n_heads, n_rep, head_dim, chunk_size, freqs = attn_configs
         Wqkv, Wo, Q_norm_gamma, K_norm_gamma = attn_params
 
         wqkv_scale, wo_scale, wqkv_bias, wo_bias = quantization
@@ -201,8 +162,8 @@ class AttentionChunked:
             Wqkv = nx.dequantize(Wqkv, wqkv_scale,wqkv_bias, x.dtype, regular=use_symmetric)
 
         B, T, D = x.shape
-        W = min(W, T-1)
-        remainder = (W - (T % W)) % W
+        chunk_size = min(chunk_size, T-1)
+        remainder = (chunk_size - (T % chunk_size)) % chunk_size
 
         if wo_scale is not None:
             d_output_unchunked = nx.quantized_matmul(gradient, Wo, wo_scale, wo_bias, True, regular=use_symmetric)
@@ -214,46 +175,38 @@ class AttentionChunked:
         pad = [(0,0),(0,0), (0, remainder), (0,0)]
         d_output_padded = nx.pad(d_output_unchunked, pad)#(B,n_heads, T+remainder,D)
 
-        n_chunk = d_output_padded.shape[2] // W
-        d_output_chunked = d_output_padded.reshape(B, n_heads, n_chunk, W, head_dim)
+        n_chunk = d_output_padded.shape[2] // chunk_size
+        d_output_chunked = d_output_padded.reshape(B, n_heads, n_chunk, chunk_size, head_dim)
 
-        d_output_chunked = d_output_chunked.reshape(B, n_kv_heads,n_rep,n_chunk, W, head_dim)
+        d_output_chunked = d_output_chunked.reshape(B, n_kv_heads,n_rep,n_chunk, chunk_size, head_dim)
 
-        # d_weights = d_output_chunked @ V_chunked.transpose(0,1,2,4,3) #(B, n_heads, n_chunk, W, 2W)
         d_weights = nx.einsum("bkrcwd,bkcxd->bkrcwx", d_output_chunked, V_chunked)
 
-        #weight_softmax = #(B, n_heads, n_chunk, WQ, 2WK)
-        d_chunked_V = nx.einsum("bkrcwx,bkrcwd->bkcxd", weights_softmax.astype(gradient.dtype).reshape(B,n_kv_heads,n_rep, n_chunk, W, 2*W), d_output_chunked)
-        # d_weights = d_weights.reshape(B, -1, n_chunk, W, 2*W)
-        # d_chunked_V = weights_softmax.astype(gradient.dtype) @ d_output_chunked #(B, n_heads, n_chunk,W, Dh)
-        
-        d_scores = softmax_derivative(weights_softmax, d_weights.reshape(B, -1, n_chunk, W, 2*W).astype(nx.float32))  / nx.sqrt(head_dim, dtype=nx.float32) #(B, n_heads, n_chunk, W, 2W) #type:ignore
+        d_chunked_V = nx.einsum("bkrcwx,bkrcwd->bkcxd", weights_softmax.astype(gradient.dtype).reshape(B,n_kv_heads,n_rep, n_chunk, chunk_size, 2*chunk_size), d_output_chunked)
+        d_scores = softmax_derivative(weights_softmax, d_weights.reshape(B, -1, n_chunk, chunk_size, 2*chunk_size).astype(nx.float32))  / nx.sqrt(head_dim, dtype=nx.float32) #(B, n_heads, n_chunk, chunk_size, 2W) #type:ignore
         d_scores = d_scores.astype(gradient.dtype)
-        d_scores = d_scores.reshape(B,n_kv_heads,n_rep,n_chunk,W,2*W)
+        d_scores = d_scores.reshape(B,n_kv_heads,n_rep,n_chunk,chunk_size,2*chunk_size)
 
-        # dQ = d_scores @ K_chunked #(B, n_heads, n_chunk, W, Dh)
         dQ = nx.einsum("bkrcwx,bkcxd->bkrcwd", d_scores, K_chunked).reshape(B, n_heads, -1, head_dim) #B, n_heads, T + remainder, head_dim
         
-        # d_chunked_K = d_scores.transpose(0,1,2,4,3) @ Q #(B, n_heads, n_chunk, 2W, Dh)
-        #Q = B, n_heads, n_chunk, W, head_dim
-        d_chunked_K = nx.einsum("bkrcwx,bkrcwd->bkcxd", d_scores, Q.reshape(B, n_kv_heads, n_rep, n_chunk, W, head_dim))
+        d_chunked_K = nx.einsum("bkrcwx,bkrcwd->bkcxd", d_scores, Q.reshape(B, n_kv_heads, n_rep, n_chunk, chunk_size, head_dim))
 
         dQ = dQ[:,:,:T,:] #B, n_heads, T, head_dim
         dQ = rope_inverse(dQ, freqs)
         dQ,Q_norm_d_gamma = RMSNorm._backward(dQ, Q_norm_caches, Q_norm_gamma)
         dQ = dQ.transpose(0, 2, 1, 3).reshape(B, T, embed_dim)
 
-        dK_l = d_chunked_K[:, :, :, :W, :]
-        dK_r = d_chunked_K[:, :, :, W:, :]
-        dK_r[:,:,1:, :,:] += dK_l[:,:,:-1,:,:] #B, n_heads, n_chunk, W, Dh
+        dK_l = d_chunked_K[:, :, :, :chunk_size, :]
+        dK_r = d_chunked_K[:, :, :, chunk_size:, :]
+        dK_r[:,:,1:, :,:] += dK_l[:,:,:-1,:,:] #B, n_heads, n_chunk, chunk_size, Dh
         dK = dK_r.reshape(B, n_kv_heads, -1, head_dim)[:, :, :T, :] #B, n_kv_heads, T, Dh
         dK = rope_inverse(dK, freqs)
         dK,K_norm_d_gamma = RMSNorm._backward(dK, K_norm_caches, K_norm_gamma)
         dK = dK.transpose(0,2,1,3).reshape(B,T, head_dim*n_kv_heads) #B, T, D
 
-        dV_l = d_chunked_V[:, :, :, :W, :]
-        dV_r = d_chunked_V[:, :, :, W:, :]
-        dV_r[:,:,1:, :,:] += dV_l[:,:,:-1,:,:] #B, n_heads, n_chunk, W, Dh
+        dV_l = d_chunked_V[:, :, :, :chunk_size, :]
+        dV_r = d_chunked_V[:, :, :, chunk_size:, :]
+        dV_r[:,:,1:, :,:] += dV_l[:,:,:-1,:,:] #B, n_heads, n_chunk, chunk_size, Dh
         dV = dV_r.reshape(B, n_kv_heads, -1, head_dim)[:, :, :T, :] #B, n_kv_heads, T, Dh
         dV = dV.transpose(0,2,1,3).reshape(B,T, head_dim*n_kv_heads)#B, T, D
 
@@ -270,106 +223,6 @@ class AttentionChunked:
         dx = dQKV @ Wqkv
 
         return dx,dWqkv,dWo, Q_norm_d_gamma, K_norm_d_gamma
-
-
-        
-    # @staticmethod
-    # def _backward(gradient:nx.ArrayLike, caches:tuple[Any,...], attn_configs:tuple[Any,...], attn_params: tuple[Any,...], quantization, * , use_symmetric=False) :#-> tuple[nx.ArrayLike,...]:
-    #     x, Q, windows_K, windows_V, Q_norm_caches,K_norm_caches, weights_softmax, output_concat = caches
-    #     embed_dim, n_kv_heads, n_heads, n_rep, head_dim, W, freqs = attn_configs
-    #     Wqkv, Wo, Q_norm_gamma, K_norm_gamma = attn_params
-
-    #     wqkv_scale, wo_scale, wqkv_bias, wo_bias = quantization
-
-    #     if wqkv_scale is not None :
-    #         Wqkv = nx.dequantize(Wqkv, wqkv_scale,wqkv_bias, x.dtype, regular=use_symmetric)
-    #     if wo_scale is not None:
-    #         Wo = nx.dequantize(Wo, wo_scale,wo_bias, x.dtype, regular=use_symmetric)
-
-    #     B, T, D = x.shape
-    #     W = min(W, T-1)
-
-    #     weights_softmax = weights_softmax.reshape(B, n_kv_heads, n_rep, T, W+1)
-    #     weights = weights_softmax.astype(x.dtype)
-    #     d_output_concat = nx.einsum("btd,fd->btf",gradient, Wo) #(B,T,D)
-
-    #     d_output = d_output_concat.reshape(B, T, n_heads, head_dim).transpose(0, 2, 1, 3) #(B, n_heads, T,  Dh)
-    #     d_output_split = d_output.reshape(B, n_kv_heads,n_rep,T, head_dim)
-
-    #     d_output_split_6d = d_output_split[:,:,:,:,None,:] #B, n_kv_heads, n_rep, T, 1, Dh
-    #     windows_V_6d = windows_V[:,:,None,:,:,:] #(B, n_kv_head, 1, T, W+1, Dh)
-    #     d_weights = d_output_split_6d @ windows_V_6d.transpose(0,1,2,3,5,4) #B, n_kv_heads, n_rep,T, 1, W+1
-
-    #     d_windows_V = nx.einsum("bkrtw,bkrtd->bktwd", weights, d_output_split) #(B, n_kv_head, T , W+1, Dh)
-
-    #     d_weights = d_weights[:,:,:,:,0,:].astype(nx.float32)
-    #     d_scores = softmax_derivative(weights_softmax, d_weights) / nx.sqrt(head_dim, dtype=nx.float32) #(B, n_kv_heads, n_rep, T, W+1)
-    #     d_scores = d_scores.astype(x.dtype)
-
-    #     del d_output_split, d_output_split_6d, d_weights, windows_V_6d
-
-    #     d_scores_6d = d_scores[:,:,:,:,None,:] #(B, n_kv_heads, n_rep, T, 1,W+1)
-    #     windows_K_6d = windows_K[:,:,None,:,:,:] #(B, n_kv_head, 1, T, W+1, Dh)
-    #     dQ = d_scores_6d @ windows_K_6d
-
-    #     dQ = dQ.reshape(B, -1, T, head_dim)
-
-    #     d_windows_K = nx.einsum("bkrtw,bkrtd->bktwd", d_scores, Q) #(B, n_kv_heads, T, W+1, Dh)
-
-    #     del Q, d_scores, d_scores_6d, windows_K_6d,  windows_K
-
-    #     pad = [(0,0), (0,0), (0,0), (0,T), (0,0)]
-    #     padded_d_window_K = nx.pad(d_windows_K, pad)
-    #     padded_d_window_V = nx.pad(d_windows_V, pad)
-
-    #     flatten_padded_d_window_K = padded_d_window_K.reshape(B, n_kv_heads, -1, head_dim)
-    #     flatten_padded_d_window_V = padded_d_window_V.reshape(B, n_kv_heads, -1, head_dim)
-
-    #     staggered_K = flatten_padded_d_window_K[:,:,:-T,:]
-    #     staggered_V = flatten_padded_d_window_V[:,:,:-T,:]
-
-    #     staggered_K = staggered_K.reshape(B,n_kv_heads, T, W + T, head_dim)
-    #     staggered_V = staggered_V.reshape(B,n_kv_heads, T, W + T, head_dim)
-
-    #     d_padded_K = nx.sum(staggered_K, axis=2)
-    #     d_padded_V = nx.sum(staggered_V, axis=2)
-
-    #     # d_padded_K = nx.zeros((B, n_kv_heads, T+W, head_dim), dtype=d_windows_K.dtype)
-    #     # d_padded_V = nx.zeros((B, n_kv_heads, T+W, head_dim), dtype=d_windows_V.dtype)
-
-    #     # for slot in range(W + 1):
-    #     #     d_padded_K[:, :, slot:slot + T, :] += d_windows_K[:, :, :, slot, :]
-    #     #     d_padded_V[:, :, slot:slot + T, :] += d_windows_V[:, :, :, slot, :]
-
-    #     dK = d_padded_K[:, :, W:, :]
-    #     dV = d_padded_V[:, :, W:, :]
-
-    #     del d_windows_K, d_windows_V, d_padded_K, d_padded_V
-
-    #     dQ = rope_inverse(dQ, freqs) #grad dtype
-    #     dK = rope_inverse(dK, freqs) #grad dtype
-    #     dQ,Q_norm_d_gamma = RMSNorm._backward(dQ, Q_norm_caches, Q_norm_gamma)
-    #     dK,K_norm_d_gamma = RMSNorm._backward(dK, K_norm_caches, K_norm_gamma)
-
-    #     dQ = dQ.transpose(0, 2, 1, 3).reshape(B, T, embed_dim)
-    #     dK = dK.transpose(0, 2, 1, 3).reshape(B, T, n_kv_heads * head_dim)
-    #     dV = dV.transpose(0, 2, 1, 3).reshape(B, T,  n_kv_heads * head_dim)
-
-    #     dQKV = nx.concatenate([dQ, dK,dV], axis=-1) #(B,T, D + 2 * (n_kv_heads * Dh))
-    #     DQKV = dQKV.reshape(-1, embed_dim + 2 * (n_kv_heads * head_dim))
-    #     del dQ, dK, dV
-
-    #     X = x.reshape(-1, embed_dim)
-    #     dWqkv = DQKV.T @ X
-
-    #     H = output_concat.reshape(-1, embed_dim)
-    #     G = gradient.reshape(-1, embed_dim)
-
-    #     dWo = H.T @ G
-    #     dx = dQKV @ Wqkv
-
-    #     del x, output_concat, freqs, Wqkv, Wo
-    #     return dx,dWqkv,dWo, Q_norm_d_gamma, K_norm_d_gamma
 
     #TODO:compiled, dtype fix, quantization
     def inference_forward(self, x, max_cache_len, freqs, quantization, cached_k=None, cached_v=None, position = 0,  *, use_symmetric:bool=False):
@@ -426,9 +279,9 @@ class AttentionChunked:
         return output_projected, cached_k, cached_v
 
     def compute_mask(self):
-        W = self.W
-        row_idx = nx.ones((W,W))
-        column_idx = nx.ones((W,W))
+        chunk_size = self.chunk_size
+        row_idx = nx.ones((chunk_size,chunk_size))
+        column_idx = nx.ones((chunk_size,chunk_size))
         trilled = nx.tril(column_idx)
         return nx.concatenate([row_idx, trilled], axis=1)
         
@@ -436,7 +289,7 @@ class AttentionChunked:
 
     @classmethod
     def from_weight(cls, configs, weights, quants,attn_QK_gamma, dtype) -> "AttentionChunked":
-        embed_dim, n_kv_heads, n_heads, _, _,W, _ = configs
+        embed_dim, n_kv_heads, n_heads, _, _,chunk_size, _ = configs
         wqkv, wo = weights
 
         Q_norm_gamma,Q_norm_configs, K_norm_gamma, K_norm_configs = attn_QK_gamma
@@ -444,7 +297,7 @@ class AttentionChunked:
         K_norm = RMSNorm.from_weight(K_norm_configs, K_norm_gamma)
 
 
-        attn = cls(embed_dim, n_heads, Q_norm, K_norm, n_kv_heads,W,dtype, init=False)
+        attn = cls(embed_dim, n_heads, Q_norm, K_norm, n_kv_heads,chunk_size,dtype, init=False)
         attn.Wqkv = wqkv
         attn.Wo = wo
 
@@ -458,7 +311,7 @@ class AttentionChunked:
     def copy(self):
         Q_norm_copy = self.Q_norm.copy()
         K_norm_copy = self.K_norm.copy()
-        attn_copy = AttentionChunked(self.embed_dim, self.n_heads, Q_norm_copy, K_norm_copy, self.n_kv_heads,self.W, self.dtype, quantized=self.quantized, init=False)
+        attn_copy = AttentionChunked(self.embed_dim, self.n_heads, Q_norm_copy, K_norm_copy, self.n_kv_heads, self.chunk_size, self.dtype, quantized=self.quantized, init=False)
         attn_copy.Wqkv = nx.copy(self.Wqkv)
         attn_copy.Wo = nx.copy(self.Wo)
         if self.quantized:

@@ -138,7 +138,7 @@ class Transformer:
                     raise ValueError(f"[block {i}] attention type of {attn_type_str} doesn't accept \"attn_chunk_size\"")
                 n_heads = overrided["attn_n_heads"]
                 attn = None
-                W = overrided.get("attn_chunk_size", None)
+                chunk_size = overrided.get("attn_chunk_size", None)
 
                 head_dim = D // n_heads
                 Q_norm = RMSNorm(head_dim)
@@ -146,11 +146,11 @@ class Transformer:
                 match (attn_type_str, attn_variant):
                     case ("chunked", "gqa"):
                         n_kv_heads = overrided["attn_n_kv_heads"]
-                        attn = attn_type(embed_dim=D, n_heads=n_heads, Q_norm=Q_norm, K_norm=K_norm, n_kv_heads=n_kv_heads, W=W, dtype=self.dtype, initializer=attn_init, quantized=self.quantized, use_symmetric=self.symmetric_quant)
+                        attn = attn_type(embed_dim=D, n_heads=n_heads, Q_norm=Q_norm, K_norm=K_norm, n_kv_heads=n_kv_heads, chunk_size=chunk_size, dtype=self.dtype, initializer=attn_init, quantized=self.quantized, use_symmetric=self.symmetric_quant)
                     case ("chunked", "mha"):
-                        attn = attn_type.multihead(D, n_heads, W, self.dtype, attn_init, quantized=self.quantized, use_symmetric=self.symmetric_quant, Q_norm=Q_norm, K_norm=K_norm,)
+                        attn = attn_type.multihead(D, n_heads,chunk_size , self.dtype, attn_init, quantized=self.quantized, use_symmetric=self.symmetric_quant, Q_norm=Q_norm, K_norm=K_norm,)
                     case ("chunked", "mqa"):
-                        attn = attn_type.multiquery(D, n_heads, W, self.dtype, attn_init,quantized=self.quantized, use_symmetric=self.symmetric_quant, Q_norm=Q_norm, K_norm=K_norm,)
+                        attn = attn_type.multiquery(D, n_heads, chunk_size, self.dtype, attn_init,quantized=self.quantized, use_symmetric=self.symmetric_quant, Q_norm=Q_norm, K_norm=K_norm,)
                     case ("chunked", invalid):
                         raise ValueError(f"[block {i}] invalid variant of \"{invalid}\". valid variants: {", ".join(ATTN_VARIANT)}")
                     case ("full", "gqa"):
@@ -219,17 +219,15 @@ class Transformer:
                 attn_str = block.attention.self_type()
 
                 if attn_str == "chunked":
-                    W = block.attention.W
-                    assert W is not None, f"[block {idx}] W is None"
-                    W = min(W, T-1)
-                    if block.causal_mask is None or block.causal_mask.shape != (T, W + 1):
+                    chunk_size = block.attention.chunk_size
+                    chunk_size = min(chunk_size, T-1)
+                    if block.causal_mask is None or block.causal_mask.shape != (T, chunk_size + 1):
                         block.causal_mask = block.attention.compute_mask()
                 elif attn_str == "full":
                     if block.causal_mask is None or block.causal_mask.shape != (T, T):
                         block.causal_mask = block.attention.compute_mask(T)
-                elif attn_str == "swa_old":
+                elif attn_str == "swa":
                     W = block.attention.W
-                    assert W is not None, f"[block {idx}] W is None"
                     W = min(W, T-1)
                     if block.causal_mask is None or block.causal_mask.shape != (T, W + 1):
                         block.causal_mask = block.attention.compute_mask(T)

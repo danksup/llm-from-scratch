@@ -32,7 +32,7 @@ tokenizer1 = Tokenizer.load(TOKENIZER_PATH)
 
 session_configs = {
     "epochs":EPOCHS,
-    "max_step":50,
+    "max_step":5,
     "train_split": VAL,
     "max_val_step":1,
     "eval_every":1,

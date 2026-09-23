@@ -6,10 +6,10 @@ from engine.dropout import Dropout
 from engine.moe import MoE
 from engine.rmsnorm import RMSNorm
 
-Attention = attn.AttentionFull | attn.AttentionSWA
+Attention = attn.AttentionFull | attn.AttentionChunked
 
 ATTN_TYPE = {
-    "swa": attn.AttentionSWA,
+    "chunked": attn.AttentionChunked,
     "full": attn.AttentionFull,
 }
 

@@ -7,7 +7,7 @@ from engine.rope import precompute_freqs
 from engine.rmsnorm import RMSNorm
 
 #TODO: do the thing
-class AttentionSWA:
+class AttentionChunked:
     def __init__(self,embed_dim:int, n_heads:int, Q_norm:RMSNorm, K_norm:RMSNorm, n_kv_heads:int=-1, W=8, dtype:Any=nx.float16, initializer:Callable=initializer.glorot_uniform, quantized:bool=False, *,use_symmetric:bool=False, init=True) -> None:
         self.n_kv_heads = n_kv_heads
 
@@ -71,7 +71,7 @@ class AttentionSWA:
 
     @staticmethod
     def self_type() -> str:
-        return "swa"
+        return "chunked"
 
     @classmethod
     def multihead(cls,embed_dim, n_heads, W, dtype, initializer, Q_norm:RMSNorm, K_norm:RMSNorm,*, use_symmetric=False):
@@ -435,7 +435,7 @@ class AttentionSWA:
 
 
     @classmethod
-    def from_weight(cls, configs, weights, quants,attn_QK_gamma, dtype) -> "AttentionSWA":
+    def from_weight(cls, configs, weights, quants,attn_QK_gamma, dtype) -> "AttentionChunked":
         embed_dim, n_kv_heads, n_heads, _, _,W, _ = configs
         wqkv, wo = weights
 
@@ -458,7 +458,7 @@ class AttentionSWA:
     def copy(self):
         Q_norm_copy = self.Q_norm.copy()
         K_norm_copy = self.K_norm.copy()
-        attn_copy = AttentionSWA(self.embed_dim, self.n_heads, Q_norm_copy, K_norm_copy, self.n_kv_heads,self.W, self.dtype, quantized=self.quantized, init=False)
+        attn_copy = AttentionChunked(self.embed_dim, self.n_heads, Q_norm_copy, K_norm_copy, self.n_kv_heads,self.W, self.dtype, quantized=self.quantized, init=False)
         attn_copy.Wqkv = nx.copy(self.Wqkv)
         attn_copy.Wo = nx.copy(self.Wo)
         if self.quantized:

@@ -25,14 +25,14 @@ default_block_configs = {
     "ff_cf":1.25,
     "ff_moe_lambda":1e-2,
     "ff_init":"glorot_uniform",
-    "attn_type":"swa",
+    "attn_type":"chunked",
     "attn_variant":"gqa",
     "attn_n_heads":16,
     "attn_init":"glorot_uniform",
 }
 
 ATTN_TYPE = {
-    "swa": {"attn": attn.AttentionSWA, "attn_windows":32},
+    "chunked": {"attn": attn.AttentionChunked, "attn_chunk_size":32},
     "full": {"attn":attn.AttentionFull,},
 }
 
@@ -134,24 +134,24 @@ class Transformer:
                 ff_init = INITIALIZERS[overrided["ff_init"]]
                 ff_moe_lambda = overrided["ff_moe_lambda"]
 
-                if "attn_windows" in override and override.get("attn_type", None) == "full":
-                    raise ValueError(f"[block {i}] attention type of {attn_type_str} doesn't accept \"attn_windows\"")
+                if "attn_chunk_size" in override and override.get("attn_type", None) == "full":
+                    raise ValueError(f"[block {i}] attention type of {attn_type_str} doesn't accept \"attn_chunk_size\"")
                 n_heads = overrided["attn_n_heads"]
                 attn = None
-                W = overrided.get("attn_windows", None)
+                W = overrided.get("attn_chunk_size", None)
 
                 head_dim = D // n_heads
                 Q_norm = RMSNorm(head_dim)
                 K_norm = RMSNorm(head_dim)
                 match (attn_type_str, attn_variant):
-                    case ("swa", "gqa"):
+                    case ("chunked", "gqa"):
                         n_kv_heads = overrided["attn_n_kv_heads"]
                         attn = attn_type(embed_dim=D, n_heads=n_heads, Q_norm=Q_norm, K_norm=K_norm, n_kv_heads=n_kv_heads, W=W, dtype=self.dtype, initializer=attn_init, quantized=self.quantized, use_symmetric=self.symmetric_quant)
-                    case ("swa", "mha"):
+                    case ("chunked", "mha"):
                         attn = attn_type.multihead(D, n_heads, W, self.dtype, attn_init, quantized=self.quantized, use_symmetric=self.symmetric_quant, Q_norm=Q_norm, K_norm=K_norm,)
-                    case ("swa", "mqa"):
+                    case ("chunked", "mqa"):
                         attn = attn_type.multiquery(D, n_heads, W, self.dtype, attn_init,quantized=self.quantized, use_symmetric=self.symmetric_quant, Q_norm=Q_norm, K_norm=K_norm,)
-                    case ("swa", invalid):
+                    case ("chunked", invalid):
                         raise ValueError(f"[block {i}] invalid variant of \"{invalid}\". valid variants: {", ".join(ATTN_VARIANT)}")
                     case ("full", "gqa"):
                         n_kv_heads = overrided["attn_n_kv_heads"]
@@ -218,7 +218,7 @@ class Transformer:
                 P = nx.array(0.1, dtype=self.dtype)
                 attn_str = block.attention.self_type()
 
-                if attn_str == "swa":
+                if attn_str == "chunked":
                     W = block.attention.W
                     assert W is not None, f"[block {idx}] W is None"
                     W = min(W, T-1)

@@ -63,6 +63,7 @@ logs:
 -  sep 10 2026:
    -  global grad clipping
    -  QKnorm
+- chunked attention sep 23 2026
 
 ## Ongoing:
 - reducing the occurence of intermediate matrix creation as much as possible

@@ -639,4 +639,7 @@ def load(file:Path,/, return_metadata=True):
                 metadata = f.metadata()
             return tensors, metadata
         return load_file(file) #type:ignore
+
+def tril(a, k=0):
+    return _nx.tril(a, k)
 set_seed(seed)

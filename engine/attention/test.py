@@ -71,7 +71,7 @@ class AttentionSWA_OLD:
 
     @staticmethod
     def self_type() -> str:
-        return "swa"
+        return "swa_old"
 
     @classmethod
     def multihead(cls,embed_dim, n_heads, W, dtype, initializer, Q_norm:RMSNorm, K_norm:RMSNorm,*, use_symmetric=False):
@@ -283,8 +283,8 @@ class AttentionSWA_OLD:
 
         return output_projected, cached_k, cached_v
 
-    @staticmethod
-    def compute_mask(W, T):
+    def compute_mask(self, T):
+        W = self.W
         window_idx = nx.arange(W + 1).reshape((1, W + 1))
         time_idx = nx.arange(T).reshape((T, 1))
         padded_position = time_idx + window_idx

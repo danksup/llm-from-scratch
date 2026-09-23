@@ -223,10 +223,17 @@ class Transformer:
                     assert W is not None, f"[block {idx}] W is None"
                     W = min(W, T-1)
                     if block.causal_mask is None or block.causal_mask.shape != (T, W + 1):
-                        block.causal_mask = block.attention.compute_mask(W, T)
+                        block.causal_mask = block.attention.compute_mask()
                 elif attn_str == "full":
                     if block.causal_mask is None or block.causal_mask.shape != (T, T):
                         block.causal_mask = block.attention.compute_mask(T)
+                elif attn_str == "swa_old":
+                    W = block.attention.W
+                    assert W is not None, f"[block {idx}] W is None"
+                    W = min(W, T-1)
+                    if block.causal_mask is None or block.causal_mask.shape != (T, W + 1):
+                        block.causal_mask = block.attention.compute_mask(T)
+
                 attn_params = block.attention.Wqkv, block.attention.Wo, block.attention.Q_norm.gamma, block.attention.K_norm.gamma
                 ff_params = block.ff.Wcombined, block.ff.Wout, block.ff.router
                 scales = (block.attention.scales + block.attention.biases, block.ff.scales + block.ff.biases)

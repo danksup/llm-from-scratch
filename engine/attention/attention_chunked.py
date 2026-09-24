@@ -236,7 +236,7 @@ class AttentionChunked:
 
         dK_l = d_chunked_K[:, :, :, :chunk_size, :]
         dK_r = d_chunked_K[:, :, :, chunk_size:, :]
-        dK_r[:,:,1:, :,:] += dK_l[:,:,:-1,:,:] #B, n_heads, n_chunk, chunk_size, Dh
+        dK_r[:,:,:-1,:,:] += dK_l[:,:,1:,:,:] #B, n_heads, n_chunk, chunk_size, Dh
         dK = dK_r.reshape(B, n_kv_heads, -1, head_dim)[:, :, :T, :] #B, n_kv_heads, T, Dh
         dK = rope_inverse(dK, freqs)
         dK,K_norm_d_gamma = RMSNorm._backward(dK, K_norm_caches, K_norm_gamma)
@@ -244,7 +244,7 @@ class AttentionChunked:
 
         dV_l = d_chunked_V[:, :, :, :chunk_size, :]
         dV_r = d_chunked_V[:, :, :, chunk_size:, :]
-        dV_r[:,:,1:, :,:] += dV_l[:,:,:-1,:,:] #B, n_heads, n_chunk, chunk_size, Dh
+        dV_r[:,:,-1:, :,:] += dV_l[:,:,:1,:,:] #B, n_heads, n_chunk, chunk_size, Dh
         dV = dV_r.reshape(B, n_kv_heads, -1, head_dim)[:, :, :T, :] #B, n_kv_heads, T, Dh
         dV = dV.transpose(0,2,1,3).reshape(B,T, head_dim*n_kv_heads)#B, T, D
 
@@ -329,7 +329,7 @@ class AttentionChunked:
 
     @classmethod
     def from_weight(cls, configs, weights, quants,attn_QK_gamma, dtype) -> "AttentionChunked":
-        embed_dim, n_kv_heads, n_heads, _, _,chunk_size, _ = configs
+        embed_dim, n_kv_heads, n_heads, _, _,chunk_size = configs
         wqkv, wo = weights
 
         Q_norm_gamma,Q_norm_configs, K_norm_gamma, K_norm_configs = attn_QK_gamma

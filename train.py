@@ -15,9 +15,9 @@ from engine.transformer import Transformer
 nx.set_seed(12345)
 
 EPOCHS = 1
-EMBED_DIM = 320
-CONTEXT_SIZE = 1600
-BATCH_SIZE = 5
+EMBED_DIM = 256
+CONTEXT_SIZE = 2048
+BATCH_SIZE = 4
 BASE_WIDTH = 4 * EMBED_DIM
 N_HEADS = 8
 N_KV_HEADS = max(1, N_HEADS // 2)
@@ -32,7 +32,7 @@ tokenizer1 = Tokenizer.load(TOKENIZER_PATH)
 
 session_configs = {
     "epochs":EPOCHS,
-    "max_step":5,
+    "max_step":750,
     "train_split": VAL,
     "max_val_step":1,
     "eval_every":1,
@@ -45,7 +45,7 @@ session_configs = {
         "lr": 1e-3,
         "use_master": True,
         "scheduler": "cosine_decay",
-        "min_lr": 5e-4,
+        "min_lr": 1e-4,
     },
     "save":True,
     "create_checkpoint":True,
@@ -61,7 +61,7 @@ model_configs = {
     "n_blocks":10,
     "embed_dim":EMBED_DIM,
     "dtype": "float16",
-    "gradient_scale":4096,
+    "gradient_scale":1024,
     "vocab_size": len(tokenizer1.vocab),
     "quantized":False, #here can be True, "symmetric", False
     "check_non_finite":True,
@@ -71,9 +71,9 @@ model_configs = {
         "ff_topk":TOP_K,
         "ff_cf":CF,
         "ff_init":"glorot_uniform",
-        "ff_moe_lambda":1e-2,
+        "ff_moe_lambda":1e-3,
         "attn_type":"chunked",
-        "attn_chunk_size":CONTEXT_SIZE//4,
+        "attn_chunk_size":CONTEXT_SIZE//8,
         "attn_variant":"gqa",
         "attn_n_heads":N_HEADS,
         "attn_n_kv_heads":N_KV_HEADS,

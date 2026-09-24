@@ -107,8 +107,12 @@ class AttentionChunked:
 
         Q, Q_norm_caches = RMSNorm._forward(Q, Q_norm_gamma, 1e-5)
         K, K_norm_caches = RMSNorm._forward(K, K_norm_gamma, 1e-5)
+        # print("Q prerope", Q.dtype)
+        # print("K prerope", K.dtype)
         Q = rope_forward(Q, freqs)
         K = rope_forward(K, freqs)
+        # print("Q postrope", Q.dtype)
+        # print("K postrope", K.dtype)
 
         remainder = (chunk_size - (T % chunk_size)) % chunk_size
         pad = [(0,0), (0,0), (0, remainder), (0,0)]
@@ -125,9 +129,15 @@ class AttentionChunked:
 
         preprendix = nx.concatenate([front,K[:,:,:-1,:,:]], axis=2)
         K_chunked = nx.concatenate([preprendix, K], axis=3) #(B, n_kv_heads, n_chunk, 2W, head_dim)
+        # print("kchunked", K_chunked.dtype)
 
         preprendix = nx.concatenate([front,V[:,:,:-1,:,:]], axis=2)
         V_chunked = nx.concatenate([preprendix, V], axis=3)  #(B, n_kv_heads, n_chunk, 2W, head_dim)
+        # print("vchunked", V_chunked.dtype)
+
+        Q = Q.astype(x.dtype)
+        K_chunked = K_chunked.astype(x.dtype)
+        V_chunked = V_chunked.astype(x.dtype)
 
         repeats = n_heads // n_kv_heads
         K_chunked_repeat = nx.repeat(K_chunked, repeats, axis=1)  #(B, n_heads, n_chunk, 2W, head_dim)
@@ -143,17 +153,25 @@ class AttentionChunked:
         output_unchunked = output.reshape(B,n_heads,-1,head_dim) #(B, n_heads, n_chunk * 2WQ, Dh)
         output_unchunked = output_unchunked[:,:,:T,:] #(B, n_heads, T, Dh)
         output_unchunked = output_unchunked.transpose(0,2,1,3).reshape(B,T,-1)
-    
+        # print("output", output.dtype)
+        # print("weights", weights.dtype)
+        # print("vchunkedrepeat", V_chunked_repeat.dtype)
+
         if wo_scale is not None:
             output_projected = nx.quantized_matmul(output_unchunked, Wo, wo_scale, wo_bias, regular=use_symmetric) #B,T,D #dtype
         else:
             output_projected = output_unchunked @ Wo
         cache = (x, Q, K_chunked, V_chunked, Q_norm_caches,K_norm_caches, weights_softmax, output_unchunked)
+        # print("projected chunked", output_projected.dtype)
+        # print("output unchunked chunked", output_unchunked.dtype)
+        # print("Wo chunked", Wo.dtype)
         return output_projected, cache
 
     @staticmethod
     def _backward(gradient:nx.ArrayLike, caches:tuple[Any,...], attn_configs:tuple[Any,...], attn_params: tuple[Any,...], quantization, * , use_symmetric=False) :#-> tuple[nx.ArrayLike,...]:
         x, Q, K_chunked, V_chunked, Q_norm_caches,K_norm_caches, weights_softmax, output_unchunked = caches
+        # print("chunked x", x.dtype)
+        # print("chunked gradient",gradient.dtype)
         embed_dim, n_kv_heads, n_heads, n_rep, head_dim, chunk_size, freqs = attn_configs
         Wqkv, Wo, Q_norm_gamma, K_norm_gamma = attn_params
 
@@ -204,6 +222,7 @@ class AttentionChunked:
 
         Q = Q.reshape(B, n_kv_heads, n_rep, n_chunk, chunk_size, head_dim)
         d_chunked_K = d_scores.transpose(0,1,2,3,5,4) @ Q
+        # print("d_chunked",d_chunked_K.dtype)
         d_chunked_K = nx.sum(d_chunked_K, 2)
 
         # nx.eval(d_chunked_K)
@@ -234,6 +253,8 @@ class AttentionChunked:
 
         X = x.reshape(-1, embed_dim)
         dWqkv = DQKV.T @ X
+        # print("dwqkv",dWqkv.dtype)
+        # print("X", X.dtype)
 
         H = output_unchunked.reshape(-1, embed_dim)
         G = gradient.reshape(-1, embed_dim)

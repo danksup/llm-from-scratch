@@ -125,12 +125,15 @@ class AttentionFull:
         else:
             output_projected = output_concat @ Wo
 
+        # print("projected", output_projected.dtype)
         cache =  (x, Q, Q_norm_caches, K, K_norm_caches, V, weights, output_concat)
         return output_projected, cache
 
     @staticmethod
     def _backward(gradient:nx.ArrayLike, caches:tuple[Any,...], attn_configs:tuple[Any,...], attn_params: tuple[Any,...], quantization:tuple[Any,...]|None=None,  *, use_symmetric:bool=False) -> tuple[nx.ArrayLike,...]:
         x, Q,Q_norm_caches, K,K_norm_caches, V, weights, output_concat = caches
+        # print("full x", x.dtype)
+        # print("full gradient",gradient.dtype)
         embed_dim, n_kv_heads, n_heads, n_rep, head_dim, freqs = attn_configs
         Wqkv, Wo, Q_norm_gamma, K_norm_gamma = attn_params
 
@@ -187,7 +190,7 @@ class AttentionFull:
         else:
             dx = dQKV @ Wqkv
 
-        # print("dx", dx.dtype)
+        # print("full dx", dx.dtype)
         del x, output_concat, freqs, Wqkv, Wo
         return dx,dWqkv,dWo,Q_norm_d_gamma,K_norm_d_gamma
 

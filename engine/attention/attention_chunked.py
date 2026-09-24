@@ -5,6 +5,7 @@ from typing import Any, Callable
 import engine.initializers as initializer
 from engine.rope import precompute_freqs
 from engine.rmsnorm import RMSNorm
+import time
 
 #TODO: do the thing
 class AttentionChunked:
@@ -178,18 +179,36 @@ class AttentionChunked:
         n_chunk = d_output_padded.shape[2] // chunk_size
         d_output_chunked = d_output_padded.reshape(B, n_heads, n_chunk, chunk_size, head_dim)
 
-        d_output_chunked = d_output_chunked.reshape(B, n_kv_heads,n_rep,n_chunk, chunk_size, head_dim)
+        d_output_chunked = d_output_chunked.reshape(B, n_kv_heads, n_rep,n_chunk, chunk_size, head_dim)
 
         d_weights = nx.einsum("bkrcwd,bkcxd->bkrcwx", d_output_chunked, V_chunked)
 
-        d_chunked_V = nx.einsum("bkrcwx,bkrcwd->bkcxd", weights_softmax.astype(gradient.dtype).reshape(B,n_kv_heads,n_rep, n_chunk, chunk_size, 2*chunk_size), d_output_chunked)
+        # a = time.perf_counter()
+        # d_chunked_V = nx.einsum("bkrcwx,bkrcwd->bkcxd", weights_softmax.astype(gradient.dtype).reshape(B,n_kv_heads,n_rep, n_chunk, chunk_size, 2*chunk_size), d_output_chunked)
+
+        weights_softmax_6d = weights_softmax.astype(gradient.dtype).reshape(B, n_kv_heads,n_rep, n_chunk, chunk_size, 2*chunk_size)
+        d_chunked_V = weights_softmax_6d.transpose(0,1,2,3,5,4) @ d_output_chunked
+        d_chunked_V = nx.sum(d_chunked_V, 2)
+        # nx.eval(d_chunked_V)
+        # b = time.perf_counter()
+        # print(f"{b-a:.5f}")
+
         d_scores = softmax_derivative(weights_softmax, d_weights.reshape(B, -1, n_chunk, chunk_size, 2*chunk_size).astype(nx.float32))  / nx.sqrt(head_dim, dtype=nx.float32) #(B, n_heads, n_chunk, chunk_size, 2W) #type:ignore
         d_scores = d_scores.astype(gradient.dtype)
         d_scores = d_scores.reshape(B,n_kv_heads,n_rep,n_chunk,chunk_size,2*chunk_size)
 
         dQ = nx.einsum("bkrcwx,bkcxd->bkrcwd", d_scores, K_chunked).reshape(B, n_heads, -1, head_dim) #B, n_heads, T + remainder, head_dim
-        
-        d_chunked_K = nx.einsum("bkrcwx,bkrcwd->bkcxd", d_scores, Q.reshape(B, n_kv_heads, n_rep, n_chunk, chunk_size, head_dim))
+
+        # a = time.perf_counter()
+        # d_chunked_K = nx.einsum("bkrcwx,bkrcwd->bkcxd", d_scores, Q.reshape(B, n_kv_heads, n_rep, n_chunk, chunk_size, head_dim))
+
+        Q = Q.reshape(B, n_kv_heads, n_rep, n_chunk, chunk_size, head_dim)
+        d_chunked_K = d_scores.transpose(0,1,2,3,5,4) @ Q
+        d_chunked_K = nx.sum(d_chunked_K, 2)
+
+        # nx.eval(d_chunked_K)
+        # b = time.perf_counter()
+        # print(f"{b-a:.5f}")
 
         dQ = dQ[:,:,:T,:] #B, n_heads, T, head_dim
         dQ = rope_inverse(dQ, freqs)

@@ -283,15 +283,14 @@ class Session:
                         print(f"step: {step_counter} validating\033[K",                                                                                   end="\r")
                         val_loss = self.transformer.validate(dataloader, self.configs["max_val_step"])
                        
-
-                        if val_loss is not None and val_loss > best_val_loss:
+                        if val_loss is not None and val_loss < best_val_loss:
                             best_val_loss = val_loss
                             best_val_loss_step = step_counter
                             if self.configs["create_checkpoint"]:
                                 flag_to_check_if_validate_checkpoint_crash_with_regular_checkpoint = True
                                 self.save(f"checkpoint_best_{self.session_id}")
                         else:
-                            if prev_val_loss is not None and val_loss < prev_val_loss:
+                            if prev_val_loss is not None and val_loss > prev_val_loss:
                                 self.logger.warn(f"step: {step_counter}: validation becomes worse: best(step {best_val_loss_step}): {best_val_loss} | prev val loss: {prev_val_loss} | val:{val_loss}", category=UserWarning)
 
                         prev_val_loss = val_loss

@@ -257,7 +257,7 @@ class Session:
                 assert self.optimizer, "optimizer doesnt exist"
                 train = self.transformer.train(dataloader, self.optimizer, self.configs["epochs"], max_step=self.configs["max_step"], eval_every=self.configs["eval_every"], microbatch_size=self.configs["microbatch_size"])
 
-                final_loss = nx.float_32(0.0)
+                final_loss = 0.0
                 total_histograms = None
                 total_steps = 0
                 val_loss = None
@@ -278,7 +278,7 @@ class Session:
 
                     if dataloader.validation_files and validate_every > 0 and step_counter >= next_validate_step:
                         next_validate_step += validate_every
-                        print(f"step: {step_counter} validating", end="\r")
+                        print(f"step: {step_counter} validating\033[K",                                                                                   end="\r")
                         val_loss = self.transformer.validate(dataloader, self.configs["max_val_step"])
 
                         if val_loss is not None and val_loss < best_val_loss:
@@ -296,7 +296,8 @@ class Session:
                             continue
                         self.save(f"checkpoint_latest_{self.session_id}")
 
-                    print(f"step: {step_counter} | loss: {final_loss/counts:.5f}                                            ",end="\r" )
+                    val_print = f"val loss (step: {next_validate_step - validate_every}): {val_loss if val_loss is not None else "-"}"
+                    print(f"step: {step_counter} | loss: {final_loss/counts:.5f} | {val_print if val_loss is not None else ""}\033[K",end="\r" )
 
                 if total_histograms is not None:
                     for histo_idx in range(len(total_histograms)):

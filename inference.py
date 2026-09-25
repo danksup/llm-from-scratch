@@ -10,16 +10,16 @@ import random
 nx.set_seed(random.randrange(0,99999))
 
 tokenizer = Tokenizer.load("artifacts/tokenizer/tokenizer32768_1624612680len.tokenizer")
-session_path = "artifacts/sessions/session_73295104_param_1_epochs_weights_only_a494d6a8-0004-40d2-858c-f87dafa2f2da.safetensors"
+session_path = "artifacts/sessions/session_keyboardinterrupt_save_00993df7-27e1-43c1-895e-238469043c68.safetensors"
 
 session = Session.load(session_path, tokenizer)
-context = "i jsut wanna keep calling your name"
+context = "tokka ekko"
 print(f"input: {context}")
 context = nx.array(tokenizer.encode(context), nx.uint32)
 
 context = context.reshape(-1, context.shape[0])
 
-TEMPERATURE = -.10
+TEMPERATURE = 0.5
 TOP_K = 30
 TOP_P = .8
 N = 100

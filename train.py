@@ -23,7 +23,7 @@ N_HEADS = 8
 N_KV_HEADS = max(1, N_HEADS // 2)
 N_EXPERTS = 8
 CF = 1.25
-VAL = 1
+VAL = .9
 TOP_K = 2
 
 CORPUS_PATH = "artifacts/dataloader"
@@ -32,11 +32,11 @@ tokenizer1 = Tokenizer.load(TOKENIZER_PATH)
 
 session_configs = {
     "epochs":EPOCHS,
-    "max_step":750,
+    "max_step":100,
     "train_split": VAL,
-    "max_val_step":1,
+    "max_val_step":1000,
     "eval_every":1,
-    "validate_every":0,
+    "validate_every":5,
     "context_size": CONTEXT_SIZE,
     "batch_size": BATCH_SIZE,
     "microbatch_size":32,
@@ -48,6 +48,7 @@ session_configs = {
         "min_lr": 1e-4,
     },
     "save":True,
+    "error_save":True,
     "create_checkpoint":True,
     "checkpoint_every":100,
     "weights_only": True,
@@ -61,7 +62,7 @@ model_configs = {
     "n_blocks":10,
     "embed_dim":EMBED_DIM,
     "dtype": "float16",
-    "gradient_scale":1024,
+    "gradient_scale":1,
     "vocab_size": len(tokenizer1.vocab),
     "quantized":False, #here can be True, "symmetric", False
     "check_non_finite":True,

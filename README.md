@@ -72,6 +72,7 @@ logs:
 
 ## TODO (not in order):
 - moe noise
+- LoRa
 - inference optimization 
 - conversation memory
   

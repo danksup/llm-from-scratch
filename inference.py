@@ -10,10 +10,10 @@ import random
 nx.set_seed(random.randrange(0,99999))
 
 tokenizer = Tokenizer.load("artifacts/tokenizer/tokenizer32768_1624612680len.tokenizer")
-session_path = "artifacts/sessions/session_keyboardinterrupt_save_00993df7-27e1-43c1-895e-238469043c68.safetensors"
+session_path = "artifacts/sessions/session_73295104_param_1_epochs_weights_only_1dcb2ebe-ba0b-406d-a460-60877860408d.safetensors"
 
 session = Session.load(session_path, tokenizer)
-context = "tokka ekko"
+context = "Who are you?"
 print(f"input: {context}")
 context = nx.array(tokenizer.encode(context), nx.uint32)
 

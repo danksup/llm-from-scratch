@@ -11,10 +11,9 @@ from engine.dataloader import DataLoader
 from engine.embedding import Embedding
 from engine.losses import cross_entropy, cross_entropy_gradient
 from engine.transformer_block import TransformerBlock
-from helper.singleton import sleep, colorize
-import warnings
 from helper.logger import Logger
 from helper.validate_and_raise import validate_choice
+import time
 
 optimizers = optim.Adam | optim.AdamW | optim.SGD
 
@@ -183,20 +182,26 @@ class Transformer:
     def __str__(self) -> str:
         return self.get_configs_str()
 
-    def count_params(self) -> int:
+    def count_params(self, dense=False) -> Any:
         """
         whole architecture number of (trainable) params
         """
         total = 0
+        total_dense = 0
         for i in self.blocks:
             total += i.count_param(quantized=self.quantized, use_symmetric=self.symmetric_quant)
+            total_dense += i.count_param(dense=True, quantized=self.quantized, use_symmetric=self.symmetric_quant)
 
         embedding_size = self.embedding.lookup_table.size
         if self.quantized and not self.symmetric_quant:
             embedding_size *= 4
+
         total += embedding_size
+        total_dense += embedding_size
+
         total += self.rmsnorm_final.gamma.size
-        return total
+        total_dense += self.rmsnorm_final.gamma.size
+        return total, total_dense
 
     def forward(self, inputs:Any, return_cache= True, is_training=True) -> Any:
         '''
@@ -286,10 +291,10 @@ class Transformer:
             attn_configs = block.attention.configs
             attn_params = block.attention.Wqkv, block.attention.Wo, block.attention.Q_norm.gamma, block.attention.K_norm.gamma
             scales = (block.attention.scales + block.attention.biases, block.ff.scales + block.ff.biases)
+
             dx, dWout, dWcombined, d_router, dWqkv, dWo, d_gamma1, d_gamma2,Q_norm_d_gamma, K_norm_d_gamma = block._backward(current_grad, mask1=mask1, mask2=mask2, p=P, attention=attn_str,
                                                                 caches_attn=caches_attn, caches_ff=caches_ff, caches_rmsnorm1=caches_rmsnorm1, caches_rmsnorm2=caches_rmsnorm2,
                                                                 attn_configs = attn_configs, attn_params=attn_params, gamma1=block.rmsnorm1.gamma, gamma2=block.rmsnorm2.gamma, ff_params=ff_params, moe_configs=moe_configs, gradient_scale=self.gradient_scale, quantization=scales, use_symmetric=self.symmetric_quant)
-
 
             block.ff.dWout += dWout
             block.ff.dWcombined += dWcombined
@@ -571,9 +576,11 @@ class Transformer:
                     del dWqkv, dWo, dWcombined, dWout, d_router, d_gamma1, d_gamma2
                     block.zeroes_gradient()
 
-                lookup_table = self.embedding.lookup_table.astype(nx.float32)
                 if self.quantized:
                     lookup_table = nx.dequantize(lookup_table, self.embedding.table_scale, self.embedding.bias, regular=self.symmetric_quant)
+                else:
+                    lookup_table = self.embedding.lookup_table.astype(nx.float32)
+
                 all_network_params.extend([("embedding",lookup_table, self.embedding.d_lookup_table / microbatch_size * gscale, False)])
 
                 if getattr(self.rmsnorm_final, "d_gamma", None) is not None:

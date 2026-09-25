@@ -51,7 +51,7 @@ class MoE:
         self.dWcombined = nx.zeros_like(self.dWcombined)
         self.dWout = nx.zeros_like(self.dWout)
         self.d_router = nx.zeros_like(self.d_router, dtype=nx.float32)
-
+    
     @staticmethod
     def forward(x:nx.ArrayLike, ff_configs, ff_params, quantization:tuple[Any,...]|None=None, *, use_symmetric:bool=False):
         #routing

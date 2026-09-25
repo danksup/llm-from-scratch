@@ -165,7 +165,9 @@ class Session:
             self.optimizer = init_optimizer
 
     def __str__(self) -> str:
-        t_mess = f"param: {self.transformer.count_params()} \n"
+        param_count, dense_count = self.transformer.count_params()
+        params = f"param: {param_count}(dense: {dense_count})\n"
+        t_mess = f"param: {params} \n"
         configs_str = copy.deepcopy(self.configs)
         if self.configs["train_split"] == 1 or self.configs["validate_every"] == 0:
             configs_str["validate_every"] = f"validation is disabled"
@@ -196,7 +198,8 @@ class Session:
 
     def mini_info(self) -> str:
         info = ""
-        info += f"param: {self.transformer.count_params()}\n"
+        param_count, dense_count = self.transformer.count_params()
+        info += f"param: {param_count}(dense: {dense_count})\n"
         info += f"using: {nx.using_backend()}\n"
         info += "precision: full (float32)\n" if self.transformer.dtype == nx.float32 else f"precision: mixed precision ({self.transformer.dtype})\n"
 

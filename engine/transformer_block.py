@@ -5,7 +5,6 @@ import engine.backend as nx
 from engine.dropout import Dropout
 from engine.moe import MoE
 from engine.rmsnorm import RMSNorm
-
 Attention = attn.AttentionFull | attn.AttentionChunked
 
 ATTN_TYPE = {
@@ -37,22 +36,26 @@ class TransformerBlock:
         # this_str = f""
         return str(this)
 
-    def count_param(self, *, quantized=False, use_symmetric=False) -> int:
+    def count_param(self, dense=False, *, quantized=False, use_symmetric=False) -> int:
         total = 0
+        ff_params = 0
         if quantized and nx.backend == "MLX" and not use_symmetric:
-            total += self.ff.Wcombined.size * 4
-            total += self.ff.Wout.size * 4
+            ff_params += self.ff.Wcombined.size * 4
+            ff_params += self.ff.Wout.size * 4
             total += self.attention.Wqkv.size * 4
             total += self.attention.Wo.size * 4
         else:
-            total += self.ff.Wcombined.size
-            total += self.ff.Wout.size
+            ff_params += self.ff.Wcombined.size
+            ff_params += self.ff.Wout.size
             total += self.attention.Wqkv.size
             total += self.attention.Wo.size
 
+        total += ff_params // self.ff.n_experts if dense else ff_params
         total += self.ff.router.size
         total += self.rmsnorm1.gamma.size
         total += self.rmsnorm2.gamma.size
+        total += self.attention.Q_norm.gamma.size
+        total += self.attention.K_norm.gamma.size
         return total
 
     @staticmethod
@@ -83,6 +86,7 @@ class TransformerBlock:
     @nx.compile
     def _backward(gradient:Any, mask1:Any, mask2:Any, attention:str, p, caches_attn:tuple[Any,...], caches_ff:tuple[Any,...], caches_rmsnorm1:tuple[Any,...], caches_rmsnorm2:tuple[Any,...], attn_configs:tuple[Any,...], attn_params:tuple[Any,...], gamma1:Any, gamma2:Any, ff_params:tuple, moe_configs,gradient_scale, quantization:tuple[Any,...]|None=None, *, use_symmetric:bool=False) -> tuple[Any, Any, Any, Any, Any, Any, Any, Any,Any, Any]:
         d_ff_drop = Dropout._backward(gradient, mask2, p) #grad dtype
+
         dx_ff,  dWcombined, dWout, d_router = MoE.backward(d_ff_drop, caches_ff, moe_configs, ff_params,gradient_scale, quantization[1], use_symmetric=use_symmetric) #out:fp32 #type:ignore
 
         d_rmsn2,d_gamma2 = RMSNorm._backward(dx_ff, caches_rmsnorm2 ,gamma2)
@@ -91,6 +95,7 @@ class TransformerBlock:
 
         d_attn_out = d_attn_out.astype(gradient.dtype)
         d_attn_drop = Dropout._backward(d_attn_out, mask1, p)
+
         d_attn, dWqkv, dWo, Q_norm_d_gamma, K_norm_d_gamma = ATTN_TYPE[attention]._backward(d_attn_drop, caches_attn, attn_configs, attn_params, quantization[0], use_symmetric=use_symmetric) #type:ignore
 
         d_attn = d_attn.astype(nx.float32)

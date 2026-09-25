@@ -50,10 +50,10 @@ class Logger:
         match action:
             case "warn":
                 action_type = "WARN"
-                action_msg = f"{action_type}: {category.__qualname__}"
+                action_msg = f"{action_type}: {category.__qualname__}" #type:ignore
             case 'raise':
                 action_type = "ERROR"
-                action_msg = f"{action_type}: {category.__qualname__}"
+                action_msg = f"{action_type}: {category.__qualname__}" #type:ignore
             case 'info':
                 action_type = action_msg = 'INFO'
 

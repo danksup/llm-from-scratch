@@ -261,6 +261,8 @@ class Session:
                 total_histograms = None
                 total_steps = 0
                 val_loss = None
+                prev_val_loss = None
+                best_val_loss_step = None
                 next_validate_step = validate_every
                 next_checkpoint = checkpoint_every
                 counts = 0
@@ -280,15 +282,19 @@ class Session:
                         next_validate_step += validate_every
                         print(f"step: {step_counter} validating\033[K",                                                                                   end="\r")
                         val_loss = self.transformer.validate(dataloader, self.configs["max_val_step"])
+                       
 
-                        if val_loss is not None and val_loss < best_val_loss:
+                        if val_loss is not None and val_loss > best_val_loss:
                             best_val_loss = val_loss
+                            best_val_loss_step = step_counter
                             if self.configs["create_checkpoint"]:
                                 flag_to_check_if_validate_checkpoint_crash_with_regular_checkpoint = True
                                 self.save(f"checkpoint_best_{self.session_id}")
                         else:
-                            self.logger.warn(f"step: {step_counter}: validation becomes worse: best: {best_val_loss} | val:{val_loss}", category=UserWarning)
+                            if prev_val_loss is not None and val_loss < prev_val_loss:
+                                self.logger.warn(f"step: {step_counter}: validation becomes worse: best(step {best_val_loss_step}): {best_val_loss} | prev val loss: {prev_val_loss} | val:{val_loss}", category=UserWarning)
 
+                        prev_val_loss = val_loss
                     if self.configs["create_checkpoint"] and checkpoint_every > 0 and step_counter >= next_checkpoint:
                         next_checkpoint += checkpoint_every
                         if flag_to_check_if_validate_checkpoint_crash_with_regular_checkpoint:
@@ -386,7 +392,6 @@ class Session:
             if hist_res == "":
                 hist_res = None
             self.logger.error(msg_res, hist_res, e)
-
 
     def inference(self, context:Any, temperature=0.8, top_k=3, top_p=0.9, n=100, mem_size=16, penalty:float=.05) -> Any:
         if temperature < 0:

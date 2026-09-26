@@ -78,7 +78,7 @@ class AttentionFull:
         return mqa
 
     @staticmethod
-    def compute_weights(causal_mask, Q,K, dtype):
+    def compute_weights(causal_mask, head_dim, Q, K, dtype):
         scores = nx.einsum("bkrQh,bkKh->bkrQK",Q, K) #(B, n_kv_heads, n_rep, Tq, Tk)
 
         scores = scores.astype(nx.float32) / nx.sqrt(head_dim, dtype=nx.float32) #type:ignore
@@ -119,7 +119,7 @@ class AttentionFull:
         K = rope_forward(K, freqs)
 
         Q = Q.reshape(B,n_kv_heads, n_rep, T, head_dim)
-        weights = AttentionFull.compute_weights(causal_mask, Q, K, x.dtype)
+        weights = AttentionFull.compute_weights(causal_mask, head_dim, Q, K, x.dtype)
 
         output = nx.einsum("bkrQK,bkKh->bkrQh",weights, V) #(B, n_kv_heads, n_rep, Tq, Dh)
 
@@ -131,7 +131,6 @@ class AttentionFull:
         else:
             output_projected = output_concat @ Wo
 
-        # print("projected", output_projected.dtype)
         if not recompute_activation:
             cache =  (x, Q, Q_norm_caches, K, K_norm_caches, V, weights, output_concat)
         else:
@@ -150,10 +149,7 @@ class AttentionFull:
             x, Q,Q_norm_caches, K,K_norm_caches, V, weights, output_concat = caches
         else:
             x, Q,Q_norm_caches, K,K_norm_caches, V, output_concat, causal_mask = caches
-            weights = AttentionFull.compute_weights(causal_mask, Q, K, x.dtype)
-
-        # print("full x", x.dtype)
-        # print("full gradient",gradient.dtype)
+            weights = AttentionFull.compute_weights(causal_mask,head_dim, Q, K, x.dtype)
 
         B, T, _ = x.shape
 
@@ -206,11 +202,9 @@ class AttentionFull:
         else:
             dx = dQKV @ Wqkv
 
-        # print("full dx", dx.dtype)
         del x, output_concat, freqs, Wqkv, Wo
         return dx,dWqkv,dWo,Q_norm_d_gamma,K_norm_d_gamma
 
-    #TODO:compiled, dtype fix, quantization
     def inference_forward(self, x, max_cache_len, freqs, quantization, cached_k=None, cached_v=None, position = 0,  *, use_symmetric:bool=False):
         wqkv_scale, wo_scale, wqkv_bias, wo_bias = quantization #type:ignore
         if wqkv_scale is not None:

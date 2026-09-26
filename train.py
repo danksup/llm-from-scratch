@@ -32,7 +32,7 @@ tokenizer1 = Tokenizer.load(TOKENIZER_PATH)
 
 session_configs = {
     "epochs":EPOCHS,
-    "max_step":50,
+    "max_step":5,
     "train_split": VAL,
     "max_val_step":1000,
     "eval_every":1,
@@ -74,7 +74,7 @@ model_configs = {
         "ff_cf":CF,
         "ff_init":"glorot_uniform",
         "ff_moe_lambda":1e-3,
-        "attn_type":"chunked",
+        "attn_type":"full",
         "attn_chunk_size":CONTEXT_SIZE//8,
         "attn_variant":"gqa",
         "attn_n_heads":N_HEADS,

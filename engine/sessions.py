@@ -214,10 +214,7 @@ class Session:
         info += "precision: full (float32)\n" if self.transformer.dtype == nx.float32 else f"precision: mixed precision ({self.transformer.dtype})\n"
 
         if self.optimizer is not None :
-            if self.optimizer.scheduler is not None and self.optimizer.min_lr is not None:
-                info += f"optimizer: max_lr: {self.optimizer.init_lr:.7f} | scheduler: {(self.optimizer.scheduler.str_name())} | min_lr: {self.optimizer.min_lr:.7f}\n" #type:ignore
-            else:
-                info += f"optimizer: max_lr: {self.optimizer.init_lr:.7f}"
+            info += f"optimizer: {self.configs["optimizer"]}\n"
 
         for key,val in self.transformer.configs.items():
             if key in ["check_non_finite", "quantized"]:

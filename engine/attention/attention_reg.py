@@ -78,7 +78,19 @@ class AttentionFull:
         return mqa
 
     @staticmethod
-    def _forward(x:nx.ArrayLike, causal_mask:nx.ArrayLike,  attn_configs:tuple[Any,...], attn_params: tuple[Any,...], quantization,  *, use_symmetric:bool=False) -> tuple[nx.ArrayLike, tuple[nx.ArrayLike,...]]:
+    def compute_weights(causal_mask, Q,K, dtype):
+        scores = nx.einsum("bkrQh,bkKh->bkrQK",Q, K) #(B, n_kv_heads, n_rep, Tq, Tk)
+
+        scores = scores.astype(nx.float32) / nx.sqrt(head_dim, dtype=nx.float32) #type:ignore
+        scores = nx.where(causal_mask, -1e9, scores)
+
+        weights = nx.softmax(scores)
+        weights = weights.astype(dtype)
+
+        return weights
+
+    @staticmethod
+    def _forward(x:nx.ArrayLike, causal_mask:nx.ArrayLike,  attn_configs:tuple[Any,...], attn_params: tuple[Any,...], quantization,  *, use_symmetric:bool=False, recompute_activation=True) -> tuple[nx.ArrayLike, tuple[nx.ArrayLike,...]]:
         #fp_16_x shape = (B,T,D)
         #Wqkv.T (D, D + 2 * n_kv_heads * H)
         #combined (B, T, D + 2 * n_kv_heads * H)
@@ -107,13 +119,7 @@ class AttentionFull:
         K = rope_forward(K, freqs)
 
         Q = Q.reshape(B,n_kv_heads, n_rep, T, head_dim)
-        scores = nx.einsum("bkrQh,bkKh->bkrQK",Q, K) #(B, n_kv_heads, n_rep, Tq, Tk)
-
-        scores = scores.astype(nx.float32) / nx.sqrt(head_dim, dtype=nx.float32) #type:ignore
-        scores = nx.where(causal_mask, -1e9, scores)
-
-        weights = nx.softmax(scores)
-        weights = weights.astype(x.dtype)
+        weights = AttentionFull.compute_weights(causal_mask, Q, K, x.dtype)
 
         output = nx.einsum("bkrQK,bkKh->bkrQh",weights, V) #(B, n_kv_heads, n_rep, Tq, Dh)
 
@@ -126,18 +132,28 @@ class AttentionFull:
             output_projected = output_concat @ Wo
 
         # print("projected", output_projected.dtype)
-        cache =  (x, Q, Q_norm_caches, K, K_norm_caches, V, weights, output_concat)
+        if not recompute_activation:
+            cache =  (x, Q, Q_norm_caches, K, K_norm_caches, V, weights, output_concat)
+        else:
+            cache =  (x, Q, Q_norm_caches, K, K_norm_caches, V, output_concat, causal_mask)
+
         return output_projected, cache
 
     @staticmethod
-    def _backward(gradient:nx.ArrayLike, caches:tuple[Any,...], attn_configs:tuple[Any,...], attn_params: tuple[Any,...], quantization:tuple[Any,...]|None=None,  *, use_symmetric:bool=False) -> tuple[nx.ArrayLike,...]:
-        x, Q,Q_norm_caches, K,K_norm_caches, V, weights, output_concat = caches
-        # print("full x", x.dtype)
-        # print("full gradient",gradient.dtype)
+    def _backward(gradient:nx.ArrayLike, caches:tuple[Any,...], attn_configs:tuple[Any,...], attn_params: tuple[Any,...], quantization:tuple[Any,...]|None=None,  *, use_symmetric:bool=False, recompute_activation=True) -> tuple[nx.ArrayLike,...]:
         embed_dim, n_kv_heads, n_heads, n_rep, head_dim, freqs = attn_configs
         Wqkv, Wo, Q_norm_gamma, K_norm_gamma = attn_params
 
         wqkv_scale, wo_scale, wqkv_bias, wo_bias = quantization #type:ignore
+
+        if not recompute_activation:
+            x, Q,Q_norm_caches, K,K_norm_caches, V, weights, output_concat = caches
+        else:
+            x, Q,Q_norm_caches, K,K_norm_caches, V, output_concat, causal_mask = caches
+            weights = AttentionFull.compute_weights(causal_mask, Q, K, x.dtype)
+
+        # print("full x", x.dtype)
+        # print("full gradient",gradient.dtype)
 
         B, T, _ = x.shape
 

@@ -84,8 +84,17 @@ class AttentionChunked:
         return mqa
 
     @staticmethod
-    def _forward(x:nx.ArrayLike, causal_mask:nx.ArrayLike, configs:tuple[Any,...], params:tuple[Any,...], quantization, *, use_symmetric=False):
-        embed_dim, n_kv_heads, n_heads, _, head_dim, chunk_size, freqs = configs
+    def compute_weights_softmax(causal_mask, head_dim, Q, K_chunked, n_repeats):
+        K_chunked_repeat = nx.repeat(K_chunked, n_repeats, axis=1)  #(B, n_heads, n_chunk, 2W, head_dim)
+        scores = Q @ K_chunked_repeat.transpose(0,1,2,4,3) #(B, n_heads, n_chunk, WQ, 2WK)
+        scores = scores.astype(nx.float32) /  nx.sqrt(head_dim, dtype=nx.float32)
+        scores = nx.where(causal_mask == 0, -1e9, scores)
+        weights_softmax = nx.softmax(scores)
+        return weights_softmax
+
+    @staticmethod
+    def _forward(x:nx.ArrayLike, causal_mask:nx.ArrayLike, configs:tuple[Any,...], params:tuple[Any,...], quantization, *, use_symmetric=False, recompute_activation=True):
+        embed_dim, n_kv_heads, n_heads, n_rep, head_dim, chunk_size, freqs = configs
         Wqkv, Wo, Q_norm_gamma, K_norm_gamma = params
 
         wqkv_scale, wo_scale, wqkv_bias, wo_bias = quantization
@@ -139,14 +148,9 @@ class AttentionChunked:
         K_chunked = K_chunked.astype(x.dtype)
         V_chunked = V_chunked.astype(x.dtype)
 
-        repeats = n_heads // n_kv_heads
-        K_chunked_repeat = nx.repeat(K_chunked, repeats, axis=1)  #(B, n_heads, n_chunk, 2W, head_dim)
-        V_chunked_repeat = nx.repeat(V_chunked, repeats, axis=1)  #(B, n_heads, n_chunk, 2W, head_dim)
+        V_chunked_repeat = nx.repeat(V_chunked, n_rep, axis=1)  #(B, n_heads, n_chunk, 2W, head_dim)
 
-        scores = Q @ K_chunked_repeat.transpose(0,1,2,4,3) #(B, n_heads, n_chunk, WQ, 2WK)
-        scores = scores.astype(nx.float32) /  nx.sqrt(head_dim, dtype=nx.float32)
-        scores = nx.where(causal_mask == 0, -1e9, scores)
-        weights_softmax = nx.softmax(scores)
+        weights_softmax = AttentionChunked.compute_weights_softmax(causal_mask, head_dim, Q, K_chunked, n_rep)
         weights = weights_softmax.astype(x.dtype) #(B, n_heads, n_chunk, WQ, 2WK)
 
         output = weights @ V_chunked_repeat #(B, n_heads, n_chunk, chunk_size, Dh)
@@ -161,18 +165,28 @@ class AttentionChunked:
             output_projected = nx.quantized_matmul(output_unchunked, Wo, wo_scale, wo_bias, regular=use_symmetric) #B,T,D #dtype
         else:
             output_projected = output_unchunked @ Wo
-        cache = (x, Q, K_chunked, V_chunked, Q_norm_caches,K_norm_caches, weights_softmax, output_unchunked)
+
+        if not recompute_activation:
+            cache = (x, Q, K_chunked, V_chunked, Q_norm_caches,K_norm_caches, weights_softmax, output_unchunked)
+        else:
+            cache = (x, Q, K_chunked, V_chunked, Q_norm_caches,K_norm_caches, output_unchunked, causal_mask)
+
         # print("projected chunked", output_projected.dtype)
         # print("output unchunked chunked", output_unchunked.dtype)
         # print("Wo chunked", Wo.dtype)
         return output_projected, cache
 
     @staticmethod
-    def _backward(gradient:nx.ArrayLike, caches:tuple[Any,...], attn_configs:tuple[Any,...], attn_params: tuple[Any,...], quantization, * , use_symmetric=False) :#-> tuple[nx.ArrayLike,...]:
-        x, Q, K_chunked, V_chunked, Q_norm_caches,K_norm_caches, weights_softmax, output_unchunked = caches
+    def _backward(gradient:nx.ArrayLike, caches:tuple[Any,...], attn_configs:tuple[Any,...], attn_params: tuple[Any,...], quantization, * , use_symmetric=False, recompute_activation=True) :#-> tuple[nx.ArrayLike,...]:
+        embed_dim, n_kv_heads, n_heads, n_rep, head_dim, chunk_size, freqs = attn_configs
+
+        if not recompute_activation:
+            x, Q, K_chunked, V_chunked, Q_norm_caches,K_norm_caches, weights_softmax, output_unchunked = caches
+        else:
+            x, Q, K_chunked, V_chunked, Q_norm_caches,K_norm_caches, output_unchunked, causal_mask = caches
+            weights_softmax = AttentionChunked.compute_weights_softmax(causal_mask, head_dim, Q, K_chunked, n_rep)
         # print("chunked x", x.dtype)
         # print("chunked gradient",gradient.dtype)
-        embed_dim, n_kv_heads, n_heads, n_rep, head_dim, chunk_size, freqs = attn_configs
         Wqkv, Wo, Q_norm_gamma, K_norm_gamma = attn_params
 
         wqkv_scale, wo_scale, wqkv_bias, wo_bias = quantization

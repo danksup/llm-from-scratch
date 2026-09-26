@@ -64,11 +64,8 @@ logs:
    -  global grad clipping
    -  QKnorm
 - chunked attention sep 23 2026
-
+- recompute activation (selective) sep 26 2026
 ## Ongoing:
-- gradient checkpoint
-- reducing the occurence of intermediate matrix creation as much as possible
-^^^^^
 - optimizing/cleanup/docs
 
 ## TODO (not in order):

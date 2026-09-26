@@ -52,12 +52,34 @@ class MoE:
         self.dWout = nx.zeros_like(self.dWout)
         self.d_router = nx.zeros_like(self.d_router, dtype=nx.float32)
 
+    @staticmethod 
+    def compute_expert_input(n_experts,top_k, N, flatten_x, valid, safe_slot, capacity, D, flatten_top_expert_indices,dtype):
+        assignement_tokens = nx.repeat( nx.arange(N, dtype=nx.int32), top_k) #(N*K,)
+        masked_tokens = flatten_x[assignement_tokens] * valid[:, None] 
+        expert_input = nx.zeros((n_experts, capacity, D), dtype=dtype)
+        expert_input = nx.add_at(expert_input, (flatten_top_expert_indices, safe_slot), masked_tokens)
+        return expert_input
+
     @staticmethod
-    def compute_minal_minul():
-        pass
-    
+    def compute_projected(expert_input, Wcombined, wcombined_quants, use_symmetric):
+        wcombined_scale, wcombined_bias = wcombined_quants
+        if wcombined_scale is not None:
+            projected = nx.quantized_matmul(expert_input, Wcombined, scales=wcombined_scale, biases=wcombined_bias, regular=use_symmetric) #(E, capacity, 2H)
+        else:
+            projected = expert_input @ Wcombined
+
+        return projected
+
+    @staticmethod 
+    def compute_hidden(projected, dtype):
+        H = projected.shape[-1] // 2
+        gate_half = projected[..., :H]
+        value_half = projected[..., H:]
+        s = swish(gate_half, dtype)
+        return s * value_half #(E, capacity, H) 
+
     @staticmethod
-    def forward(x:nx.ArrayLike, ff_configs, ff_params, quantization:tuple[Any,...]|None=None, *, use_symmetric:bool=False):
+    def forward(x:nx.ArrayLike, ff_configs, ff_params, quantization:tuple[Any,...]|None=None, *, use_symmetric:bool=False, recompute_activation:bool=True):
         #routing
         # print("moe forward x", x.dtype)
         B, T, D = x.shape
@@ -101,28 +123,18 @@ class MoE:
         cum_assignment = nx.cumsum(routing_mask, axis=0, dtype=nx.int32)
 
         slot_idx = cum_assignment[assignment_rows, flatten_top_expert_indices] - 1 #(N,)
-
+        safe_slot = nx.clip(slot_idx, 0, capacity - 1, dtype=nx.int32)
         valid = slot_idx < capacity
 
-        masked_tokens = flatten_x[assignement_tokens] * valid[:, None] #type:ignore
-        safe_slot = nx.clip(slot_idx, 0, capacity - 1, dtype=nx.int32)
-        expert_input = nx.zeros((n_experts, capacity, D), dtype=x.dtype)
-        expert_input = nx.add_at(expert_input, (flatten_top_expert_indices, safe_slot), masked_tokens)
+        expert_input = MoE.compute_expert_input(n_experts, top_k, N, flatten_x, valid, safe_slot, capacity, D, flatten_top_expert_indices, x.dtype)
 
         expert_gate = nx.zeros((n_experts, capacity), dtype=top_gates.dtype)
         safe_gates = nx.where(valid, flatten_top_gates, nx.zeros_like(flatten_top_gates))
         expert_gate = nx.add_at(expert_gate, (flatten_top_expert_indices, safe_slot), safe_gates)
 
-        if wcombined_scale is not None:
-            projected = nx.quantized_matmul(expert_input, Wcombined, scales=wcombined_scale, biases=wcombined_bias, regular=use_symmetric) #(E, capacity, 2H)
-        else:
-            projected = expert_input @ Wcombined
+        projected = MoE.compute_projected(expert_input, Wcombined, (wcombined_scale, wcombined_bias), use_symmetric) #(E, capacity, 2H)
 
-        gate_half = projected[..., :H]
-        value_half = projected[..., H:]
-        s = swish(gate_half, x.dtype)
-
-        hidden = s * value_half #(E, capacity, H)
+        hidden = MoE.compute_hidden(projected, x.dtype) #(E, capacity, H)
 
         if wout_scale is not None:
             raw_output = nx.quantized_matmul(hidden, Wout, scales=wout_scale, biases=wout_bias, regular=use_symmetric) #(E, capacity, D)
@@ -138,24 +150,35 @@ class MoE:
 
         total_aux_loss = router_loss + z_loss
 
-        cache = (flatten_x, router_prob, top_expert_indices, top_gates32, flatten_top_expert_indices, assignement_tokens, valid, safe_slot, expert_input, expert_gate, projected, hidden, raw_output, normalized_histogram, scores)
+        if not recompute_activation:
+            cache = (flatten_x, router_prob, top_expert_indices, top_gates32, flatten_top_expert_indices, assignement_tokens, valid, safe_slot, expert_input, expert_gate, projected, hidden, raw_output, normalized_histogram, scores)
+        else:
+            cache = (flatten_x, router_prob, top_expert_indices, top_gates32, flatten_top_expert_indices, assignement_tokens, valid, safe_slot, expert_gate, raw_output, normalized_histogram, scores)
+
         return final_output, cache, total_aux_loss, normalized_histogram
 
     @staticmethod
-    def backward(gradient , caches, moe_configs, ff_params, gradient_scale, quantization:tuple[Any,...]|None=None, *, use_symmetric:bool=False):
-        flatten_x, router_prob, top_expert_indices, top_gates32 , flatten_top_expert_indices, assignement_tokens, valid, safe_slot, expert_input, expert_gate, projected, hidden, raw_output, normalized_histogram, scores = caches
-        Wout, Wcombined = ff_params
-
-        wcombined_scale, wout_scale, wcombined_bias, wout_bias = quantization  #type:ignore
-
-        capacity_factor, n_experts, hidden_width, router, LAMBDA = moe_configs
-        top_k = top_expert_indices.shape[1]
+    def backward(gradient , caches, moe_configs, ff_params, gradient_scale, quantization:tuple[Any,...]|None=None, *, use_symmetric:bool=False, recompute_activation:bool=True):
         B,T,D = gradient.shape
         N = B*T
+        
+        wcombined_scale, wout_scale, wcombined_bias, wout_bias = quantization  #type:ignore
+        router, Wout, Wcombined = ff_params
+        hidden_width, D, n_experts, capacity_factor, top_k, LAMBDA = moe_configs
+        capacity = math.ceil(capacity_factor * N * top_k / n_experts)
+
+        if not recompute_activation:
+            flatten_x, router_prob, top_expert_indices, top_gates32 , flatten_top_expert_indices, assignement_tokens, valid, safe_slot, expert_input, expert_gate, projected, hidden, raw_output, normalized_histogram, scores = caches
+        else:
+            flatten_x, router_prob, top_expert_indices, top_gates32 , flatten_top_expert_indices, assignement_tokens, valid, safe_slot, expert_gate, raw_output, normalized_histogram, scores = caches
+            expert_input = MoE.compute_expert_input(n_experts, top_k, N, flatten_x, valid, safe_slot, capacity, D, flatten_top_expert_indices, gradient.dtype)
+            projected = MoE.compute_projected(expert_input, Wcombined, (wcombined_scale,wcombined_bias), use_symmetric)
+            hidden = MoE.compute_hidden(projected, gradient.dtype)
+
         M = N *top_k
+       
         flatten_gradient = gradient.reshape(-1, D)
         assignment_gradient = flatten_gradient[assignement_tokens] #(M,D)
-        capacity = math.ceil(capacity_factor * N * top_k / n_experts)
         d_masked_output = assignment_gradient * valid[...,None]
 
         del flatten_gradient, assignment_gradient

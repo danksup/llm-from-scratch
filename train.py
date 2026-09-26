@@ -66,6 +66,7 @@ model_configs = {
     "vocab_size": len(tokenizer1.vocab),
     "quantized":False, #here can be True, "symmetric", False
     "check_non_finite":True,
+    "recompute_activation":True,
     "block_configs":{
         "ff_hidden_width": BASE_WIDTH,
         "ff_n_experts":N_EXPERTS,

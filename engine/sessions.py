@@ -530,7 +530,7 @@ class Session:
         n_block = transformer_configs["n_blocks"]
         quantized = transformer_configs["quantized"]
         dtype = nx.str_to_dtype[transformer_configs["dtype"]]
-
+        
         requantize = nx.backend == "MLX" and transformer_configs["quantized"] is True and session_configs["backend"]["mlx_save_quantized_weights_as_symmetric"]
 
         embedding_lookuptable = session["embedding"] #type:ignore

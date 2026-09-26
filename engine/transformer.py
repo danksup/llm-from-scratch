@@ -66,6 +66,7 @@ class Transformer:
         self.quantized = configs.get("quantized", False)
         self.quantized = self.quantized.lower() if isinstance(self.quantized, str) else self.quantized
         self.symmetric_quant = True if self.quantized == "symmetric" else False
+        self.recompute_activation = configs.get("recompute_activation", True)
 
         self.check_non_finite = configs.get("check_non_finite", True)
         
@@ -240,7 +241,7 @@ class Transformer:
                 attn_params = block.attention.Wqkv, block.attention.Wo, block.attention.Q_norm.gamma, block.attention.K_norm.gamma
                 ff_params = block.ff.Wcombined, block.ff.Wout, block.ff.router
                 scales = (block.attention.scales + block.attention.biases, block.ff.scales + block.ff.biases)
-                ff_out ,masks, caches, router_loss, normalized_histogram = block._forward(output, block.causal_mask, attn_str ,block.attention.configs, attn_params, block.ff.configs, ff_params, epsilon, gamma1, gamma2, P, is_training, scales, use_symmetric=self.symmetric_quant)
+                ff_out ,masks, caches, router_loss, normalized_histogram = block._forward(output, block.causal_mask, attn_str ,block.attention.configs, attn_params, block.ff.configs, ff_params, epsilon, gamma1, gamma2, P, is_training, scales, use_symmetric=self.symmetric_quant, recompute_activation=self.recompute_activation)
                 total_router_loss += router_loss
                 output = ff_out
                 all_masks.append(masks)
@@ -283,10 +284,10 @@ class Transformer:
             caches_attn, caches_ff, caches_rmsnorm1, caches_rmsnorm2 = caches
             mask1, mask2 = masks
             scaled_lambda = block.ff.LAMBDA * self.gradient_scale
-            moe_configs = block.ff.cf, block.ff.n_experts, block.ff.hidden_width, block.ff.router, scaled_lambda
+            moe_configs = block.ff.configs
             P = nx.array(0.1, dtype=self.dtype)
 
-            ff_params = (block.ff.Wout, block.ff.Wcombined)
+            ff_params = (block.ff.router, block.ff.Wout, block.ff.Wcombined)
             attn_str = block.attention.self_type()
             attn_configs = block.attention.configs
             attn_params = block.attention.Wqkv, block.attention.Wo, block.attention.Q_norm.gamma, block.attention.K_norm.gamma
@@ -294,7 +295,7 @@ class Transformer:
 
             dx, dWout, dWcombined, d_router, dWqkv, dWo, d_gamma1, d_gamma2,Q_norm_d_gamma, K_norm_d_gamma = block._backward(current_grad, mask1=mask1, mask2=mask2, p=P, attention=attn_str,
                                                                 caches_attn=caches_attn, caches_ff=caches_ff, caches_rmsnorm1=caches_rmsnorm1, caches_rmsnorm2=caches_rmsnorm2,
-                                                                attn_configs = attn_configs, attn_params=attn_params, gamma1=block.rmsnorm1.gamma, gamma2=block.rmsnorm2.gamma, ff_params=ff_params, moe_configs=moe_configs, gradient_scale=self.gradient_scale, quantization=scales, use_symmetric=self.symmetric_quant)
+                                                                attn_configs = attn_configs, attn_params=attn_params, gamma1=block.rmsnorm1.gamma, gamma2=block.rmsnorm2.gamma, ff_params=ff_params, moe_configs=moe_configs, gradient_scale=self.gradient_scale, quantization=scales, use_symmetric=self.symmetric_quant, recompute_activation=self.recompute_activation)
 
             block.ff.dWout += dWout
             block.ff.dWcombined += dWcombined
@@ -703,6 +704,7 @@ class Transformer:
         configs["quantized"] =  self.quantized
         configs["symmetric_quant"] =  self.symmetric_quant
         configs["gradient_scale"] = self.gradient_scale
+        configs["recompute_activation"] = self.recompute_activation
         return configs
 
     def get_configs_str(self):

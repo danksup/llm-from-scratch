@@ -85,7 +85,7 @@ class RMSProp:
                 m_v = (state_shape["m"], state_shape["v"])
                 new_params, m,v,_ = self.__step_with_momentum(m_v,params,gradients,self.lr,  self.epsilon, self.beta1, self.beta2, weight_decay)
             else:
-                v = (0, state_shape["v"])
+                v = state_shape["v"]
                 new_params, m,v,_ = self.__step_zero_momentum(v, params,gradients,self.lr,  self.epsilon, self.beta2, weight_decay)
 
             del params, gradients
@@ -113,6 +113,7 @@ class RMSProp:
         norm = nx.sqrt(nx.sum(grads**2, axis=tuple(range(1, grads.ndim)), keepdims=True, dtype=nx.float32), dtype=nx.float32)
         grads = nx.where(norm > 1.0, grads * (1.0 / (norm + epsilon)), grads)
 
+        print(type(v), type(beta2))
         v = beta2 * v + (1.0 - beta2) * (grads**2)
         step = (lr / (nx.sqrt(v) + epsilon)) * grads
         

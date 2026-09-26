@@ -72,7 +72,8 @@ logs:
 
 ## TODO (not in order):
 - moe noise
-- LoRa
+- ReLoRa
+- attn inference static instead of concatenate
 - inference optimization 
 - conversation memory
   

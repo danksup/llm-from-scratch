@@ -15,9 +15,9 @@ from engine.transformer import Transformer
 nx.set_seed(12345)
 
 EPOCHS = 1
-EMBED_DIM = 896
-CONTEXT_SIZE = 1024
-BATCH_SIZE = 1
+EMBED_DIM = 256
+CONTEXT_SIZE = 2048
+BATCH_SIZE = 3
 BASE_WIDTH = 4 * EMBED_DIM
 N_HEADS = 8
 N_KV_HEADS = max(1, N_HEADS // 2)
@@ -32,15 +32,15 @@ tokenizer1 = Tokenizer.load(TOKENIZER_PATH)
 
 session_configs = {
     "epochs":EPOCHS,
-    "max_step":10,
+    "max_step":20,
     "train_split": VAL,
     "max_val_step":1000,
     "eval_every":1,
-    "validate_every":20,
+    "validate_every":200,
     "context_size": CONTEXT_SIZE,
     "batch_size": BATCH_SIZE,
     "microbatch_size":64,
-    "optimizer":"adamw",
+    "optimizer":"rmsprop",
     "optimizer_args":{
         "lr": 1e-3,
         "use_master": True,
@@ -59,12 +59,12 @@ session_configs = {
 }
 
 model_configs = {
-    "n_blocks": 13,
+    "n_blocks": 10,
     "embed_dim":EMBED_DIM,
     "dtype": "float16",
     "gradient_scale":1,
     "vocab_size": len(tokenizer1.vocab),
-    "quantized":True, #here can be True, "symmetric", False
+    "quantized":False, #here can be True, "symmetric", False
     "check_non_finite":True,
     "block_configs":{
         "ff_hidden_width": BASE_WIDTH,

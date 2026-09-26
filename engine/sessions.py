@@ -6,7 +6,6 @@ import uuid
 import warnings
 from pathlib import Path
 from typing import Any, Union
-import safetensors as safe
 
 import engine.backend as nx
 import engine.optimizer as optim
@@ -32,7 +31,7 @@ DEFAULT_CONFIGS = {
     "max_val_step":None,
     "eval_every":1,
     "validate_every":1000,
-    "context_size": 256,
+    "context_size": 1024,
     "batch_size": 5,
     "microbatch_size":32,
     "optimizer":"adamw",
@@ -47,7 +46,8 @@ DEFAULT_CONFIGS = {
 OPTIMIZERS = {
     "sgd": optim.SGD,
     "adamw": optim.AdamW,
-    "adam": optim.Adam
+    "adam": optim.Adam,
+    "rmsprop": optim.RMSProp
 }
 
 SCHEDULER = {
@@ -58,8 +58,8 @@ SCHEDULER = {
 
 DEFAULT_OPTIMIZER_ARGS = {
     "sgd": {
-        "lr":1e-2,
-        "momentum":.9,
+        "lr":1e-3,
+        "momentum":0,
         "weight_decay":1e-4,
         "dampening":0.0,
         "use_master":False,
@@ -81,6 +81,16 @@ DEFAULT_OPTIMIZER_ARGS = {
         "beta2":0.999,
         "epsilon":1e-8,
         "weight_decay":1e-2,
+        "use_master":False,
+        "scheduler":None,
+        "min_lr":None,
+        },
+    "rmsprop": {
+        "lr":1e-3,
+        "beta1":0.9,
+        "beta2":0.999,
+        "momentum":0,
+        "weight_decay":1e-4,
         "use_master":False,
         "scheduler":None,
         "min_lr":None,

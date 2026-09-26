@@ -256,18 +256,17 @@ class Transformer:
                 raise ValueError(e)
 
         last_output = output.astype(self.dtype)
-        lookup_table = self.embedding.lookup_table
-        if self.quantized:
-            lookup_table = nx.dequantize(lookup_table, self.embedding.table_scale,self.embedding.bias, self.dtype, regular=self.symmetric_quant)
-
         rmsnorm_out, rms_cache = self.rmsnorm_final._forward(last_output, self.rmsnorm_final.gamma,self.rmsnorm_final.epsilon)
-        scores = rmsnorm_out.astype(self.dtype) @ lookup_table.T
-        del lookup_table
+        if self.quantized:
+            scores = nx.quantized_matmul(rmsnorm_out, self.embedding.lookup_table, self.embedding.table_scale, self.embedding.bias, transpose=True, regular=self.symmetric_quant)
+        else:
+            scores = rmsnorm_out.astype(self.dtype) @ self.embedding.lookup_table.T # B,T,V
 
         if return_cache:
             all_caches += rms_cache,
             return scores, rmsnorm_out, all_masks, all_caches, total_router_loss, histograms
-        return scores, total_router_loss
+            return rmsnorm_out, all_masks, all_caches, total_router_loss, histograms
+        return rmsnorm_out, total_router_loss
 
     def backward(self, err_signal:Any,  all_masks, all_caches:list) -> Any:
         '''

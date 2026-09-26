@@ -10,7 +10,7 @@ import random
 nx.set_seed(random.randrange(0,99999))
 
 tokenizer = Tokenizer.load("artifacts/tokenizer/tokenizer32768_1624612680len.tokenizer")
-session_path = "artifacts/sessions/session_(1065747456, 131466240)_param_1_epochs_weights_only_bc94849a-a09b-4e17-afdf-454bfccc4fd8.safetensors"
+session_path = "artifacts/sessions/session_(73295744, 18245504)_param_1_epochs_weights_only_78f9a51a-66a1-4acf-96b8-bd69108a64f9.safetensors"
 
 session = Session.load(session_path, tokenizer)
 context = "Who are you?"

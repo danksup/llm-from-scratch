@@ -83,16 +83,15 @@ class RMSProp:
 
             if self.momentum > 0:
                 m_v = (state_shape["m"], state_shape["v"])
-                new_params, m,v,_ = self.__step_with_momentum(m_v,params,gradients,self.lr,  self.epsilon, self.beta1, self.beta2, weight_decay)
+                new_params, m, v = self.__step_with_momentum(m_v,params,gradients,self.lr,  self.epsilon, self.beta1, self.beta2, weight_decay)
+                self.state[group_tuple]["m"] = m
             else:
                 v = state_shape["v"]
-                new_params, m,v,_ = self.__step_zero_momentum(v, params,gradients,self.lr,  self.epsilon, self.beta2, weight_decay)
+                new_params, v = self.__step_zero_momentum(v, params,gradients,self.lr,  self.epsilon, self.beta2, weight_decay)
 
             del params, gradients
 
             self.state[group_tuple] = {"v":v}
-            if self.momentum > 0:
-                self.state[group_tuple]["m"] = m
 
             if self.use_master:
                 self.state[group_tuple]["master"] = new_params

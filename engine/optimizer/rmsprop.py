@@ -113,7 +113,6 @@ class RMSProp:
         norm = nx.sqrt(nx.sum(grads**2, axis=tuple(range(1, grads.ndim)), keepdims=True, dtype=nx.float32), dtype=nx.float32)
         grads = nx.where(norm > 1.0, grads * (1.0 / (norm + epsilon)), grads)
 
-        print(type(v), type(beta2))
         v = beta2 * v + (1.0 - beta2) * (grads**2)
         step = (lr / (nx.sqrt(v) + epsilon)) * grads
         

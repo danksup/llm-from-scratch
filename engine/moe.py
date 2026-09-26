@@ -51,6 +51,10 @@ class MoE:
         self.dWcombined = nx.zeros_like(self.dWcombined)
         self.dWout = nx.zeros_like(self.dWout)
         self.d_router = nx.zeros_like(self.d_router, dtype=nx.float32)
+
+    @staticmethod
+    def compute_minal_minul():
+        pass
     
     @staticmethod
     def forward(x:nx.ArrayLike, ff_configs, ff_params, quantization:tuple[Any,...]|None=None, *, use_symmetric:bool=False):
@@ -136,7 +140,6 @@ class MoE:
 
         cache = (flatten_x, router_prob, top_expert_indices, top_gates32, flatten_top_expert_indices, assignement_tokens, valid, safe_slot, expert_input, expert_gate, projected, hidden, raw_output, normalized_histogram, scores)
         return final_output, cache, total_aux_loss, normalized_histogram
-
 
     @staticmethod
     def backward(gradient , caches, moe_configs, ff_params, gradient_scale, quantization:tuple[Any,...]|None=None, *, use_symmetric:bool=False):

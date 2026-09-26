@@ -40,7 +40,7 @@ session_configs = {
     "context_size": CONTEXT_SIZE,
     "batch_size": BATCH_SIZE,
     "microbatch_size":64,
-    "optimizer":"rmsprop",
+    "optimizer":"adamw",
     "optimizer_args":{
         "lr": 1e-3,
         "use_master": True,

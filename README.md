@@ -66,11 +66,13 @@ logs:
 - chunked attention sep 23 2026
 
 ## Ongoing:
+- gradient checkpoint
 - reducing the occurence of intermediate matrix creation as much as possible
-- parallelizing tokenizer word frequency counting
+^^^^^
 - optimizing/cleanup/docs
 
 ## TODO (not in order):
+- parallelizing tokenizer word frequency counting
 - moe noise
 - ReLoRa
 - attn inference static instead of concatenate

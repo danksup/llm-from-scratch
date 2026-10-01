@@ -69,6 +69,8 @@ logs:
 - optimizing/cleanup/docs
 
 ## TODO (not in order):
+- shared experts
+- mmap for dataloader
 - parallelizing tokenizer word frequency counting
 - moe noise
 - ReLoRa
@@ -77,7 +79,6 @@ logs:
 - conversation memory
   
 #### Maybe:
-- mmap for dataloader
 - autograd
 
 ## Bugs:

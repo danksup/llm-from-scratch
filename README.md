@@ -65,12 +65,14 @@ logs:
    -  QKnorm
 - chunked attention sep 23 2026
 - recompute activation (selective) sep 26 2026
+- mmap for dataloader oct 14 2026
+
+
 ## Ongoing:
 - optimizing/cleanup/docs
 
 ## TODO (not in order):
 - shared experts
-- mmap for dataloader
 - parallelizing tokenizer word frequency counting
 - moe noise
 - ReLoRa
@@ -97,7 +99,8 @@ logs:
 ### Open
 - if num of last batch or microbatch not the multiplier, it will be dropped (aug 13 2026, non severe) 
   - cause: cus `if len(context_batches) == batch_size:` in dataloader and `step_counter % microbatch_size == 0:` in train
-  - fix: like in stream_token, handle leftover
+  - ~~fix: like in stream_token, handle leftover~~
+  - fix: new dataloader design
   
 # Performance Logs
 Apple M1 Pro \

@@ -7,6 +7,7 @@ from typing import Any
 import ast
 import re
 import time
+import array
 
 #TODO change outdated docstrings
 #TODO change outdated typehints
@@ -195,10 +196,14 @@ class Tokenizer:
 
         return new_word
 
-    def stream_corpus(self, filepath:str, batch_size:int=10_485_760):
-        path = Path(filepath)
-        for file in path.iterdir():
-            if file.is_file() and file.suffix == ".txt":
+    def stream_corpus(self, filepath:str|list, batch_size:int=10_485_760):
+        if isinstance(filepath, list):
+            iterate = filepath
+        elif isinstance(filepath, str):
+            path = Path(filepath)
+            iterate = path.iterdir()
+        for file in iterate:
+            if file.is_file() and file.suffix == ".txt": #type:ignore
                 with open(file, "r", encoding="utf-8", errors='ignore') as f:
                     while True:
                         chunk = f.read(batch_size)
@@ -440,3 +445,46 @@ class Tokenizer:
 
         else:
             raise ValueError("no")
+
+    @staticmethod
+    def tokenize(file:Path, tokenizer:"Tokenizer"):
+        filename = file.stem
+        if len(tokenizer.vocab) <=  65_535:
+            type_code = 'H'
+        else:
+            type_code = 'I'
+        
+        path = Path(f"artifacts/dataloader/{filename}.tokenized")
+        path.parent.mkdir(parents=True, exist_ok=True)
+        with open(path, "wb") as f:
+            f.write(b"tokenized")
+            f.write((1).to_bytes(4, "little"))
+            f.write(tokenizer.tokenizer_id.bytes) #type:ignore
+            for chunk in tokenizer.stream_corpus([file]):
+                token = tokenizer.encode(chunk)
+                tokens = array.array(type_code, token)
+                tokens.tofile(f)
+
+    @staticmethod
+    def pretokenize(files:list[Path],tokenizer:"Tokenizer", one_file:bool=True):
+        if len(tokenizer.vocab) <=  65_535:
+            type_code = 'H'
+        else:
+            type_code = 'I'
+
+        if len(files) > 1 and one_file:
+            filename = f"{len(files)}_files"
+            path = Path(f"artifacts/dataloader/{filename}.tokenized")
+            path.parent.mkdir(parents=True, exist_ok=True)
+            with open(path, "wb") as f:
+                f.write(b"tokenized")
+                f.write((1).to_bytes(4, "little"))
+                f.write(tokenizer.tokenizer_id.bytes) #type:ignore
+
+                for chunk in tokenizer.stream_corpus(files):
+                    token = tokenizer.encode(chunk)
+                    tokens = array.array(type_code, token)
+                    tokens.tofile(f)
+        else:
+            for file in files:
+                Tokenizer.tokenize(file, tokenizer)

@@ -458,7 +458,7 @@ class Transformer:
             for block in self.blocks:
                 block.zeroes_gradient()
 
-        for contexts, next_tokens in dataloader.prefetch_batch(dataloader.train_files):
+        for contexts, next_tokens in dataloader.stream_batches(dataloader.train_files):
             contexts = nx.array(contexts).reshape(dataloader.batch_size, dataloader.context_size)
             next_tokens = nx.array(next_tokens).reshape(dataloader.batch_size, dataloader.context_size)
 
@@ -653,7 +653,7 @@ class Transformer:
         if not dataloader.validation_files:
             return None
 
-        for contexts, next_tokens in dataloader.prefetch_batch(dataloader.validation_files):
+        for contexts, next_tokens in dataloader.stream_batches(dataloader.validation_files):
             if isinstance(val_step, int) and step_counter >= val_step:
                 break
             contexts = nx.array(contexts).reshape(dataloader.batch_size, dataloader.context_size)

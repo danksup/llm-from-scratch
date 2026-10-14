@@ -447,15 +447,19 @@ class Tokenizer:
             raise ValueError("no")
 
     @staticmethod
-    def tokenize(file:Path, tokenizer:"Tokenizer"):
+    def tokenize(file:Path, tokenizer:"Tokenizer", out_path:str|None=None):
         filename = file.stem
         if len(tokenizer.vocab) <=  65_535:
             type_code = 'H'
         else:
             type_code = 'I'
-        
-        path = Path(f"artifacts/dataloader/{filename}.tokenized")
+
+        if out_path is None:
+            out_path = "artifacts/dataloader"
+
+        path = Path(f"{out_path}/{filename}.tokenized")
         path.parent.mkdir(parents=True, exist_ok=True)
+
         with open(path, "wb") as f:
             f.write(b"tokenized")
             f.write((1).to_bytes(4, "little"))
@@ -466,7 +470,7 @@ class Tokenizer:
                 tokens.tofile(f)
 
     @staticmethod
-    def pretokenize(files:list[Path],tokenizer:"Tokenizer", one_file:bool=True):
+    def pretokenize(files:list[Path],tokenizer:"Tokenizer", one_file:bool=True, out_path:str|None = None):
         if len(tokenizer.vocab) <=  65_535:
             type_code = 'H'
         else:
@@ -474,7 +478,9 @@ class Tokenizer:
 
         if len(files) > 1 and one_file:
             filename = f"{len(files)}_files"
-            path = Path(f"artifacts/dataloader/{filename}.tokenized")
+            if out_path is None:
+                out_path = "artifacts/dataloader"
+            path = Path(f"{out_path}/{filename}.tokenized")
             path.parent.mkdir(parents=True, exist_ok=True)
             with open(path, "wb") as f:
                 f.write(b"tokenized")

@@ -478,8 +478,10 @@ class Transformer:
             loss = nx.mean(loss)  + total_aux_loss
 
             batch_gradient = cross_entropy_gradient(batch_scores, next_tokens)
-            batch_gradient /= (batch_gradient.shape[0] * batch_gradient.shape[1])
-            scaled_batch_gradient = batch_gradient * self.gradient_scale
+            scale_factor = nx.array(self.gradient_scale / (batch_gradient.shape[0] * batch_gradient.shape[1]), nx.float16)
+            # batch_gradient /= (batch_gradient.shape[0] * batch_gradient.shape[1])
+            # scaled_batch_gradient = batch_gradient * self.gradient_scale
+            scaled_batch_gradient = batch_gradient * scale_factor
 
             batch_gradient = scaled_batch_gradient.astype(self.dtype)
 

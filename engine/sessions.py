@@ -261,6 +261,7 @@ class Session:
         start = time.perf_counter()
         msg_res = ""
         hist_res = ""
+        ema_tol = 1.15
         try:
             for i in range(self.configs["epochs"]):
                 epoch = i
@@ -276,6 +277,9 @@ class Session:
                 next_validate_step = validate_every
                 next_checkpoint = checkpoint_every
                 counts = 0
+                train_loss_increase_count = 0
+                ema = None
+                min_ema = float('inf')
 
                 for loss, count, histograms, step_counter in train:
                     counts += count
@@ -287,6 +291,22 @@ class Session:
                         for n in range(self.transformer.configs["n_blocks"]):
                             total_histograms[n] += histograms[n]
                     flag_to_check_if_validate_checkpoint_crash_with_regular_checkpoint = False
+
+                    if ema is None:
+                        ema = min_ema = prev_train_loss = loss / count
+                    else:
+                        train_loss = loss / count
+                        if ema > min_ema * ema_tol:
+                            train_loss_increase_count += 1
+                        else:
+                            train_loss_increase_count = 0
+
+                        if train_loss_increase_count >= 5 and train_loss_increase_count % 5 == 0:
+                            self.logger.warn(f"[step {step_counter}] consecutive train loss increase: {train_loss_increase_count}. ema: {ema} current: {loss / count}")
+                        ema = .9 * ema + (1-.9) * (loss / count)
+                        if ema < min_ema:
+                            min_ema = ema
+                        prev_train_loss = train_loss
 
                     if dataloader.validation_files and validate_every > 0 and step_counter >= next_validate_step:
                         next_validate_step += validate_every

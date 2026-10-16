@@ -66,13 +66,12 @@ logs:
 - chunked attention sep 23 2026
 - recompute activation (selective) sep 26 2026
 - mmap for dataloader oct 14 2026
-
+- shared experts oct 16 2026
 
 ## Ongoing:
 - optimizing/cleanup/docs
 
 ## TODO (not in order):
-- shared experts
 - parallelizing tokenizer word frequency counting
 - moe noise
 - ReLoRa

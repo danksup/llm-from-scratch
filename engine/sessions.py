@@ -588,24 +588,26 @@ class Session:
 
             if quantized:
                 attn_quants = ((session[f"{i}.attention.Wqkv.scales"],session[f"{i}.attention.Wo.scales"]), (session[f"{i}.attention.Wqkv.biases"],session[f"{i}.attention.Wo.biases"])) #type:ignore
-                ff_quants = ((session[f"{i}.ff.Wcombined.scales"],session[f"{i}.ff.Wout.scales"]), (session[f"{i}.ff.Wcombined.biases"],session[f"{i}.ff.Wout.biases"])) #type:ignore
+                ff_quants = ((session[f"{i}.ff.Wcombined.scales"],session[f"{i}.ff.Wout.scales"],session[f"{i}.ff.W_shared_combined.scales"],session[f"{i}.ff.W_shared_out.scales"]), (session[f"{i}.ff.Wcombined.biases"],session[f"{i}.ff.Wout.biases"],session[f"{i}.ff.W_shared_combined.biases"],session[f"{i}.ff.W_shared_out.biases"])) #type:ignore
 
                 if requantize:
                     wqkv, wqkv_scale,wqkv_bias =  nx.quantize(nx.dequantize( session[f"{i}.attention.Wqkv"], attn_quants[0][0], attn_quants[1][0], regular=True)) #type:ignore
                     wo, wo_scale,wo_bias =  nx.quantize(nx.dequantize( session[f"{i}.attention.Wo"], attn_quants[0][1], attn_quants[1][1], regular=True)) #type:ignore
                     wcombined, wcombined_scale, wcombined_bias =  nx.quantize(nx.dequantize( session[f"{i}.ff.Wcombined"], ff_quants[0][0],ff_quants[1][0], regular=True)) #type:ignore
                     wout, wout_scale, wout_bias =  nx.quantize(nx.dequantize( session[f"{i}.ff.Wout"],  ff_quants[0][1],ff_quants[1][1], regular=True)) #type:ignore
+                    wsharedcombined,wsharedcombined_scale, wsharedcombined_bias = nx.quantize(nx.dequantize( session[f"{i}.ff.W_shared_combined"], ff_quants[0][2],ff_quants[1][2], regular=True)) #type:ignore
+                    wsharedout,wsharedout_scale, wsharedout_bias = nx.quantize(nx.dequantize( session[f"{i}.ff.W_shared_out"], ff_quants[0][3],ff_quants[1][3], regular=True)) #type:ignore
 
                     attn_params = (wqkv, wo) #type:ignore
-                    ff_params = (session[f"{i}.ff.router"], wcombined, wout) #type:ignore
+                    ff_params = (session[f"{i}.ff.router"], wcombined, wout, wsharedcombined, wsharedout) #type:ignore
                     attn_quants = ((wqkv_scale, wo_scale), (wqkv_bias,wo_bias)) #type:ignore
-                    ff_quants = ((wcombined_scale, wout_scale), (wcombined_bias, wout_bias)) #type:ignore
+                    ff_quants = ((wcombined_scale, wout_scale,wsharedcombined_scale,wsharedout_scale), (wcombined_bias, wout_bias,wsharedcombined_bias,wsharedout_bias)) #type:ignore
                 else:
                     attn_params = (session[f"{i}.attention.Wqkv"], session[f"{i}.attention.Wo"]) #type:ignore
-                    ff_params = (session[f"{i}.ff.router"],session[f"{i}.ff.Wcombined"], session[f"{i}.ff.Wout"]) #type:ignore
+                    ff_params = (session[f"{i}.ff.router"],session[f"{i}.ff.Wcombined"], session[f"{i}.ff.Wout"], session[f"{i}.ff.W_shared_combined"], session[f"{i}.ff.W_shared_out"]) #type:ignore
             else:
                 attn_params = (session[f"{i}.attention.Wqkv"], session[f"{i}.attention.Wo"]) #type:ignore
-                ff_params = (session[f"{i}.ff.router"],session[f"{i}.ff.Wcombined"], session[f"{i}.ff.Wout"]) #type:ignore
+                ff_params = (session[f"{i}.ff.router"],session[f"{i}.ff.Wcombined"], session[f"{i}.ff.Wout"], session[f"{i}.ff.W_shared_combined"], session[f"{i}.ff.W_shared_out"]) #type:ignore
 
             block = TransformerBlock.from_weights(attn_type=attn_type, attn_configs=attn_configs, attn_weights=attn_params,attn_quants=attn_quants,attn_QK_gamma=attn_QK_norm, ff_configs=ff_configs, ff_weights=ff_params,ff_quants=ff_quants, rmsnorm1_configs=rmsnorm1_configs, rmsnorm2_configs=rmsnorm2_configs, gamma1=rmsnorm1_gamma, gamma2=rmsnorm2_gamma, dtype=dtype)
             blocks.append(block)

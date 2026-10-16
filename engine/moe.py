@@ -9,24 +9,28 @@ from helper.singleton import sleep
 C = nx.array(1e-4)
 
 class MoE:
-    def __init__(self, capacity_factor, top_k, n_experts, embed_dim, hidden_width,LAMBDA =1e-2, dtype:Any=nx.float16, initializer:Callable=initializer.glorot_uniform, quantized:bool|str=False, *, as_symmetric:bool=False, init=True) -> None:
+    def __init__(self, capacity_factor, top_k, n_experts, embed_dim, hidden_width, shared_hidden_width, n_shared_experts=2,LAMBDA =1e-2, dtype:Any=nx.float16, initializer:Callable=initializer.glorot_uniform, quantized:bool|str=False, *, as_symmetric:bool=False, init=True) -> None:
         self.hidden_width = hidden_width
         self.embed_dim = embed_dim #D
         self.n_experts = n_experts #E
         self.cf = capacity_factor
         self.top_k = top_k
         self.dtype = dtype
+        self.n_shared_experts = n_shared_experts
+        self.shared_hidden_width = shared_hidden_width
         self.LAMBDA = LAMBDA
 
-        self.configs = (hidden_width, embed_dim, n_experts, capacity_factor, top_k, LAMBDA)
+        self.configs = (hidden_width, embed_dim, n_experts, capacity_factor, top_k,shared_hidden_width, n_shared_experts, LAMBDA)
         self.quantized = quantized
 
-        self.scales = (None, None)
-        self.biases = (None, None)
+        self.scales = (None, None, None, None)
+        self.biases = (None, None, None, None)
 
         wcombined_shape =  (n_experts, embed_dim, hidden_width * 2)
         wout_shape =  (n_experts, hidden_width, embed_dim)
         router_shape = embed_dim, n_experts
+        shared_expert_shape = embed_dim, n_shared_experts * shared_hidden_width * 2
+        shared_out_shape = (n_shared_experts * shared_hidden_width, embed_dim)
         
         if init:
             self.router = initializer(router_shape, dtype= nx.float32)
@@ -37,20 +41,30 @@ class MoE:
             self.Wout = initializer(wout_shape, dtype = dtype)
             assert nx.isfinite(self.Wout).all(), f"non-finite detected when initializing moe.Wout."
 
+            self.W_shared_combined = initializer(shared_expert_shape, dtype=dtype)
+            self.W_shared_out = initializer(shared_out_shape, dtype=dtype)
+
             if quantized:
                 self.Wcombined, wcombined_scale, wcombined_biases = nx.quantize(self.Wcombined, regular=as_symmetric)
                 self.Wout, wout_scale, wout_biases = nx.quantize(self.Wout, regular=as_symmetric)
-                self.scales = (wcombined_scale, wout_scale)
-                self.biases = (wcombined_biases, wout_biases)
+                self.W_shared_combined, shared_expert_scale, shared_expert_bias = nx.quantize(self.W_shared_combined, regular=as_symmetric)
+                self.W_shared_out, shared_expert_out_scale, shared_expert_out_bias = nx.quantize(self.W_shared_out, regular=as_symmetric)
+                self.scales = (wcombined_scale, wout_scale, shared_expert_scale, shared_expert_out_scale)
+                self.biases = (wcombined_biases, wout_biases, shared_expert_bias,shared_expert_out_bias)
 
         self.dWcombined = nx.zeros(wcombined_shape)
         self.dWout = nx.zeros(wout_shape)
         self.d_router = nx.zeros(router_shape, dtype=nx.float32)
+        self.dW_shared_combined = nx.zeros(shared_expert_shape)
+        self.dW_shared_out = nx.zeros(shared_out_shape)
 
     def zeroes_gradient(self):
         self.dWcombined = nx.zeros_like(self.dWcombined)
         self.dWout = nx.zeros_like(self.dWout)
         self.d_router = nx.zeros_like(self.d_router, dtype=nx.float32)
+        self.dW_shared_combined = nx.zeros_like(self.dW_shared_combined)
+        self.dW_shared_out = nx.zeros_like(self.dW_shared_out)
+
 
     @staticmethod 
     def compute_expert_input(n_experts,top_k, N, flatten_x, valid, safe_slot, capacity, D, flatten_top_expert_indices,dtype):
@@ -85,10 +99,10 @@ class MoE:
         B, T, D = x.shape
         N = B * T
 
-        H, _, n_experts, capacity_factor, top_k, LAMBDA = ff_configs
-        Wcombined, Wout, router = ff_params
+        _, _, n_experts, capacity_factor, top_k, _, _, LAMBDA = ff_configs
+        Wcombined, Wout, router, W_shared_combined, W_shared_out  = ff_params
 
-        wcombined_scale, wout_scale, wcombined_bias, wout_bias = quantization  #type:ignore
+        wcombined_scale, wout_scale,shared_expert_scale,shared_expert_out_scale, wcombined_bias, wout_bias, shared_expert_bias,  shared_expert_out_bias = quantization  #type:ignore
 
         top_k = min(top_k, n_experts)
         capacity = math.ceil(capacity_factor * N * top_k / n_experts)
@@ -133,25 +147,34 @@ class MoE:
         expert_gate = nx.add_at(expert_gate, (flatten_top_expert_indices, safe_slot), safe_gates)
 
         projected = MoE.compute_projected(expert_input, Wcombined, (wcombined_scale, wcombined_bias), use_symmetric) #(E, capacity, 2H)
+        shared_projected = MoE.compute_projected(flatten_x, W_shared_combined, (shared_expert_scale,shared_expert_bias), use_symmetric) #(N, ns * 2Hs)
 
         hidden = MoE.compute_hidden(projected, x.dtype) #(E, capacity, H)
+        shared_hidden = MoE.compute_hidden(shared_projected, x.dtype) #N, ns * H
 
         if wout_scale is not None:
             raw_output = nx.quantized_matmul(hidden, Wout, scales=wout_scale, biases=wout_bias, regular=use_symmetric) #(E, capacity, D)
         else:
             raw_output = hidden @ Wout #(E, capacity, D)
 
+        if shared_expert_out_scale is not None:
+            raw_shared_output = nx.quantized_matmul(shared_hidden,W_shared_out, scales=shared_expert_out_scale, biases=shared_expert_out_bias, regular=use_symmetric)
+        else:
+            raw_shared_output = shared_hidden @ W_shared_out #N, D
+
+        shared_output = raw_shared_output.reshape(B,T,D)
+
         gated_output = raw_output * expert_gate[..., None]
         final_output = gated_output[flatten_top_expert_indices, safe_slot]
         final_output = final_output * valid[..., None]
         final_output = final_output.reshape(N,top_k,D)
         final_output = nx.sum(final_output, axis=1, dtype=nx.float32).reshape(B,T,D) #check
-        final_output = final_output.astype(x.dtype)
+        final_output = final_output.astype(x.dtype) + shared_output
 
         total_aux_loss = router_loss + z_loss
 
         if not recompute_activation:
-            cache = (flatten_x, router_prob, top_expert_indices, top_gates32, flatten_top_expert_indices, assignement_tokens, valid, safe_slot, expert_input, expert_gate, projected, hidden, raw_output, normalized_histogram, scores)
+            cache = (flatten_x, router_prob, top_expert_indices, top_gates32, flatten_top_expert_indices, assignement_tokens, valid, safe_slot, expert_input, expert_gate, projected, hidden, raw_output, normalized_histogram, scores, shared_projected, shared_hidden)
         else:
             cache = (flatten_x, router_prob, top_expert_indices, top_gates32, flatten_top_expert_indices, assignement_tokens, valid, safe_slot, expert_gate, raw_output, normalized_histogram, scores)
 
@@ -162,18 +185,23 @@ class MoE:
         B,T,D = gradient.shape
         N = B*T
         
-        wcombined_scale, wout_scale, wcombined_bias, wout_bias = quantization  #type:ignore
-        router, Wout, Wcombined = ff_params
-        hidden_width, D, n_experts, capacity_factor, top_k, LAMBDA = moe_configs
+        wcombined_scale, wout_scale,shared_expert_scale,shared_expert_out_scale, wcombined_bias, wout_bias, shared_expert_bias,  shared_expert_out_bias = quantization  #type:ignore
+
+        router, Wout, Wcombined, W_shared_combined, W_shared_out = ff_params
+
+        hidden_width, D, n_experts, capacity_factor, top_k,shared_hidden_width, n_shared_experts,  LAMBDA = moe_configs
         capacity = math.ceil(capacity_factor * N * top_k / n_experts)
 
         if not recompute_activation:
-            flatten_x, router_prob, top_expert_indices, top_gates32 , flatten_top_expert_indices, assignement_tokens, valid, safe_slot, expert_input, expert_gate, projected, hidden, raw_output, normalized_histogram, scores = caches
+            flatten_x, router_prob, top_expert_indices, top_gates32, flatten_top_expert_indices, assignement_tokens, valid, safe_slot, expert_input, expert_gate, projected, hidden, raw_output, normalized_histogram, scores, shared_projected, shared_hidden = caches
         else:
             flatten_x, router_prob, top_expert_indices, top_gates32 , flatten_top_expert_indices, assignement_tokens, valid, safe_slot, expert_gate, raw_output, normalized_histogram, scores = caches
             expert_input = MoE.compute_expert_input(n_experts, top_k, N, flatten_x, valid, safe_slot, capacity, D, flatten_top_expert_indices, gradient.dtype)
             projected = MoE.compute_projected(expert_input, Wcombined, (wcombined_scale,wcombined_bias), use_symmetric)
             hidden = MoE.compute_hidden(projected, gradient.dtype)
+
+            shared_projected = MoE.compute_projected(flatten_x, W_shared_combined, (shared_expert_scale,shared_expert_bias), use_symmetric) #(N,2H)
+            shared_hidden = MoE.compute_hidden(shared_projected, gradient.dtype) #N, H
 
         M = N *top_k
        
@@ -181,19 +209,22 @@ class MoE:
         assignment_gradient = flatten_gradient[assignement_tokens] #(M,D)
         d_masked_output = assignment_gradient * valid[...,None]
 
-        del flatten_gradient, assignment_gradient
+        if shared_expert_out_scale is not None:
+            d_shared_hidden = nx.quantized_matmul(flatten_gradient, W_shared_out, shared_expert_out_scale, shared_expert_out_bias, True, regular=use_symmetric)
+        else:
+            d_shared_hidden = flatten_gradient @ W_shared_out.T #N,H
 
         d_gated_output = nx.zeros((n_experts, capacity, D), dtype=gradient.dtype)
 
         d_gated_output = nx.add_at(d_gated_output, (flatten_top_expert_indices, safe_slot), d_masked_output)
-
-        del d_masked_output
 
         d_raw_output = d_gated_output * expert_gate[..., None] #(E, capacity, D) #fp16
         d_expert_gate = nx.sum(d_gated_output * raw_output, axis=-1, dtype=nx.float32,) #(E, capacity)
 
         dWout = hidden.transpose(0, 2, 1) @ d_raw_output
 
+        dW_shared_out = shared_hidden.T @ flatten_gradient #H, D
+        
         if wout_scale is not None:
             d_hidden = nx.quantized_matmul(d_raw_output, Wout, wout_scale,biases=wout_bias, transpose=(0,2,1), regular=use_symmetric)  #(E,C,H) fp16
         else:
@@ -208,14 +239,28 @@ class MoE:
         d_value_half = d_hidden * swish(gate_half, dtype=value_half.dtype)
         d_projected = nx.concatenate([d_gate_half, d_value_half], axis=-1) #(E, C, 2H)  fp16
 
+        shared_gate_half = shared_projected[..., :shared_hidden_width * n_shared_experts] #N,H
+        shared_value_half = shared_projected[..., shared_hidden_width* n_shared_experts:]
+
+        d_shared_gate_half = d_shared_hidden * shared_value_half * swish_derivative(shared_gate_half, dtype=shared_gate_half.dtype)
+        d_shared_value_half = d_shared_hidden * swish(shared_gate_half, dtype=shared_value_half.dtype)
+        d_shared_projected = nx.concatenate([d_shared_gate_half, d_shared_value_half], axis=-1) #N,2H
+
         del projected, d_hidden, gate_half, value_half, d_gate_half, d_value_half
 
         dWcombined = expert_input.transpose(0, 2, 1) @ d_projected #(E,D,2H) fp16
+
+        dW_shared_combined = flatten_x.T @ d_shared_projected #D, 2H
 
         if wcombined_scale is not None:
             d_expert_input = nx.quantized_matmul(d_projected, Wcombined, wcombined_scale,biases=wcombined_bias, transpose=(0,2,1), regular=use_symmetric)
         else:
             d_expert_input = d_projected @ Wcombined.transpose(0,2,1) #(E, C, D) fp16
+
+        if shared_expert_scale is not None:
+            d_x_shared = nx.quantized_matmul(d_shared_projected, W_shared_combined, shared_expert_scale, shared_expert_bias, transpose=True, regular=use_symmetric)
+        else:
+            d_x_shared = d_shared_projected @ W_shared_combined.T #N,D
 
         d_x_expert = d_expert_input[flatten_top_expert_indices, safe_slot]
         d_x_expert *= valid[...,None]
@@ -258,73 +303,25 @@ class MoE:
         d_x_expert = d_x_expert.reshape(N, top_k, D)
         d_x_expert = nx.sum(d_x_expert, axis=1, dtype=nx.float32) #(N,D)
         # print("dxpert", d_x_expert.dtype)
-        dx_flat = d_x_expert + d_x_router #(N,D)
+        dx_flat = d_x_expert + d_x_router + d_x_shared #(N,D)
 
         dx = dx_flat.reshape(B,T,D)
 
         del dx_flat, top_expert_indices, valid, safe_slot
 
-        return dx, dWcombined, dWout, d_router
-
-    def to_dict(self, *, as_symmetric=False) -> dict:
-        moe_dict =  {
-            "moe_configs":(self.cf, self.top_k, self.n_experts, self.hidden_width,self.embed_dim, nx.dtype_to_srt[self.dtype], self.quantized),
-            "router": self.router.tolist(),
-            "Wcombined":self.Wcombined.tolist(),
-            "Wout":self.Wout.tolist(),
-        }
-
-        if self.quantized:
-            if as_symmetric:
-                Wcombined, wcombined_scale, wcombined_bias = nx.quantize( nx.dequantize(self.Wcombined, self.scales[0], self.biases[0], self.dtype), regular=True)
-                Wout, wout_scale, wout_bias = nx.quantize(nx.dequantize(self.Wout, self.scales[1], self.biases[1], self.dtype), regular=True)
-                moe_dict["Wcombined"] = Wcombined.tolist()
-                moe_dict["Wout"] = Wout.tolist()
-                moe_dict["scales"] = (wcombined_scale.tolist(), wout_scale.tolist()) 
-                moe_dict["biases"] = (wcombined_bias.tolist(), wout_bias.tolist()) 
-            else:
-                moe_dict["scales"] = (self.scales[0].tolist(), self.scales[1].tolist()) #type:ignore
-                moe_dict["biases"] = (self.biases[0].tolist(), self.biases[1].tolist()) #type:ignore
-        else:
-            moe_dict["scales"] = self.scales
-            moe_dict["biases"] = self.biases
-
-        return moe_dict
-
-    @classmethod
-    def from_dict(cls, thing:dict, *, use_symmetric=False) -> "MoE":
-        capacity_factor, top_k, n_experts, hidden_width, embed_dim, dtype, is_quantized = thing["moe_configs"]
-        dtype = nx.str_to_dtype[dtype]
-        scales = thing["scales"]
-        biases = thing["biases"]
-        moe = cls(capacity_factor, top_k, n_experts, embed_dim, hidden_width, dtype, quantized=is_quantized)
-        Wcombined = thing["Wcombined"]
-        Wout = thing["Wout"]
-        moe.router = nx.array(thing["router"], nx.float32)
-
-        if is_quantized:
-            if nx.backend == "MLX" and not use_symmetric:
-                moe.Wcombined = nx.array(Wcombined, dtype=nx.uint32)
-                moe.Wout = nx.array(Wout, dtype=nx.uint32)
-            else:
-                moe.Wcombined = nx.array(Wcombined, dtype=nx.int8)
-                moe.Wout = nx.array(Wout, dtype=nx.int8)
-            moe.scales = (nx.array(scales[0], dtype=dtype), nx.array(scales[1], dtype=dtype))
-            moe.biases = (nx.array(biases[0], dtype=dtype), nx.array(biases[1], dtype=dtype))
-        else:
-             moe.Wcombined = nx.array(Wcombined, dtype=dtype)
-             moe.Wout = nx.array(Wout, dtype=dtype)
-        return moe
+        return dx, dWcombined, dWout, d_router, dW_shared_combined, dW_shared_out
 
     @classmethod
     def from_weight(cls, configs, weights, quants, dtype) -> "MoE":
-        hidden_width, embed_dim, n_experts, capacity_factor, top_k, LAMBDA = configs
-        router, wcombined, wout = weights
+        hidden_width, embed_dim, n_experts, capacity_factor, top_k, shared_hidden_width, n_shared_experts, LAMBDA = configs
+        router, wcombined, wout,W_shared_combined,W_shared_out = weights
 
-        moe = cls(capacity_factor, top_k, n_experts, embed_dim, hidden_width,LAMBDA, dtype, init=False)
+        moe = cls(capacity_factor, top_k, n_experts, embed_dim, hidden_width, shared_hidden_width, n_shared_experts,LAMBDA, dtype, init=False)
         moe.router = router
         moe.Wcombined = wcombined
         moe.Wout = wout
+        moe.W_shared_combined = W_shared_combined
+        moe.W_shared_out = W_shared_out
 
         if quants is not None:
             scales, biases = quants
@@ -334,12 +331,15 @@ class MoE:
         return moe
 
     def copy(self):
-        moe_copy = MoE(self.cf, self.top_k, self.n_experts, self.embed_dim, self.hidden_width, self.dtype, quantized=self.quantized, init=False)
+        moe_copy = MoE(self.cf, self.top_k, self.n_experts, self.embed_dim, self.hidden_width,self.shared_hidden_width,self.n_shared_experts,self.LAMBDA, dtype=self.dtype, quantized=self.quantized, init=False)
         moe_copy.router = nx.copy(self.router)
         moe_copy.Wcombined = nx.copy(self.Wcombined)
         moe_copy.Wout = nx.copy(self.Wout)
+        moe_copy.W_shared_combined = nx.copy(self.W_shared_combined)
+        moe_copy.W_shared_out = nx.copy(self.W_shared_out)
+
         if self.quantized:
-            moe_copy.scales = (nx.copy(self.scales[0]), nx.copy(self.scales[1]))
-            moe_copy.biases = (nx.copy(self.biases[0]), nx.copy(self.biases[1]))
+            moe_copy.scales = (nx.copy(self.scales[0]), nx.copy(self.scales[1]), nx.copy(self.scales[2]), nx.copy(self.scales[3]))
+            moe_copy.biases = (nx.copy(self.biases[0]), nx.copy(self.biases[1]), nx.copy(self.biases[2]), nx.copy(self.biases[3]))
 
         return moe_copy

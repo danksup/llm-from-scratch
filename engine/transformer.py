@@ -24,6 +24,8 @@ default_block_configs = {
     "ff_cf":1.25,
     "ff_moe_lambda":1e-2,
     "ff_init":"glorot_uniform",
+    "ff_shared_hidden_width":1024, 
+    "ff_n_shared_experts":2,
     "attn_type":"chunked",
     "attn_variant":"gqa",
     "attn_n_heads":16,
@@ -133,6 +135,8 @@ class Transformer:
                 topk = overrided["ff_topk"]
                 ff_init = INITIALIZERS[overrided["ff_init"]]
                 ff_moe_lambda = overrided["ff_moe_lambda"]
+                ff_shared_hidden_width = overrided["ff_shared_hidden_width"]
+                ff_n_shared_experts = overrided["ff_n_shared_experts"]
 
                 if "attn_chunk_size" in override and override.get("attn_type", None) == "full":
                     raise ValueError(f"[block {i}] attention type of {attn_type_str} doesn't accept \"attn_chunk_size\"")
@@ -165,7 +169,7 @@ class Transformer:
                     case _:
                         raise ValueError(f"[block {i}] invalid variant of \"{attn_variant}\". valid variants: {", ".join(ATTN_VARIANT)}")
 
-                ff = MoE(CF, topk, E, D, H,ff_moe_lambda, dtype=self.dtype, initializer=ff_init, quantized=self.quantized, as_symmetric=self.symmetric_quant)
+                ff = MoE(CF, topk, E, D, H, ff_shared_hidden_width, ff_n_shared_experts,ff_moe_lambda, dtype=self.dtype, initializer=ff_init, quantized=self.quantized, as_symmetric=self.symmetric_quant)
                 rmsnorm1 = RMSNorm(D)
                 rmsnorm2 = RMSNorm(D)
                 transformer_block = TransformerBlock(attn, ff, rmsnorm1, rmsnorm2)
@@ -239,7 +243,7 @@ class Transformer:
                         block.causal_mask = block.attention.compute_mask(T)
 
                 attn_params = block.attention.Wqkv, block.attention.Wo, block.attention.Q_norm.gamma, block.attention.K_norm.gamma
-                ff_params = block.ff.Wcombined, block.ff.Wout, block.ff.router
+                ff_params = block.ff.Wcombined, block.ff.Wout, block.ff.router, block.ff.W_shared_combined, block.ff.W_shared_out
                 scales = (block.attention.scales + block.attention.biases, block.ff.scales + block.ff.biases)
                 ff_out ,masks, caches, router_loss, normalized_histogram = block._forward(output, block.causal_mask, attn_str ,block.attention.configs, attn_params, block.ff.configs, ff_params, epsilon, gamma1, gamma2, P, is_training, scales, use_symmetric=self.symmetric_quant, recompute_activation=self.recompute_activation)
                 total_router_loss += router_loss
@@ -282,23 +286,24 @@ class Transformer:
             _,T,_ = current_grad.shape
             caches_attn, caches_ff, caches_rmsnorm1, caches_rmsnorm2 = caches
             mask1, mask2 = masks
-            scaled_lambda = block.ff.LAMBDA * self.gradient_scale
             moe_configs = block.ff.configs
             P = nx.array(0.1, dtype=self.dtype)
 
-            ff_params = (block.ff.router, block.ff.Wout, block.ff.Wcombined)
+            ff_params = (block.ff.router, block.ff.Wout, block.ff.Wcombined, block.ff.W_shared_combined, block.ff.W_shared_out)
             attn_str = block.attention.self_type()
             attn_configs = block.attention.configs
             attn_params = block.attention.Wqkv, block.attention.Wo, block.attention.Q_norm.gamma, block.attention.K_norm.gamma
             scales = (block.attention.scales + block.attention.biases, block.ff.scales + block.ff.biases)
 
-            dx, dWout, dWcombined, d_router, dWqkv, dWo, d_gamma1, d_gamma2,Q_norm_d_gamma, K_norm_d_gamma = block._backward(current_grad, mask1=mask1, mask2=mask2, p=P, attention=attn_str,
+            dx, dWout, dWcombined, d_router,dW_shared_combined, dW_shared_out, dWqkv,dWo, d_gamma1, d_gamma2, Q_norm_d_gamma, K_norm_d_gamma = block._backward(current_grad, mask1=mask1, mask2=mask2, p=P, attention=attn_str,
                                                                 caches_attn=caches_attn, caches_ff=caches_ff, caches_rmsnorm1=caches_rmsnorm1, caches_rmsnorm2=caches_rmsnorm2,
                                                                 attn_configs = attn_configs, attn_params=attn_params, gamma1=block.rmsnorm1.gamma, gamma2=block.rmsnorm2.gamma, ff_params=ff_params, moe_configs=moe_configs, gradient_scale=self.gradient_scale, quantization=scales, use_symmetric=self.symmetric_quant, recompute_activation=self.recompute_activation)
 
             block.ff.dWout += dWout
             block.ff.dWcombined += dWcombined
             block.ff.d_router += d_router
+            block.ff.dW_shared_combined += dW_shared_combined
+            block.ff.dW_shared_out += dW_shared_out
 
             block.attention.dWqkv += dWqkv
             block.attention.dWo += dWo
@@ -360,7 +365,7 @@ class Transformer:
                 yield self.rmsnorm_final, "gamma", "rmsnorm_final.gamma"
 
         layers = ["ff", "attention", "rmsnorm1", "rmsnorm2"]
-        weights = [["router", "Wcombined", "Wout"],[ "Wqkv", "Wo", ["Q_norm", "gamma"], ["K_norm", "gamma"]],[ "gamma"],[ "gamma"]]
+        weights = [["router", "Wcombined", "Wout", "W_shared_combined", "W_shared_out"],[ "Wqkv", "Wo", ["Q_norm", "gamma"], ["K_norm", "gamma"]],[ "gamma"],[ "gamma"]]
         for a,b,c in self.get_block_weights(layers, weights):
             yield a,b,c
 
@@ -372,7 +377,7 @@ class Transformer:
             yield self.rmsnorm_final, "d_gamma", "rmsnorm_final.d_gamma"
 
         layers = ["ff", "attention", "rmsnorm1", "rmsnorm2"]
-        dweights = [ ["d_router", "dWcombined","dWout"], ["dWo", "dWqkv", ["K_norm", "d_gamma"], ["Q_norm", "d_gamma"]],[ "d_gamma"],["d_gamma"]]
+        dweights = [ ["d_router", "dWcombined","dWout", "dW_shared_combined", "dW_shared_out"], ["dWo", "dWqkv", ["K_norm", "d_gamma"], ["Q_norm", "d_gamma"]],[ "d_gamma"],["d_gamma"]]
         for a,b,c in self.get_block_weights(layers, dweights): 
             yield a,b,c
 
@@ -549,6 +554,8 @@ class Transformer:
                     dWcombined = block.ff.dWcombined.astype(nx.float32) / self.gradient_scale / microbatch_size * gscale
                     dWout = block.ff.dWout.astype(nx.float32) / self.gradient_scale / microbatch_size * gscale
                     d_router = block.ff.d_router.astype(nx.float32) / self.gradient_scale / microbatch_size * gscale
+                    dW_shared_combined = block.ff.dW_shared_combined.astype(nx.float32) / self.gradient_scale / microbatch_size * gscale
+                    dW_shared_out = block.ff.dW_shared_out.astype(nx.float32) / self.gradient_scale / microbatch_size * gscale
 
                     d_gamma1 = block.rmsnorm1.d_gamma.astype(nx.float32) / self.gradient_scale / microbatch_size* gscale
                     d_gamma2 = block.rmsnorm2.d_gamma.astype(nx.float32) / self.gradient_scale / microbatch_size* gscale
@@ -558,11 +565,15 @@ class Transformer:
                         Wo = nx.dequantize(block.attention.Wo, block.attention.scales[1], block.attention.biases[1], regular=self.symmetric_quant)
                         Wcombined = nx.dequantize(block.ff.Wcombined, block.ff.scales[0], block.ff.biases[0], regular=self.symmetric_quant)
                         Wout = nx.dequantize(block.ff.Wout, block.ff.scales[1], block.ff.biases[1], regular=self.symmetric_quant)
+                        W_shared_combined = nx.dequantize(block.ff.W_shared_combined, block.ff.scales[2], block.ff.biases[2], regular=self.symmetric_quant)
+                        W_shared_out  = nx.dequantize(block.ff.W_shared_out, block.ff.scales[3], block.ff.biases[3], regular=self.symmetric_quant)
                     else:
                         Wqkv = block.attention.Wqkv.astype(nx.float32)
                         Wo = block.attention.Wo.astype(nx.float32)
                         Wcombined = block.ff.Wcombined.astype(nx.float32)
                         Wout = block.ff.Wout.astype(nx.float32)
+                        W_shared_combined = block.ff.W_shared_combined.astype(nx.float32)
+                        W_shared_out = block.ff.W_shared_out.astype(nx.float32)
 
                     all_network_params.extend(
                         [(f"Wqkv_{i}", Wqkv, dWqkv, True),
@@ -572,10 +583,12 @@ class Transformer:
                         (f"ff_wcombined_{i}", Wcombined,dWcombined, True),
                         (f"ff_wout_{i}", Wout, dWout, True),
                         (f"ff_router_{i}", block.ff.router.astype(nx.float32), d_router, True),
+                        (f"ff_W_shared_combined_{i}", W_shared_combined, dW_shared_combined, True),
+                        (f"ff_W_shared_out_{i}", W_shared_out, dW_shared_out, True),
                         (f"rmsnorm1_gamma_{i}", block.rmsnorm1.gamma.astype(nx.float32), d_gamma1, False),
                         (f"rmsnorm2_gamma_{i}", block.rmsnorm2.gamma.astype(nx.float32), d_gamma2, False)])
-                    del Wqkv, Wo, Wcombined, Wout
-                    del dWqkv, dWo, dWcombined, dWout, d_router, d_gamma1, d_gamma2
+                    del Wqkv, Wo, Wcombined, Wout, W_shared_combined, W_shared_out
+                    del dWqkv, dWo, dWcombined, dWout, d_router, d_gamma1, d_gamma2, dW_shared_combined, dW_shared_out
                     block.zeroes_gradient()
 
                 if self.quantized:
@@ -604,10 +617,18 @@ class Transformer:
 
                         Wcombined = optimized[f"ff_wcombined_{i}"]
                         block.ff.Wcombined, wcombined_scale, wcombined_bias = nx.quantize(Wcombined, regular=self.symmetric_quant)
+
                         Wout = optimized[f"ff_wout_{i}"]
                         block.ff.Wout, wout_scale, wout_bias = nx.quantize(Wout, regular=self.symmetric_quant)
-                        block.ff.scales = (wcombined_scale, wout_scale)
-                        block.ff.biases = (wcombined_bias, wout_bias)
+
+                        W_shared_combined = optimized[f"ff_W_shared_combined_{i}"]
+                        block.ff.W_shared_combined, W_shared_combined_scale, W_shared_combined_bias = nx.quantize(W_shared_combined, regular=self.symmetric_quant)
+
+                        W_shared_out = optimized[f"ff_W_shared_out_{i}"]
+                        block.ff.W_shared_out, W_shared_out_scale, W_shared_out_bias = nx.quantize(W_shared_out, regular=self.symmetric_quant)
+                        
+                        block.ff.scales = (wcombined_scale, wout_scale, W_shared_combined_scale, W_shared_out_scale)
+                        block.ff.biases = (wcombined_bias, wout_bias, W_shared_combined_bias, W_shared_out_bias)
 
                         del Wqkv,Wo,Wcombined,Wout,wcombined_scale,wcombined_bias,wqkv_scale,wqkv_bias,wout_scale,wout_bias,wo_scale,wo_bias
                     else:
@@ -615,6 +636,8 @@ class Transformer:
                         block.attention.Wo = optimized[f"Wo_{i}"].astype(self.dtype)
                         block.ff.Wcombined = optimized[f"ff_wcombined_{i}"].astype(self.dtype)
                         block.ff.Wout = optimized[f"ff_wout_{i}"].astype(self.dtype)
+                        block.ff.W_shared_combined = optimized[f"ff_W_shared_combined_{i}"].astype(self.dtype)
+                        block.ff.W_shared_out = optimized[f"ff_W_shared_out_{i}"].astype(self.dtype)
 
                     block.ff.router = optimized[f"ff_router_{i}"]
                     block.rmsnorm1.gamma = optimized[f"rmsnorm1_gamma_{i}"]
@@ -745,7 +768,7 @@ class Transformer:
 
     def get_all_weights(self, flatten:bool|Literal["dict"]=False) -> dict[int,dict[str,dict[str,nx.ArrayLike]]] | dict[str,nx.ArrayLike] | list[Any]:
             layers = ["ff", "attention", "rmsnorm1", "rmsnorm2"]
-            weights = [["router", "Wcombined", "Wout"],[ "Wqkv", "Wo"],[ "gamma"],[ "gamma"]]
+            weights = [["router", "Wcombined", "Wout","W_shared_combined", "W_shared_out"],[ "Wqkv", "Wo"],[ "gamma"],[ "gamma"]]
 
             if not flatten:
                 all_weights = {}
@@ -773,7 +796,7 @@ class Transformer:
     def get_quant_params(self):
         quant_params = {}
         layers = ["ff", "attention"]
-        weights = [["Wcombined", "Wout"],[ "Wqkv", "Wo"]]
+        weights = [["Wcombined", "Wout","W_shared_combined", "W_shared_out"],[ "Wqkv", "Wo"]]
         quants = ["scales", "biases"]
 
         for idx, block in enumerate(self.blocks):

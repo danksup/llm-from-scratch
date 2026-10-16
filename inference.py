@@ -10,18 +10,18 @@ import random
 nx.set_seed(random.randrange(0,99999))
 
 tokenizer = Tokenizer.load("artifacts/tokenizer/tokenizer32768_1624612680len.tokenizer")
-session_path = "artifacts/sessions/session_keyboardinterrupt_save_51fd04de-c7e0-44c9-acf3-c251e6fa8152.safetensors"
+session_path = "artifacts/sessions/session_(73296384, 18246144)_param_1_epochs_weights_only_690352f8-9c6a-42aa-8000-16896afe2c78.safetensors"
 
 session = Session.load(session_path, tokenizer)
-context = "Who are you?"
+context = "Do I know you?"
 print(f"input: {context}")
 context = nx.array(tokenizer.encode(context), nx.uint32)
 
 context = context.reshape(-1, context.shape[0])
 
-TEMPERATURE = 0.5
-TOP_K = 30
-TOP_P = .8
+TEMPERATURE = 0.7
+TOP_K = 15
+TOP_P = .9
 N = 100
 penalty_mem = 128
 penalty = 0.25

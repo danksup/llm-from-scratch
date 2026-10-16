@@ -15,13 +15,13 @@ from engine.transformer import Transformer
 nx.set_seed(12345)
 
 EPOCHS = 1
-EMBED_DIM = 128
-CONTEXT_SIZE = 1024
-BATCH_SIZE = 10
+EMBED_DIM = 256
+CONTEXT_SIZE = 2048
+BATCH_SIZE = 2
 BASE_WIDTH = 4 * EMBED_DIM
 N_HEADS = 4
 N_KV_HEADS = max(1, N_HEADS // 2)
-N_EXPERTS = 4
+N_EXPERTS = 8
 CF = 1.25
 VAL = 1
 TOP_K = 2
@@ -32,7 +32,7 @@ tokenizer1 = Tokenizer.load(TOKENIZER_PATH)
 
 session_configs = {
     "epochs":EPOCHS,
-    "max_step":2000,
+    "max_step":10,
     "train_split": VAL,
     "max_val_step":1000,
     "eval_every":1,
@@ -59,7 +59,7 @@ session_configs = {
 }
 
 model_configs = {
-    "n_blocks":4,
+    "n_blocks":10,
     "embed_dim":EMBED_DIM,
     "dtype": "float16",
     "gradient_scale":32768,
@@ -73,6 +73,8 @@ model_configs = {
         "ff_topk":TOP_K,
         "ff_cf":CF,
         "ff_init":"glorot_uniform",
+        "ff_shared_hidden_width":BASE_WIDTH, 
+        "ff_n_shared_experts":2,
         "ff_moe_lambda":1e-3,
         "attn_type":"chunked",
         "attn_chunk_size":CONTEXT_SIZE//8,

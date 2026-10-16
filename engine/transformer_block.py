@@ -42,11 +42,15 @@ class TransformerBlock:
         if quantized and nx.backend == "MLX" and not use_symmetric:
             ff_params += self.ff.Wcombined.size * 4
             ff_params += self.ff.Wout.size * 4
+            total += self.ff.W_shared_combined.size * 4
+            total += self.ff.W_shared_out.size * 4
             total += self.attention.Wqkv.size * 4
             total += self.attention.Wo.size * 4
         else:
             ff_params += self.ff.Wcombined.size
             ff_params += self.ff.Wout.size
+            total += self.ff.W_shared_combined.size
+            total += self.ff.W_shared_out.size
             total += self.attention.Wqkv.size
             total += self.attention.Wo.size
 
@@ -84,10 +88,10 @@ class TransformerBlock:
 
     @staticmethod
     @nx.compile
-    def _backward(gradient:Any, mask1:Any, mask2:Any, attention:str, p, caches_attn:tuple[Any,...], caches_ff:tuple[Any,...], caches_rmsnorm1:tuple[Any,...], caches_rmsnorm2:tuple[Any,...], attn_configs:tuple[Any,...], attn_params:tuple[Any,...], gamma1:Any, gamma2:Any, ff_params:tuple, moe_configs,gradient_scale, quantization:tuple[Any,...]|None=None, *, use_symmetric:bool=False, recompute_activation:bool=True) -> tuple[Any, Any, Any, Any, Any, Any, Any, Any,Any, Any]:
+    def _backward(gradient:Any, mask1:Any, mask2:Any, attention:str, p, caches_attn:tuple[Any,...], caches_ff:tuple[Any,...], caches_rmsnorm1:tuple[Any,...], caches_rmsnorm2:tuple[Any,...], attn_configs:tuple[Any,...], attn_params:tuple[Any,...], gamma1:Any, gamma2:Any, ff_params:tuple, moe_configs,gradient_scale, quantization:tuple[Any,...]|None=None, *, use_symmetric:bool=False, recompute_activation:bool=True) -> tuple[Any, Any, Any, Any, Any, Any, Any, Any,Any, Any, Any, Any]:
         d_ff_drop = Dropout._backward(gradient, mask2, p) #grad dtype
 
-        dx_ff,  dWcombined, dWout, d_router = MoE.backward(d_ff_drop, caches_ff, moe_configs, ff_params,gradient_scale, quantization[1], use_symmetric=use_symmetric, recompute_activation=recompute_activation) #out:fp32 #type:ignore
+        dx_ff, dWcombined, dWout, d_router, dW_shared_combined, dW_shared_out = MoE.backward(d_ff_drop, caches_ff, moe_configs, ff_params,gradient_scale, quantization[1], use_symmetric=use_symmetric, recompute_activation=recompute_activation) #out:fp32 #type:ignore
 
         d_rmsn2,d_gamma2 = RMSNorm._backward(dx_ff, caches_rmsnorm2 ,gamma2)
 
@@ -103,7 +107,7 @@ class TransformerBlock:
 
         dx = d_rmsn1 + d_attn_out
 
-        return dx, dWout, dWcombined, d_router, dWqkv,dWo, d_gamma1, d_gamma2, Q_norm_d_gamma, K_norm_d_gamma
+        return dx, dWout, dWcombined, d_router,dW_shared_combined, dW_shared_out, dWqkv,dWo, d_gamma1, d_gamma2, Q_norm_d_gamma, K_norm_d_gamma
 
     #TODO:compiled, dtype consistency fix/check
     def inference_forward(self, x, max_cache_len, cached_k=None, cached_v=None,  position=0, * ,use_symmetric=False):
@@ -118,7 +122,7 @@ class TransformerBlock:
         rmsnorm2_out = rmsnorm2_out.astype(x.dtype)
 
         ff_quant_params = self.ff.scales + self.ff.biases
-        ff_out,_,_,_ = MoE.forward(rmsnorm2_out, self.ff.configs, (self.ff.Wcombined, self.ff.Wout, self.ff.router), ff_quant_params, use_symmetric=use_symmetric)
+        ff_out,_,_,_ = MoE.forward(rmsnorm2_out, self.ff.configs, (self.ff.Wcombined, self.ff.Wout, self.ff.router, self.ff.W_shared_combined, self.ff.W_shared_out ), ff_quant_params, use_symmetric=use_symmetric)
         ff_out = ff_out + attn_out
 
         return ff_out, cached_k, cached_v

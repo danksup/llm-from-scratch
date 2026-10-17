@@ -74,7 +74,7 @@ model_configs = {
         "ff_cf":CF,
         "ff_init":"glorot_uniform",
         "ff_shared_hidden_width":BASE_WIDTH, 
-        "ff_n_shared_experts":2,
+        "ff_n_shared_experts":100,
         "ff_moe_lambda":1e-3,
         "attn_type":"chunked",
         "attn_chunk_size":CONTEXT_SIZE//8,

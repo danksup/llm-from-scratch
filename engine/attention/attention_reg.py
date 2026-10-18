@@ -205,7 +205,7 @@ class AttentionFull:
         del x, output_concat, freqs, Wqkv, Wo
         return dx,dWqkv,dWo,Q_norm_d_gamma,K_norm_d_gamma
 
-    def inference_forward(self, x, max_cache_len, freqs, quantization, cached_k=None, cached_v=None, position = 0,  *, use_symmetric:bool=False):
+    def inference_forward(self, x, max_cache_len, freqs, quantization, cached_k, cached_v, position = 0,  *, use_symmetric:bool=False):
         wqkv_scale, wo_scale, wqkv_bias, wo_bias = quantization #type:ignore
         if wqkv_scale is not None:
             combined = nx.quantized_matmul(x, self.Wqkv, wqkv_scale,wqkv_bias, transpose=True, regular=use_symmetric)
@@ -219,33 +219,41 @@ class AttentionFull:
         K, _ = RMSNorm._forward(K, self.K_norm.gamma, self.K_norm.epsilon)
         K = rope_forward(K, freqs, position)
 
-        if cached_k is not None :
-            cached_k = nx.concatenate([cached_k, K], axis = 2)
-        else:
-            cached_k = K
+        end = position + T
 
         V = combined[..., self.embed_dim + (self.n_kv_heads * self.head_dim):]
         V = V.reshape(B, T, self.n_kv_heads, self.head_dim).transpose(0,2,1,3)
 
-        if cached_v is not None:
-            cached_v = nx.concatenate([cached_v, V], axis = 2)
+        if end <=  max_cache_len:
+            cached_k[:,:,position:end,:] = K
+            active_K = cached_k[:,:,:end,:]
+            cached_v[:,:,position:end,:] = V
+            active_V = cached_v[:,:,:end,:]
         else:
-            cached_v = V
+            cached_k[:,:,:-T, :] = cached_k[:, :, T:, :]
+            cached_v[:,:,:-T, :] = cached_v[:, :, T:, :]
+            cached_k[:, :, -T:, :] = K
+            cached_v[:, :, -T:, :] = V
+            active_K = cached_k
+            active_V = cached_v
+            # cached_k = cached_k[:, :, -max_cache_len:, :]
+            # cached_v = cached_v[:, :, -max_cache_len:, :]
 
-        if cached_k.shape[2] > max_cache_len:
-            cached_k = cached_k[:, :, -max_cache_len:, :]
-
-            cached_v = cached_v[:, :, -max_cache_len:, :]
 
         Q = combined[..., :self.embed_dim]
         Q = Q.reshape(B, T, self.n_heads, self.head_dim).transpose(0,2,1,3)
         Q, _ = RMSNorm._forward(Q, self.Q_norm.gamma, self.Q_norm.epsilon)
         Q = rope_forward(Q, freqs, position)
 
-        repeats_cached_k = nx.repeat(cached_k, self.n_rep, axis=1 )
-        repeats_cached_v = nx.repeat(cached_v, self.n_rep, axis=1 )
+        repeats_cached_k = nx.repeat(active_K, self.n_rep, axis=1 )
+        repeats_cached_v = nx.repeat(active_V, self.n_rep, axis=1 )
 
         scores = (Q @ repeats_cached_k.transpose(0,1,3,2)).astype(nx.float32) / nx.float_32(nx.sqrt(self.head_dim))
+        if T > 1:
+            if position > 0:
+                scores[..., -T:] = nx.where(self.compute_mask(T), -1e9, scores[..., -T:])
+            else:
+                scores = nx.where(self.compute_mask(T), -1e9, scores)
         weights = nx.softmax(scores)
         weights = weights.astype(x.dtype)
         output = weights @ repeats_cached_v
@@ -257,6 +265,7 @@ class AttentionFull:
             output_projected = output_concat @ self.Wo
 
         return output_projected, cached_k, cached_v
+    
 
     @staticmethod
     def compute_mask(T):

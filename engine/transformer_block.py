@@ -122,7 +122,7 @@ class TransformerBlock:
         rmsnorm2_out = rmsnorm2_out.astype(x.dtype)
 
         ff_quant_params = self.ff.scales + self.ff.biases
-        ff_out,_,_,_ = MoE.forward(rmsnorm2_out, self.ff.configs, (self.ff.Wcombined, self.ff.Wout, self.ff.router, self.ff.W_shared_combined, self.ff.W_shared_out ), ff_quant_params, use_symmetric=use_symmetric)
+        ff_out,_,_,_ = MoE.forward(rmsnorm2_out, self.ff.configs, (self.ff.Wcombined, self.ff.Wout, self.ff.router, self.ff.W_shared_combined, self.ff.W_shared_out ), ff_quant_params, use_symmetric=use_symmetric, inference=True)
         ff_out = ff_out + attn_out
 
         return ff_out, cached_k, cached_v

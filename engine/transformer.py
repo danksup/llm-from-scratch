@@ -231,8 +231,10 @@ class Transformer:
                 if attn_str == "chunked":
                     chunk_size = block.attention.chunk_size
                     chunk_size = min(chunk_size, T-1)
-                    if block.causal_mask is None or block.causal_mask.shape != (T, chunk_size + 1):
-                        block.causal_mask = block.attention.compute_mask()
+                    remainder = (chunk_size - (T % chunk_size)) % chunk_size
+                    n_chunk = (T + remainder) // chunk_size
+                    if block.causal_mask is None or block.causal_mask.shape != (n_chunk, chunk_size, 2 * chunk_size):
+                        block.causal_mask = block.attention.compute_mask(T)
                 elif attn_str == "full":
                     if block.causal_mask is None or block.causal_mask.shape != (T, T):
                         block.causal_mask = block.attention.compute_mask(T)
@@ -269,8 +271,7 @@ class Transformer:
         if return_cache:
             all_caches += rms_cache,
             return scores, rmsnorm_out, all_masks, all_caches, total_router_loss, histograms
-            return rmsnorm_out, all_masks, all_caches, total_router_loss, histograms
-        return rmsnorm_out, total_router_loss
+        return scores, total_router_loss
 
     def backward(self, err_signal:Any,  all_masks, all_caches:list) -> Any:
         '''
@@ -703,7 +704,13 @@ class Transformer:
 
     def inference(self, context:Any, max_cache_len, all_caches = None,  position = 0, *, use_symmetric) -> Any:
         if all_caches is None:
-            all_caches = [(None, None) for _ in range(len(self.blocks))]
+            all_caches = []
+            for idx, block in enumerate(self.blocks):
+                n_kv = block.attention.n_kv_heads
+                head_dim = block.attention.head_dim
+                kv_chace_shape = (context.shape[0], n_kv,max_cache_len, head_dim)
+                all_caches.append((nx.zeros(kv_chace_shape, dtype=self.dtype), nx.zeros(kv_chace_shape, dtype=self.dtype)))
+
         as_symmetric = self.symmetric_quant or use_symmetric
         output = self.embedding.forward(context)
         for idx, block in enumerate(self.blocks):

@@ -67,6 +67,7 @@ logs:
 - recompute activation (selective) sep 26 2026
 - mmap for dataloader oct 14 2026
 - shared experts oct 16 2026
+- static kv caching oct 18 2026
 
 ## Ongoing:
 - optimizing/cleanup/docs
@@ -75,7 +76,6 @@ logs:
 - parallelizing tokenizer word frequency counting
 - moe noise
 - ReLoRa
-- attn inference static instead of concatenate
 - inference optimization 
 - conversation memory
   

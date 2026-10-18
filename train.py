@@ -32,7 +32,7 @@ tokenizer1 = Tokenizer.load(TOKENIZER_PATH)
 
 session_configs = {
     "epochs":EPOCHS,
-    "max_step":10,
+    "max_step":1000,
     "train_split": VAL,
     "max_val_step":1000,
     "eval_every":1,
@@ -42,7 +42,7 @@ session_configs = {
     "microbatch_size":8,
     "optimizer":"adamw",
     "optimizer_args":{
-        "lr": 3e-4,
+        "lr": 1e-3,
         "use_master": True,
         "scheduler": "cosine_decay",
         "min_lr": 5e-5,
@@ -74,7 +74,7 @@ model_configs = {
         "ff_cf":CF,
         "ff_init":"glorot_uniform",
         "ff_shared_hidden_width":BASE_WIDTH, 
-        "ff_n_shared_experts":100,
+        "ff_n_shared_experts":2,
         "ff_moe_lambda":1e-3,
         "attn_type":"chunked",
         "attn_chunk_size":CONTEXT_SIZE//8,

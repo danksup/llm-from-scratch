@@ -231,7 +231,7 @@ class AttentionChunked:
 
         dV_l = d_chunked_V[:, :, :, :chunk_size, :]
         dV_r = d_chunked_V[:, :, :, chunk_size:, :]
-        dV_r[:,:,-1:, :,:] += dV_l[:,:,:1,:,:] #B, n_heads, n_chunk, chunk_size, Dh
+        dV_r[:,:,:-1, :,:] += dV_l[:,:,1:,:,:] #B, n_heads, n_chunk, chunk_size, Dh
         dV = dV_r.reshape(B, n_kv_heads, -1, head_dim)[:, :, :T, :] #B, n_kv_heads, T, Dh
         dV = dV.transpose(0,2,1,3).reshape(B,T, head_dim*n_kv_heads)#B, T, D
 
@@ -249,7 +249,7 @@ class AttentionChunked:
 
         return dx,dWqkv,dWo, Q_norm_d_gamma, K_norm_d_gamma
 
-    def inference_forward(self, x, max_cache_len, freqs, quantization, cached_k=None, cached_v=None, position = 0,  *, use_symmetric:bool=False):
+    def inference_forward(self, x, max_cache_len, freqs, quantization, cached_k, cached_v, position = 0,  *, use_symmetric:bool=False):
         wqkv_scale, wo_scale, wqkv_bias, wo_bias = quantization #type:ignore
         if wqkv_scale is not None:
             combined = nx.quantized_matmul(x, self.Wqkv, wqkv_scale,wqkv_bias, transpose=True, regular=use_symmetric)
@@ -263,33 +263,41 @@ class AttentionChunked:
         K, _ = RMSNorm._forward(K, self.K_norm.gamma, self.K_norm.epsilon)
         K = rope_forward(K, freqs, position)
 
-        if cached_k is not None :
-            cached_k = nx.concatenate([cached_k, K], axis = 2)
-        else:
-            cached_k = K
+        end = position + T
 
         V = combined[..., self.embed_dim + (self.n_kv_heads * self.head_dim):]
         V = V.reshape(B, T, self.n_kv_heads, self.head_dim).transpose(0,2,1,3)
 
-        if cached_v is not None:
-            cached_v = nx.concatenate([cached_v, V], axis = 2)
+        if end <=  max_cache_len:
+            cached_k[:,:,position:end,:] = K
+            active_K = cached_k[:,:,:end,:]
+            cached_v[:,:,position:end,:] = V
+            active_V = cached_v[:,:,:end,:]
         else:
-            cached_v = V
+            cached_k[:,:,:-T, :] = cached_k[:, :, T:, :]
+            cached_v[:,:,:-T, :] = cached_v[:, :, T:, :]
+            cached_k[:, :, -T:, :] = K
+            cached_v[:, :, -T:, :] = V
+            active_K = cached_k
+            active_V = cached_v
+            # cached_k = cached_k[:, :, -max_cache_len:, :]
+            # cached_v = cached_v[:, :, -max_cache_len:, :]
 
-        if cached_k.shape[2] > max_cache_len:
-            cached_k = cached_k[:, :, -max_cache_len:, :]
-
-            cached_v = cached_v[:, :, -max_cache_len:, :]
 
         Q = combined[..., :self.embed_dim]
         Q = Q.reshape(B, T, self.n_heads, self.head_dim).transpose(0,2,1,3)
         Q, _ = RMSNorm._forward(Q, self.Q_norm.gamma, self.Q_norm.epsilon)
         Q = rope_forward(Q, freqs, position)
 
-        repeats_cached_k = nx.repeat(cached_k, self.n_rep, axis=1 )
-        repeats_cached_v = nx.repeat(cached_v, self.n_rep, axis=1 )
+        repeats_cached_k = nx.repeat(active_K, self.n_rep, axis=1 )
+        repeats_cached_v = nx.repeat(active_V, self.n_rep, axis=1 )
 
         scores = (Q @ repeats_cached_k.transpose(0,1,3,2)).astype(nx.float32) / nx.float_32(nx.sqrt(self.head_dim))
+        if T > 1:
+            if position > 0:
+                scores[..., -T:] = nx.where(self.compute_mask_inference(T), -1e9, scores[..., -T:])
+            else:
+                scores = nx.where(self.compute_mask_inference(T), -1e9, scores)
         weights = nx.softmax(scores)
         weights = weights.astype(x.dtype)
         output = weights @ repeats_cached_v
@@ -302,14 +310,23 @@ class AttentionChunked:
 
         return output_projected, cached_k, cached_v
 
-    def compute_mask(self):
+    def compute_mask(self, T, dtype=nx.float16):
         chunk_size = self.chunk_size
-        row_idx = nx.ones((chunk_size,chunk_size))
-        column_idx = nx.ones((chunk_size,chunk_size))
-        trilled = nx.tril(column_idx)
-        return nx.concatenate([row_idx, trilled], axis=1)
-        
+        remainder = (chunk_size - (T % chunk_size)) % chunk_size
+        n_chunk = (T + remainder) // chunk_size
+        mask_shape = n_chunk, chunk_size, 2 * chunk_size
+        mask = nx.zeros(mask_shape, dtype)
+        mask[1:,:,:chunk_size] = nx.ones((chunk_size, chunk_size), dtype)
+        mask[..., chunk_size:] = nx.tril(nx.ones((chunk_size, chunk_size), dtype=dtype))
+        # row_idx = nx.ones((chunk_size,chunk_size))
+        # column_idx = nx.ones((chunk_size,chunk_size))
+        # trilled = nx.tril(column_idx)
+        # return nx.concatenate([row_idx, trilled], axis=1)
+        return mask
 
+    @staticmethod
+    def compute_mask_inference(T):
+        return nx.triu(nx.ones((T, T), dtype=nx.bool_), k=1)
 
     @classmethod
     def from_weight(cls, configs, weights, quants,attn_QK_gamma, dtype) -> "AttentionChunked":

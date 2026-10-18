@@ -93,7 +93,7 @@ class MoE:
         return s * value_half #(E, capacity, H) 
 
     @staticmethod
-    def forward(x:nx.ArrayLike, ff_configs, ff_params, quantization:tuple[Any,...]|None=None, *, use_symmetric:bool=False, recompute_activation:bool=True):
+    def forward(x:nx.ArrayLike, ff_configs, ff_params, quantization:tuple[Any,...]|None=None, *, use_symmetric:bool=False, recompute_activation:bool=True, inference=False):
         #routing
         # print("moe forward x", x.dtype)
         B, T, D = x.shape
@@ -105,7 +105,12 @@ class MoE:
         wcombined_scale, wout_scale,shared_expert_scale,shared_expert_out_scale, wcombined_bias, wout_bias, shared_expert_bias,  shared_expert_out_bias = quantization  #type:ignore
 
         top_k = min(top_k, n_experts)
-        capacity = math.ceil(capacity_factor * N * top_k / n_experts)
+
+        if inference:
+            capacity = N
+        else:
+            capacity = math.ceil(capacity_factor * N * top_k / n_experts)
+            
         flatten_x = x.reshape(-1, D)
         scores =  flatten_x.astype(nx.float32) @ router #(N, E)
         z_loss = C * nx.mean(nx.square(nx.logsumexp(scores, -1)))

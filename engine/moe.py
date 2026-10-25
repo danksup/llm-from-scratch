@@ -78,6 +78,7 @@ class MoE:
     def compute_projected(expert_input, Wcombined, wcombined_quants, use_symmetric):
         wcombined_scale, wcombined_bias = wcombined_quants
         if wcombined_scale is not None:
+
             projected = nx.quantized_matmul(expert_input, Wcombined, scales=wcombined_scale, biases=wcombined_bias, regular=use_symmetric) #(E, capacity, 2H)
         else:
             projected = expert_input @ Wcombined
@@ -93,7 +94,7 @@ class MoE:
         return s * value_half #(E, capacity, H) 
 
     @staticmethod
-    def forward(x:nx.ArrayLike, ff_configs, ff_params, quantization:tuple[Any,...]|None=None, *, use_symmetric:bool=False, recompute_activation:bool=True, inference=False):
+    def forward(x:nx.ArrayLike, ff_configs, ff_params, quantization:tuple[Any,...]|None=None, *, use_symmetric:bool=False, recompute_activation:bool=True):
         #routing
         # print("moe forward x", x.dtype)
         B, T, D = x.shape
@@ -106,10 +107,7 @@ class MoE:
 
         top_k = min(top_k, n_experts)
 
-        if inference:
-            capacity = N
-        else:
-            capacity = math.ceil(capacity_factor * N * top_k / n_experts)
+        capacity = math.ceil(capacity_factor * N * top_k / n_experts)
             
         flatten_x = x.reshape(-1, D)
         scores =  flatten_x.astype(nx.float32) @ router #(N, E)
@@ -315,6 +313,105 @@ class MoE:
         del dx_flat, top_expert_indices, valid, safe_slot
 
         return dx, dWcombined, dWout, d_router, dW_shared_combined, dW_shared_out
+
+    @staticmethod
+    def inference_forward(x:nx.ArrayLike, ff_configs, ff_params, quantization:tuple[Any,...]|None=None, *, use_symmetric:bool=False):
+        #routing
+        B, T, D = x.shape
+        N = B * T
+
+        _, _, n_experts, _, top_k, _, _, _ = ff_configs
+        Wcombined, Wout, router, W_shared_combined, W_shared_out  = ff_params
+
+        wcombined_scale, wout_scale,shared_expert_scale,shared_expert_out_scale, wcombined_bias, wout_bias, shared_expert_bias,  shared_expert_out_bias = quantization  #type:ignore
+
+        top_k = min(top_k, n_experts)
+
+        capacity = N
+            
+        flatten_x = x.reshape(-1, D)
+        scores =  flatten_x.astype(nx.float32) @ router #(N, E)
+        router_prob = nx.softmax(scores, -1) #(N, E)
+
+        #top-k
+        top_expert_indices = nx.topk(router_prob, top_k) #(N, K)
+        row_idx = nx.arange(N, dtype=nx.int32)[:, None]  #(N,1)
+        top_gates = router_prob[row_idx, top_expert_indices] # (N, K)
+        top_gates32 = top_gates / nx.sum(top_gates, axis=-1, keepdims=True, dtype=nx.float32)#, dtype=DTYPE)
+        top_gates = top_gates32.astype(x.dtype)
+
+        flatten_top_expert_indices = top_expert_indices.reshape(-1) #(N*K,)
+        flatten_top_gates = top_gates.reshape(-1) #(N*K,)
+
+        if N == 1:
+            Wcombined = Wcombined[flatten_top_expert_indices] #K,D,2H
+            Wout = Wout[flatten_top_expert_indices] #K H D
+
+            if wcombined_scale is not None:
+                wcombined_scale = wcombined_scale[flatten_top_expert_indices]
+                wcombined_bias = wcombined_bias[flatten_top_expert_indices]
+                wout_scale = wout_scale[flatten_top_expert_indices]
+                wout_bias = wout_bias[flatten_top_expert_indices]
+                
+            projected = MoE.compute_projected(flatten_x[None,:,:], Wcombined, (wcombined_scale, wcombined_bias),use_symmetric)
+
+            hidden = MoE.compute_hidden(projected, x.dtype) #(E, capacity, H)
+
+            if wout_scale is not None:
+                raw_output = nx.quantized_matmul(hidden, Wout, scales=wout_scale, biases=wout_bias, regular=use_symmetric) #(E, capacity, D)
+            else:
+                raw_output = hidden @ Wout #(E, capacity, D)
+
+            final_output = raw_output * flatten_top_gates[:, None, None]
+        else:
+            #dispatch
+            M = N * top_k
+            assignment_rows = nx.arange(M, dtype=nx.int32)
+            routing_mask = nx.zeros((M,n_experts), nx.int32)
+            routing_mask = nx.add_at(routing_mask, (assignment_rows, flatten_top_expert_indices), 1)
+    
+            cum_assignment = nx.cumsum(routing_mask, axis=0, dtype=nx.int32)
+    
+            slot_idx = cum_assignment[assignment_rows, flatten_top_expert_indices] - 1 #(N,)
+            safe_slot = nx.clip(slot_idx, 0, capacity - 1, dtype=nx.int32)
+            valid = slot_idx < capacity
+    
+            expert_input = MoE.compute_expert_input(n_experts, top_k, N, flatten_x, valid, safe_slot, capacity, D, flatten_top_expert_indices, x.dtype) #(n_experts, capacity, D)
+    
+            expert_gate = nx.zeros((n_experts, capacity), dtype=top_gates.dtype)
+            safe_gates = nx.where(valid, flatten_top_gates, nx.zeros_like(flatten_top_gates))
+            expert_gate = nx.add_at(expert_gate, (flatten_top_expert_indices, safe_slot), safe_gates)
+            
+            projected = MoE.compute_projected(expert_input, Wcombined, (wcombined_scale, wcombined_bias), use_symmetric) #(E, capacity, 2H)
+
+            hidden = MoE.compute_hidden(projected, x.dtype) #(E, capacity, H)
+
+            if wout_scale is not None:
+                raw_output = nx.quantized_matmul(hidden, Wout, scales=wout_scale, biases=wout_bias, regular=use_symmetric) #(E, capacity, D)
+            else:
+                raw_output = hidden @ Wout #(E, capacity, D)
+
+            gated_output = raw_output * expert_gate[..., None]
+            final_output = gated_output[flatten_top_expert_indices, safe_slot]
+            final_output = final_output * valid[..., None]
+        
+        final_output = final_output.reshape(N,top_k,D)
+
+        final_output = nx.sum(final_output, axis=1, dtype=nx.float32).reshape(B,T,D) #check
+
+        shared_projected = MoE.compute_projected(flatten_x, W_shared_combined, (shared_expert_scale,shared_expert_bias), use_symmetric) #(N, ns * 2Hs)
+        
+        shared_hidden = MoE.compute_hidden(shared_projected, x.dtype) #N, ns * H
+
+        if shared_expert_out_scale is not None:
+            raw_shared_output = nx.quantized_matmul(shared_hidden,W_shared_out, scales=shared_expert_out_scale, biases=shared_expert_out_bias, regular=use_symmetric)
+        else:
+            raw_shared_output = shared_hidden @ W_shared_out #N, D
+
+        shared_output = raw_shared_output.reshape(B,T,D)
+        final_output = final_output.astype(x.dtype) + shared_output
+
+        return final_output
 
     @classmethod
     def from_weight(cls, configs, weights, quants, dtype) -> "MoE":

@@ -33,3 +33,5 @@ test/*
 tokenizer-demo/*
 
 cabbage.py
+
+.ropeproject/

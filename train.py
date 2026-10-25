@@ -32,7 +32,7 @@ tokenizer1 = Tokenizer.load(TOKENIZER_PATH)
 
 session_configs = {
     "epochs":EPOCHS,
-    "max_step":1000,
+    "max_step":5000,
     "train_split": VAL,
     "max_val_step":1000,
     "eval_every":1,
@@ -42,7 +42,7 @@ session_configs = {
     "microbatch_size":8,
     "optimizer":"adamw",
     "optimizer_args":{
-        "lr": 1e-3,
+        "lr": 5e-4,
         "use_master": True,
         "scheduler": "cosine_decay",
         "min_lr": 5e-5,

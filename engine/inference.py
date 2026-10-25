@@ -44,9 +44,10 @@ class Inference:
         logits, self.all_caches = self.transformer.inference(context,self.session_configs["context_size"], self.all_caches, self.position, use_symmetric=as_symmetric)
         self.position += context.shape[1]
 
-        raw_token = self._sample(logits, self.penalty_memory,  self.temp, self.top_k, self.top_p, self.penalty)
-        self.penalty_memory.append(raw_token)
+        penalty_mem = nx.array(self.penalty_memory, nx.uint32)
+        raw_token = self._sample(logits, penalty_mem,  self.temp, self.top_k, self.top_p, self.penalty)
         token = raw_token.item()
+        self.penalty_memory.append(token)
         decoded = self.tokenizer.decode([token])
         print(decoded,end="",flush=True)
         if any(token in decoded for token in ("<EOT>", "<|endofdoc|>")):
@@ -57,13 +58,15 @@ class Inference:
         for _ in range(self.n-1):
             logits, self.all_caches = self.transformer.inference(next_token,self.session_configs["context_size"], self.all_caches, self.position, use_symmetric=as_symmetric)
             self.position += 1
-            raw_token = self._sample(logits, self.penalty_memory,  self.temp, self.top_k, self.top_p, self.penalty)
+            penalty_mem = nx.array(self.penalty_memory, nx.uint32)
+            raw_token = self._sample(logits, penalty_mem,  self.temp, self.top_k, self.top_p, self.penalty)
 
             if len(self.penalty_memory) >= self.penalty_mem_size:
                 self.penalty_memory =  self.penalty_memory[1:]
-            self.penalty_memory.append(raw_token)
 
             token = raw_token.item()
+            self.penalty_memory.append(token)
+
             decoded = self.tokenizer.decode([token])
             print(decoded,end="",flush=True)
             if any(token in decoded for token in ("<EOT>", "<|endofdoc|>")):
@@ -71,13 +74,11 @@ class Inference:
             next_token = nx.array([[token]], dtype=nx.int32)
     
     @staticmethod
+    # @nx.compile
     def _sample(logits, memory, temperature=0.8, top_k=3, top_p=0.9, penalty=0.05):
-        if memory:
+        if memory.size > 0:
             memory = nx.array(memory, dtype=nx.int32)
-            mem_array = nx.unique(memory, return_counts=True)
-            mem_unique = mem_array[0]
-            mem_count = mem_array[1]
-            logits = nx.substract_at(logits, (..., mem_unique), mem_count * penalty)
+            logits = nx.substract_at(logits, (..., memory), penalty)
 
         if temperature <= 0:
             return nx.argmax(logits[0, -1], -1)
@@ -92,18 +93,11 @@ class Inference:
         probs = probs[top_indices]
         sorted_order = nx.argsort(probs)[::-1]
         sorted_probs = probs[sorted_order]
+
         sorted_indices = top_indices[sorted_order]
         cum = nx.cumsum(sorted_probs)
-        mask = cum <= top_p
+        mask = (cum - sorted_probs) < top_p
 
-        cutoff = int(nx.sum(mask))
-        cutoff = min(cutoff + 1, len(sorted_probs))
-        mask[0] = True
-        if not bool(nx.all(mask)):
-            first_false = nx.argmax(~mask)
-            mask[first_false] = True
-
-        keep_indices = sorted_indices[:cutoff]
-        keep_probs = sorted_probs[:cutoff]
+        keep_probs = nx.where(mask, sorted_probs, 0.0)
         keep_probs /= nx.sum(keep_probs)
-        return nx.random_choice(keep_indices, p=keep_probs)
+        return nx.random_choice(sorted_indices, p=keep_probs)

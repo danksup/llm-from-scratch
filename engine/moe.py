@@ -320,14 +320,15 @@ class MoE:
         B, T, D = x.shape
         N = B * T
 
-        _, _, n_experts, _, top_k, _, _, _ = ff_configs
+        _, _, n_experts, capacity_factor, top_k, _, _, LAMBDA = ff_configs
+
         Wcombined, Wout, router, W_shared_combined, W_shared_out  = ff_params
 
         wcombined_scale, wout_scale,shared_expert_scale,shared_expert_out_scale, wcombined_bias, wout_bias, shared_expert_bias,  shared_expert_out_bias = quantization  #type:ignore
 
         top_k = min(top_k, n_experts)
 
-        capacity = N
+
             
         flatten_x = x.reshape(-1, D)
         scores =  flatten_x.astype(nx.float32) @ router #(N, E)
@@ -364,6 +365,7 @@ class MoE:
 
             final_output = raw_output * flatten_top_gates[:, None, None]
         else:
+            capacity = math.ceil(capacity_factor * N * top_k / n_experts)
             #dispatch
             M = N * top_k
             assignment_rows = nx.arange(M, dtype=nx.int32)

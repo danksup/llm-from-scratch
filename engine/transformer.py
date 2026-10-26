@@ -596,8 +596,9 @@ class Transformer:
                     lookup_table = nx.dequantize(lookup_table, self.embedding.table_scale, self.embedding.bias, regular=self.symmetric_quant)
                 else:
                     lookup_table = self.embedding.lookup_table.astype(nx.float32)
-
                 all_network_params.extend([("embedding",lookup_table, self.embedding.d_lookup_table / microbatch_size * gscale, False)])
+                del lookup_table
+                self.embedding.zeroes_gradient()
 
                 if getattr(self.rmsnorm_final, "d_gamma", None) is not None:
                     d_gamma = self.rmsnorm_final.d_gamma.astype(nx.float32) / self.gradient_scale / microbatch_size * gscale #type:ignore
@@ -606,6 +607,7 @@ class Transformer:
                     self.rmsnorm_final.zeroes_gradient()
 
                 optimized = optimizer.step_many(all_network_params, max_step, total_epoch)
+                del all_network_params
 
                 for i,block in enumerate(self.blocks):
                     if self.quantized:
@@ -652,9 +654,9 @@ class Transformer:
                     del embedding
                 else:
                     self.embedding.lookup_table = optimized["embedding"].astype(self.dtype)
-                self.embedding.zeroes_gradient()
 
                 self.rmsnorm_final.gamma = optimized["rmsnorm_final"]
+                del optimized
                 step += 1
 
                 #TODO: fix this hardcoding

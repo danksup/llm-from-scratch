@@ -54,33 +54,39 @@ class AdamW:
                 group[grouping] = []
 
             group[grouping].append((name,param,gradient,decay_bool))
-                
+
+        name_param_gradient_decay.clear()        
+
         optimized = {}
         for group_tuple, thing in group.items():
             _, should_decay = group_tuple
             names = [i[0] for i in thing]
-            params = nx.stack([i[1] for i in thing])
             gradients = nx.stack([i[2] for i in thing])
-
+           
             if group_tuple not in self.state:
+                params = nx.stack([i[1] for i in thing])
                 self.state[group_tuple] = {
                     "names": names.copy() ,
                     "m": nx.zeros_like(params, nx.float32),
                     "v": nx.zeros_like(params,  nx.float32),
                 }
-                if self.use_master:
-                    self.state[group_tuple]["master"] = nx.copy(params)
+    
             else:
                 if self.use_master:
                     params = self.state[group_tuple]["master"]
-                    assert self.state[group_tuple]["names"] == names
-            state_shape = self.state[group_tuple]    
+                    # assert self.state[group_tuple]["names"] == names
+                else:
+                    params = nx.stack([i[1] for i in thing])
+
+            state_shape = self.state[group_tuple]   
+            thing.clear()
+
             m_v_t = (state_shape["m"], state_shape["v"], self.state["t"])
 
             weight_decay = self.weight_decay if should_decay else nx.float_32(0.0)
 
             new_params, m,v,_ = self.__step(m_v_t,params,gradients,self.lr,  self.epsilon, self.beta1, self.beta2, weight_decay)
-
+            nx.eval(new_params, m, v)
             del params, gradients
 
             self.state[group_tuple] = {"m":m, "v":v}

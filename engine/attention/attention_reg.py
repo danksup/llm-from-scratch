@@ -24,7 +24,7 @@ class AttentionFull:
 
         self.n_rep = self.n_heads // self.n_kv_heads
 
-        self.freqs = precompute_freqs(self.head_dim, 16384)
+        self.freqs = precompute_freqs(self.head_dim, arg1=32768)
 
         self.configs = self.embed_dim, self.n_kv_heads, self.n_heads, self.n_rep, self.head_dim, self.freqs
 

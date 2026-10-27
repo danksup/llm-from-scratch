@@ -91,15 +91,14 @@ logs:
   - cause: it likely doesnt like non mlx object changing, in this case the value `t` inside optimizer being python int that increments. 
   - ~~fix: removed @nx.compile decorator from AdamW._step (jul 7 2026)~~
   - fix: initializing `t` as an mlx array.
-### Open
 - inference breaks when token length is too large -> generate freqs on demand when needed (jun 29 2026)
+  - fix: on demand generation (oct 27 2026)
+### Open
+- None
 
 ## Known issue:
 ### Open
-- if num of last batch or microbatch not the multiplier, it will be dropped (aug 13 2026, non severe) 
-  - cause: cus `if len(context_batches) == batch_size:` in dataloader and `step_counter % microbatch_size == 0:` in train
-  - ~~fix: like in stream_token, handle leftover~~
-  - fix: new dataloader design
+- None
   
 # Performance Logs
 Apple M1 Pro \

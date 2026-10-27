@@ -1,15 +1,24 @@
 import engine.backend as nx
 
-def precompute_freqs(head_dim, max_seq_len=1024):
-    positions = nx.arange(max_seq_len, dtype=nx.float16)
-    dims = nx.arange(0,head_dim,2, dtype=nx.float16)
+def precompute_freqs(head_dim, arg1:int|nx.ArrayLike=32768):
+    if isinstance(arg1, int):
+        positions = nx.arange(arg1, dtype=nx.float32)
+    else:
+        positions = arg1
+        
+    dims = nx.arange(0,head_dim,2, dtype=nx.float32)
     theta = 1.0 / (10000 ** (dims / head_dim))
     angles = positions[:, None] * theta[None,:]
     return angles
 
 def rope_forward(x, angles, position=0):
     T = x.shape[2]    
-    current_angles = angles[position:position+ T]
+
+    if position + T > angles.shape[0]:
+        positions = nx.arange(position, position+T, dtype=nx.float32)
+        current_angles =  precompute_freqs(x.shape[-1], arg1=positions)
+    else:
+        current_angles = angles[position:position+T]
 
     sin = nx.sin(current_angles, dtype=x.dtype)
     cos = nx.cos(current_angles, dtype=x.dtype)
@@ -24,7 +33,12 @@ def rope_forward(x, angles, position=0):
 
 def rope_inverse(x,angles):
     T = x.shape[2]
-    current_angles = angles[:T,:]
+
+    if  T > angles.shape[0]:
+        positions = nx.arange(T, dtype=nx.float32)
+        current_angles =  precompute_freqs(x.shape[-1], arg1=positions)
+    else:
+        current_angles = angles[:T,:]
 
     sin = nx.sin(current_angles, dtype=x.dtype)
     cos = nx.cos(current_angles, dtype=x.dtype)

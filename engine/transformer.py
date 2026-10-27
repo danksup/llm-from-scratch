@@ -26,6 +26,8 @@ default_block_configs = {
     "ff_init":"glorot_uniform",
     "ff_shared_hidden_width":1024, 
     "ff_n_shared_experts":2,
+    "ff_jitter_eps":0.02,
+    "attn_dropout":0.1,
     "attn_type":"chunked",
     "attn_variant":"gqa",
     "attn_n_heads":16,
@@ -137,6 +139,7 @@ class Transformer:
                 ff_moe_lambda = overrided["ff_moe_lambda"]
                 ff_shared_hidden_width = overrided["ff_shared_hidden_width"]
                 ff_n_shared_experts = overrided["ff_n_shared_experts"]
+                ff_jitter_eps = overrided["ff_jitter_eps"]
 
                 if "attn_chunk_size" in override and override.get("attn_type", None) == "full":
                     raise ValueError(f"[block {i}] attention type of {attn_type_str} doesn't accept \"attn_chunk_size\"")
@@ -169,7 +172,7 @@ class Transformer:
                     case _:
                         raise ValueError(f"[block {i}] invalid variant of \"{attn_variant}\". valid variants: {", ".join(ATTN_VARIANT)}")
 
-                ff = MoE(CF, topk, E, D, H, ff_shared_hidden_width, ff_n_shared_experts,ff_moe_lambda, dtype=self.dtype, initializer=ff_init, quantized=self.quantized, as_symmetric=self.symmetric_quant)
+                ff = MoE(CF, topk, E, D, H, ff_shared_hidden_width, ff_n_shared_experts,ff_jitter_eps,ff_moe_lambda, dtype=self.dtype, initializer=ff_init, quantized=self.quantized, as_symmetric=self.symmetric_quant)
                 rmsnorm1 = RMSNorm(D)
                 rmsnorm2 = RMSNorm(D)
                 transformer_block = TransformerBlock(attn, ff, rmsnorm1, rmsnorm2)

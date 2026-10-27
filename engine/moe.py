@@ -9,7 +9,7 @@ from helper.singleton import sleep
 C = nx.array(1e-4)
 
 class MoE:
-    def __init__(self, capacity_factor, top_k, n_experts, embed_dim, hidden_width, shared_hidden_width, n_shared_experts=2,LAMBDA =1e-2, dtype:Any=nx.float16, initializer:Callable=initializer.glorot_uniform, quantized:bool|str=False, *, as_symmetric:bool=False, init=True) -> None:
+    def __init__(self, capacity_factor, top_k, n_experts, embed_dim, hidden_width, shared_hidden_width, n_shared_experts=2,jitter_eps=0.02,LAMBDA =1e-2, dtype:Any=nx.float16, initializer:Callable=initializer.glorot_uniform, quantized:bool|str=False, *, as_symmetric:bool=False, init=True) -> None:
         self.hidden_width = hidden_width
         self.embed_dim = embed_dim #D
         self.n_experts = n_experts #E
@@ -18,9 +18,10 @@ class MoE:
         self.dtype = dtype
         self.n_shared_experts = n_shared_experts
         self.shared_hidden_width = shared_hidden_width
+        self.jitter_eps = jitter_eps
         self.LAMBDA = LAMBDA
 
-        self.configs = (hidden_width, embed_dim, n_experts, capacity_factor, top_k,shared_hidden_width, n_shared_experts, LAMBDA)
+        self.configs = (hidden_width, embed_dim, n_experts, capacity_factor, top_k,shared_hidden_width, n_shared_experts,jitter_eps, LAMBDA)
         self.quantized = quantized
 
         self.scales = (None, None, None, None)
@@ -94,13 +95,13 @@ class MoE:
         return s * value_half #(E, capacity, H) 
 
     @staticmethod
-    def forward(x:nx.ArrayLike, ff_configs, ff_params, quantization:tuple[Any,...]|None=None, *, use_symmetric:bool=False, recompute_activation:bool=True):
+    def forward(x:nx.ArrayLike, ff_configs, ff_params, quantization:tuple[Any,...]|None=None, *, use_symmetric:bool=False, recompute_activation:bool=True, is_training=True):
         #routing
         # print("moe forward x", x.dtype)
         B, T, D = x.shape
         N = B * T
 
-        _, _, n_experts, capacity_factor, top_k, _, _, LAMBDA = ff_configs
+        _, _, n_experts, capacity_factor, top_k, _, _,jitter_eps, LAMBDA = ff_configs
         Wcombined, Wout, router, W_shared_combined, W_shared_out  = ff_params
 
         wcombined_scale, wout_scale,shared_expert_scale,shared_expert_out_scale, wcombined_bias, wout_bias, shared_expert_bias,  shared_expert_out_bias = quantization  #type:ignore
@@ -111,6 +112,8 @@ class MoE:
             
         flatten_x = x.reshape(-1, D)
         scores =  flatten_x.astype(nx.float32) @ router #(N, E)
+        if is_training and jitter_eps > 0:
+            scores += nx.uniform(-jitter_eps, jitter_eps,size=scores.shape, dtype=nx.float32)
         z_loss = C * nx.mean(nx.square(nx.logsumexp(scores, -1)))
         router_prob = nx.softmax(scores, -1) #(N, E)
 
@@ -192,7 +195,7 @@ class MoE:
 
         router, Wout, Wcombined, W_shared_combined, W_shared_out = ff_params
 
-        hidden_width, D, n_experts, capacity_factor, top_k,shared_hidden_width, n_shared_experts,  LAMBDA = moe_configs
+        hidden_width, D, n_experts, capacity_factor, top_k,shared_hidden_width, n_shared_experts, _, LAMBDA = moe_configs
         capacity = math.ceil(capacity_factor * N * top_k / n_experts)
 
         if not recompute_activation:
@@ -320,7 +323,7 @@ class MoE:
         B, T, D = x.shape
         N = B * T
 
-        _, _, n_experts, capacity_factor, top_k, _, _, LAMBDA = ff_configs
+        _, _, n_experts, capacity_factor, top_k, _, _, _, _ = ff_configs
 
         Wcombined, Wout, router, W_shared_combined, W_shared_out  = ff_params
 
@@ -328,8 +331,6 @@ class MoE:
 
         top_k = min(top_k, n_experts)
 
-
-            
         flatten_x = x.reshape(-1, D)
         scores =  flatten_x.astype(nx.float32) @ router #(N, E)
         router_prob = nx.softmax(scores, -1) #(N, E)
@@ -417,10 +418,10 @@ class MoE:
 
     @classmethod
     def from_weight(cls, configs, weights, quants, dtype) -> "MoE":
-        hidden_width, embed_dim, n_experts, capacity_factor, top_k, shared_hidden_width, n_shared_experts, LAMBDA = configs
+        hidden_width, embed_dim, n_experts, capacity_factor, top_k, shared_hidden_width, n_shared_experts, jitter_eps, LAMBDA = configs
         router, wcombined, wout,W_shared_combined,W_shared_out = weights
 
-        moe = cls(capacity_factor, top_k, n_experts, embed_dim, hidden_width, shared_hidden_width, n_shared_experts,LAMBDA, dtype, init=False)
+        moe = cls(capacity_factor, top_k, n_experts, embed_dim, hidden_width, shared_hidden_width, n_shared_experts,jitter_eps,LAMBDA, dtype, init=False)
         moe.router = router
         moe.Wcombined = wcombined
         moe.Wout = wout
@@ -435,7 +436,7 @@ class MoE:
         return moe
 
     def copy(self):
-        moe_copy = MoE(self.cf, self.top_k, self.n_experts, self.embed_dim, self.hidden_width,self.shared_hidden_width,self.n_shared_experts,self.LAMBDA, dtype=self.dtype, quantized=self.quantized, init=False)
+        moe_copy = MoE(self.cf, self.top_k, self.n_experts, self.embed_dim, self.hidden_width,self.shared_hidden_width,self.n_shared_experts,self.jitter_eps,self.LAMBDA, dtype=self.dtype, quantized=self.quantized, init=False)
         moe_copy.router = nx.copy(self.router)
         moe_copy.Wcombined = nx.copy(self.Wcombined)
         moe_copy.Wout = nx.copy(self.Wout)

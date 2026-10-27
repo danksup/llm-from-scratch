@@ -68,13 +68,13 @@ logs:
 - mmap for dataloader oct 14 2026
 - shared experts oct 16 2026
 - static kv caching oct 18 2026
-
+- moe jitter oct 27 2026
+  
 ## Ongoing:
 - optimizing/cleanup/docs
 
 ## TODO (not in order):
 - parallelizing tokenizer word frequency counting
-- moe noise
 - ReLoRa
 - inference optimization 
 - conversation memory

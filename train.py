@@ -76,6 +76,7 @@ model_configs = {
         "ff_shared_hidden_width":BASE_WIDTH, 
         "ff_n_shared_experts":2,
         "ff_moe_lambda":1e-3,
+        "ff_jitter_eps":0.02,
         "attn_type":"chunked",
         "attn_chunk_size":CONTEXT_SIZE//8,
         "attn_variant":"gqa",

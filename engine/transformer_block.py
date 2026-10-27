@@ -77,7 +77,7 @@ class TransformerBlock:
         rmsnorm2_out, caches_rmsnorm2 = RMSNorm._forward(attn_out, gamma2,epsilon)
 
         rmsnorm2_out = rmsnorm2_out.astype(x.dtype)
-        ff_out, caches_ff, aux_loss, normalized_histogram = MoE.forward(rmsnorm2_out, ff_configs, ff_params, quantization[1], use_symmetric=use_symmetric, recompute_activation=recompute_activation) #type:ignore
+        ff_out, caches_ff, aux_loss, normalized_histogram = MoE.forward(rmsnorm2_out, ff_configs, ff_params, quantization[1], use_symmetric=use_symmetric, recompute_activation=recompute_activation, is_training=is_training) #type:ignore
         drop_ff_out, mask2 =  Dropout._forward(ff_out, p,is_training)
 
         ff_out = drop_ff_out + attn_out

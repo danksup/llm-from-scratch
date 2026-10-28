@@ -74,9 +74,9 @@ logs:
 - optimizing/cleanup/docs
 
 ## TODO (not in order):
+- mmap tokenizer
 - parallelizing tokenizer word frequency counting
 - ReLoRa
-- inference optimization 
 - conversation memory
   
 #### Maybe:

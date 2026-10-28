@@ -303,8 +303,8 @@ class Tokenizer:
 
 
     def encode(self, text: Any) -> list[int]:
-        text = re.findall(r'\s*\S+|\s+', text)
-        words = [self.word_to_ids(word) for word in text]
+        chunks = re.split(r'(\s*\S+|\s+$)', text)
+        words = [self.word_to_ids(word) for word in chunks if word]
 
         for idx, word in enumerate(words):
             while True:

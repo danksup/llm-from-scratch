@@ -15,10 +15,10 @@ from engine.transformer import Transformer
 nx.set_seed(12345)
 
 EPOCHS = 1
-EMBED_DIM = 256
+EMBED_DIM = 512
 CONTEXT_SIZE = 2048
 BATCH_SIZE = 2
-BASE_WIDTH = 4 * EMBED_DIM
+BASE_WIDTH = 3 * EMBED_DIM
 N_HEADS = 8
 N_KV_HEADS = max(1, N_HEADS // 2)
 N_EXPERTS = 8
@@ -59,7 +59,7 @@ session_configs = {
 }
 
 model_configs = {
-    "n_blocks":10,
+    "n_blocks":12,
     "embed_dim":EMBED_DIM,
     "dtype": "float16",
     "gradient_scale":32768,
@@ -90,14 +90,15 @@ model_configs = {
 
 if __name__ == "__main__":
     transformer = Transformer(model_configs)
+    print(transformer.count_params(True))
 
     session_configs["block_size"] = len(transformer.blocks)
 
     dataloader = DataLoader(CORPUS_PATH, tokenizer1, session_configs["context_size"], session_configs["batch_size"], session_configs["train_split"])
 
-    session1 = Session(transformer, tokenizer1, True, session_configs)
-    start = time.perf_counter()
+    # session1 = Session(transformer, tokenizer1, True, session_configs)
+    # start = time.perf_counter()
 
-    session1.train(dataloader, display_message=True)
-    end = time.perf_counter()
-    print(f"training finished. time: {end - start:.3f}s")
+    # session1.train(dataloader, display_message=True)
+    # end = time.perf_counter()
+    # print(f"training finished. time: {end - start:.3f}s")

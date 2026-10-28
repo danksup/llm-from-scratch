@@ -8,6 +8,7 @@ import ast
 import re
 import time
 import array
+import pyarrow.parquet
 
 #TODO change outdated docstrings
 #TODO change outdated typehints
@@ -203,23 +204,32 @@ class Tokenizer:
             path = Path(filepath)
             iterate = path.iterdir()
         for file in iterate:
-            if file.is_file() and file.suffix == ".txt": #type:ignore
-                with open(file, "r", encoding="utf-8", errors='ignore') as f:
-                    while True:
-                        chunk = f.read(batch_size)
-                        if not chunk:
-                            break
+            if file.is_file(): 
+                if file.suffix == ".txt": #type:ignore
+                    with open(file, "r", encoding="utf-8", errors='ignore') as f:
+                        while True:
+                            chunk = f.read(batch_size)
+                            if not chunk:
+                                break
 
-                        if chunk and not chunk[-1].isspace():
-                            while True:# or stream[-1] not in  ["", " ", "\r",]:
-                                a = f.read(1)
-                                if a:
-                                    chunk += a
-                                    if a.isspace():
+                            if chunk and not chunk[-1].isspace():
+                                while True:# or stream[-1] not in  ["", " ", "\r",]:
+                                    a = f.read(1)
+                                    if a:
+                                        chunk += a
+                                        if a.isspace():
+                                            break
+                                    else:
                                         break
-                                else:
-                                    break
-                            yield chunk
+                                yield chunk
+                elif file.suffix == ".parquet":
+                    with pyarrow.parquet.ParquetFile(file) as f:
+                        for batch in f.iter_batches(batch_size=1024, columns=["text"]):
+                            chunk = batch['text'].to_pylist()
+                            chunk = [i for i in chunk if i]
+                            if chunk:
+                                text = "\n<|endofdoc|>\n".join(chunk) + "\n<|endofdoc|>\n"
+                                yield(text)
 
     def fit(self, filepath:str, batch_size=10_485_760, *, targets:list|None=None):
         '''
@@ -493,4 +503,4 @@ class Tokenizer:
                     tokens.tofile(f)
         else:
             for file in files:
-                Tokenizer.tokenize(file, tokenizer)
+                Tokenizer.tokenize(file, tokenizer, out_path=out_path)

@@ -19,6 +19,7 @@ class Tokenizer:
         self.merge_rank = {}
         self.id_to_token = {0:"<PAD>".encode('utf-8'), 1: "<EOT>".encode('utf-8'), 2:"<|endofdoc|>".encode('utf-8')}
         self.vocab = {"<PAD>".encode('utf-8'):0, "<EOT>".encode('utf-8'):1, "<|endofdoc|>".encode('utf-8'):2}
+        self.special_tokens = list(self.vocab)
 
         self.tokenizer_id = tokenizer_id
         if self.tokenizer_id is None:
@@ -49,13 +50,17 @@ class Tokenizer:
         then "hello" -> [3,4,8,8,7,5]\n
         """
         tokenized = []
-        encoded_word = word.encode()
-        for b in encoded_word:
-            tokenized.append(self.vocab.get(bytes([b])))
-        # for ch in word:
-        #     ch = ch.encode()
-        #     tokenized.append(self.vocab.get(ch))
-        # tokenized.append(self.vocab["</w>".encode('utf-8')])
+        # stripped = word.lstrip().encode() 
+        chars = re.split(r'(<EOT>|<\|endofdoc\|>|<PAD>|\n|\r|\t| )', word)
+        chars = [i for i in chars if i]
+        # if stripped in self.special_tokens:
+        for char in chars:
+            encoded = char.encode()
+            if encoded.isspace() or encoded in self.special_tokens:
+                tokenized.append(self.vocab.get(encoded))
+            else:
+                for b in encoded:
+                    tokenized.append(self.vocab.get(bytes([b])))
         return tokenized
 
     @staticmethod

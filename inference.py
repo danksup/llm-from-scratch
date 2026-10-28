@@ -11,7 +11,7 @@ import random
 nx.set_seed(random.randrange(0,99999))
 
 tokenizer = Tokenizer.load("artifacts/tokenizer/tokenizer32768_1624612680len.tokenizer")
-session = Session.load("artifacts/sessions/session_(211854848, 79734272)_param_1_epochs_weights_only_00f412f5-cd70-4c44-b2d0-e33d9585e9d7.safetensors", tokenizer)
+session = Session.load("artifacts/sessions/session_checkpoint_latest_e6f5ac34-78f0-4e39-b11c-dfd7582c054e.safetensors", tokenizer)
 
 configs = {
     "seed":12345,
@@ -24,7 +24,7 @@ configs = {
 }
 
 inference = Inference(session, **configs)
-context = "What is a mother?"
+context = "Chemical"
 print(configs)
 print(f"input: {context}")
 

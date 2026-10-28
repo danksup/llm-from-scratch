@@ -27,6 +27,8 @@ jobs:
         python -m pip install --upgrade pip
         pip install safetensors
         pip install numpy
+        pip install pyarrow
+        
 
     - name: Run Engine Test
       run: |

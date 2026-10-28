@@ -23,6 +23,7 @@ jobs:
         python -m pip install --upgrade pip
         pip install safetensors
         pip install mlx
+        pip install pyarrow
 
     - name: Run Engine Test
       run: |

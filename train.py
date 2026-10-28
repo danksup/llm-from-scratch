@@ -16,8 +16,8 @@ nx.set_seed(12345)
 
 EPOCHS = 1
 EMBED_DIM = 512
-CONTEXT_SIZE = 2048
-BATCH_SIZE = 2
+CONTEXT_SIZE = 8192
+BATCH_SIZE = 1
 BASE_WIDTH = 3 * EMBED_DIM
 N_HEADS = 8
 N_KV_HEADS = max(1, N_HEADS // 2)
@@ -32,7 +32,7 @@ tokenizer1 = Tokenizer.load(TOKENIZER_PATH)
 
 session_configs = {
     "epochs":EPOCHS,
-    "max_step":5000,
+    "max_step":500,
     "train_split": VAL,
     "max_val_step":1000,
     "eval_every":1,
@@ -78,7 +78,7 @@ model_configs = {
         "ff_moe_lambda":1e-3,
         "ff_jitter_eps":0.02,
         "attn_type":"chunked",
-        "attn_chunk_size":CONTEXT_SIZE//8,
+        "attn_chunk_size":CONTEXT_SIZE//16,
         "attn_variant":"gqa",
         "attn_n_heads":N_HEADS,
         "attn_n_kv_heads":N_KV_HEADS,

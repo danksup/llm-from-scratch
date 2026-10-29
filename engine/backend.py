@@ -57,7 +57,6 @@ uint32 = _nx.uint32
 uint16 = _nx.uint16
 uint8 = _nx.uint8
 bool_ = _nx.bool_
-bfloat16 = _nx.bfloat16 if backend == "MLX" else _nx.float32
 
 unsigned_integer = _nx.unsignedinteger
 signed_integer = _nx.signedinteger
@@ -68,7 +67,6 @@ dtype_to_srt = {
     float64: "float64",
     float32: "float32",
     float16: "float16",
-    bfloat16: "bf16",
     int64: "int64",
     int32: "int32",
     int16:"int16",
@@ -83,7 +81,6 @@ str_to_dtype = {
     "float64":float64,
     "float32":float32,
     "float16":float16,
-    "bf16":bfloat16,
     "int64":int64,
     "int32":int32,
     "int16":int16,
@@ -94,8 +91,17 @@ str_to_dtype = {
     "bool":bool_,
 }
 
-floating_type = [float64, float32, float16, bfloat16]
+floating_type = [float64, float32, float16]
+
+if backend != "NumPy":
+    bfloat16 = _nx.bfloat16    
+    dtype_to_srt[bfloat16] = "bf16"
+    str_to_dtype["bf16"] = bfloat16
+    floating_type.append(bfloat16)
+
 floating_type_str = [dtype_to_srt[i] for i in floating_type]
+
+QUANTIZATION_GROUP_SIZE = 64
 
 def using_backend():
     backend_str = backend
@@ -577,32 +583,48 @@ def softmax(a, axis=-1):
         exp_x = exp(a - max_x, dtype=float32)
         return exp_x / sum(exp_x, axis=axis, keepdims=True, dtype=float32)
 
-def quantize(w, /, *, regular:bool=False) -> tuple[Any,...]:
-    if backend.upper() == "MLX" and not regular:
-        return _nx.quantize(w, bits=8, mode="affine")
-    info = _nx.iinfo(int8)
+def quantize(w) -> tuple[Any,...]:
+    if backend.upper() == "MLX":
+        return _nx.quantize(w, bits=8,group_size=QUANTIZATION_GROUP_SIZE, mode="affine")
+    w_shape = w.shape
+    w = w.reshape(*w.shape[:-1], w.shape[-1]//QUANTIZATION_GROUP_SIZE, QUANTIZATION_GROUP_SIZE)
+    w_max = _nx.max(w, axis=-1)
+    w_min = _nx.min(w, axis=-1)
+
+    info = _nx.iinfo(uint8)
     q_min = info.min
     q_max = info.max
 
-    max_abs = _nx.maximum(_nx.max(_nx.abs(w), axis=-1,keepdims=True), 1e-9)
-    scale = max_abs / q_max
+    scale = _nx.maximum(1e-9, (w_max - w_min) / q_max)
+    bias = w_min
+    # scale = _nx.repeat(scale, QUANTIZATION_GROUP_SIZE, axis=-1)
+    # scale = scale.reshape(*scale.shape[:-1], scale.shape[-1]//QUANTIZATION_GROUP_SIZE, QUANTIZATION_GROUP_SIZE)
+    # bias = _nx.repeat(w_min, QUANTIZATION_GROUP_SIZE, axis=-1)
+    # bias = bias.reshape(*bias.shape[:-1], bias.shape[-1]//QUANTIZATION_GROUP_SIZE, QUANTIZATION_GROUP_SIZE)
 
-    zero_point = _nx.zeros_like(scale)
+    quantized = _nx.clip(_nx.round((w - bias[...,None])/scale[...,None]), q_min, q_max)
+    quantized = quantized.astype(uint8).reshape(*w_shape)
+    quantized = _nx.ascontiguousarray(quantized).view(_nx.uint32)
+    return quantized, scale, bias
 
-    quantized_w = _nx.round(w / scale  + zero_point)
-    quantized_w = _nx.clip(quantized_w, q_min, q_max).astype(int8)
-
-    return quantized_w, scale, zero_point
-
-def dequantize(w,/,scales,biases, dtype:Any=float32, *, regular:bool=False):
+def dequantize(w,/,scales,biases, dtype:Any=float32):
     if issubdtype(w.dtype, floating) or scales is None:
         return w
-    if backend.upper()  == "MLX" and not regular:
+    back_end = backend.lower()
+    if back_end  == "mlx":
         return _nx.dequantize(w, scales=scales,biases=biases,bits=8, mode='affine', dtype=dtype)
-    q_float = w.astype(dtype)
-    return (q_float - biases) * scales
+    
+    u8 = _nx.ascontiguousarray(w).view(uint8)
+    u8_shape = u8.shape
+    group_size = u8.shape[-1] // scales.shape[-1]
+    u8 = u8.reshape(*scales.shape, group_size)
+    q_float = u8.astype(dtype)
+    if biases is None:
+        biases = _nx.zeros_like(scales)
+    dequantized =  q_float  * scales[...,None] + biases[...,None]
+    return dequantized.reshape(*u8_shape).astype(dtype)
 
-def quantized_matmul(x,w,/, scales, biases, transpose:bool|tuple=False, *, regular:bool=False):
+def quantized_matmul(x,w,/, scales, biases, transpose:bool|tuple=False):
     if issubdtype(w.dtype, floating) or scales is None:
         if transpose:
             if isinstance(transpose,bool):
@@ -611,12 +633,12 @@ def quantized_matmul(x,w,/, scales, biases, transpose:bool|tuple=False, *, regul
                 return x @ w.transpose(transpose)
         return x @ w
 
-    if backend.upper() == "MLX" and not regular:
+    if backend.upper() == "MLX":
         if transpose:
             transpose = True
         return _nx.quantized_matmul(x, w, scales=scales,biases=biases,bits=8, mode='affine', transpose=transpose)
     
-    dequant_q = dequantize(w, scales=scales,biases=biases, dtype=x.dtype, regular=regular)
+    dequant_q = dequantize(w, scales=scales,biases=biases, dtype=x.dtype)
     if transpose:
         if isinstance(transpose, bool):
             return x @ dequant_q.T
@@ -626,8 +648,9 @@ def quantized_matmul(x,w,/, scales, biases, transpose:bool|tuple=False, *, regul
 
 def save_safetensors(file:Path, arrays:dict[str,ArrayLike], metadata:dict[str,str]|None=None):
     if backend == "MLX":
-        return _nx.save_safetensors(file=file, arrays=arrays, metadata=metadata)
-    return save_file(tensor_dict=arrays, filename=file,metadata=metadata) #type:ignore
+        _nx.save_safetensors(file=file, arrays=arrays, metadata=metadata)
+    else:
+        save_file(tensor_dict=arrays, filename=file,metadata=metadata) #type:ignore
 
 def load(file:Path,/, return_metadata=True):
     if backend == "MLX":
@@ -642,4 +665,5 @@ def load(file:Path,/, return_metadata=True):
 
 def tril(a, k=0):
     return _nx.tril(a, k)
+
 set_seed(seed)

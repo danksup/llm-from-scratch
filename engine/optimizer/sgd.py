@@ -2,7 +2,7 @@ import engine.backend as nx
 from typing import Any, Callable
 
 class SGD:
-    def __init__(self, lr=1e-4, momentum:float=0.0,weight_decay:float=.0,dampening:float=.0, use_master:bool=True, scheduler:None|Callable=None, min_lr:None | float= None) -> None:
+    def __init__(self, lr=1e-4, momentum:float=0.0,weight_decay:float=.0,dampening:float=.0, use_master:bool=True, scheduler:None|Callable=None, min_lr:None | float= None, t_warmup:int|None=None) -> None:
         assert lr > 0, "lr must be non-negative"
         assert momentum >= 0 and momentum < 1, "allowed momentum range: [0, 1)"
         assert weight_decay >= 0, "weight_decay must be non-negative"
@@ -11,12 +11,14 @@ class SGD:
         self.lr = nx.float_32(lr)
         self.init_lr = lr
         self.min_lr = min_lr
-        self.t = nx.array(0, dtype=nx.int32)
+        self.t = nx.array(1, dtype=nx.int32)
         self.use_master = use_master
         self.momentum = nx.float_32(momentum)
         self.weight_decay = nx.float_32(weight_decay)
         self.dampening = nx.float_32(dampening)
         self.scheduler = scheduler
+        self.t_warmup = t_warmup
+
         if scheduler:
             self.schedule = scheduler(self.init_lr, min_lr)
             if min_lr is not None:
@@ -34,11 +36,18 @@ class SGD:
     def step_many(self, name_param_gradient_decay:list[Any], max_step, total_epoch):
         if self.scheduler:
             current_step = self.t
-            total_step = max_step * total_epoch
-            progress = min(1, current_step / total_step) 
-            self.lr = self.schedule(progress)
-
-        self.t += 1
+            t_warmup = self.t_warmup
+            if t_warmup is not None and t_warmup>0 :
+                if current_step > t_warmup:
+                    total_step = max_step * total_epoch
+                    progress = min(1, (current_step - t_warmup) / max(1, total_step - t_warmup)) #type:ignore
+                    self.lr = self.schedule(progress)
+                else:
+                    self.lr = self.init_lr * min(1, current_step / t_warmup)
+            else:
+                total_step = max_step * total_epoch
+                progress = min(1, current_step / total_step) #type:ignore
+                self.lr = self.schedule(progress)
 
         group = {}
         for x in name_param_gradient_decay:
@@ -95,6 +104,8 @@ class SGD:
             else:
                 for idx, name in enumerate(names):
                     optimized[name] = new_params[idx]
+
+        self.t += 1
                 
         return optimized
     
@@ -116,7 +127,8 @@ class SGD:
             "dampening":self.dampening.item(),
             "scheduler":self.scheduler,
             "use_master":self.use_master,
-            "config_only":config_only
+            "config_only":config_only,
+            "t_warmup":self.t_warmup
         }
         if self.min_lr is not None and hasattr(self.min_lr, "dtype"):
             sgd["min_lr"] = self.min_lr.item() #type:ignore
@@ -146,7 +158,7 @@ class SGD:
     
     @classmethod
     def from_dict(cls, thing) -> "SGD":
-        sgd = cls(lr=thing["lr"], momentum=thing["momentum"], weight_decay=thing["weight_decay"], dampening=thing["dampening"], use_master=thing["use_master"], scheduler=thing["scheduler"], min_lr=thing["min_lr"])
+        sgd = cls(lr=thing["lr"], momentum=thing["momentum"], weight_decay=thing["weight_decay"], dampening=thing["dampening"], use_master=thing["use_master"], scheduler=thing["scheduler"], min_lr=thing["min_lr"], t_warmup=thing["t_warmup"])
 
         if not thing["config_only"]:
             sgd.t = nx.array(thing["t"], nx.int32)

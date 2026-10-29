@@ -9,7 +9,7 @@ import time
 
 #TODO: do the thing
 class AttentionChunked:
-    def __init__(self,embed_dim:int, n_heads:int, Q_norm:RMSNorm, K_norm:RMSNorm, n_kv_heads:int=-1, chunk_size=8, dtype:Any=nx.float16, initializer:Callable=initializer.glorot_uniform, quantized:bool=False, *,use_symmetric:bool=False, init=True) -> None:
+    def __init__(self,embed_dim:int, n_heads:int, Q_norm:RMSNorm, K_norm:RMSNorm, n_kv_heads:int=-1, chunk_size=8, dtype:Any=nx.float16, initializer:Callable=initializer.glorot_uniform, quantized:bool=False, *, init=True) -> None:
         self.n_kv_heads = n_kv_heads
 
         if n_kv_heads < 0:
@@ -52,11 +52,9 @@ class AttentionChunked:
             self.Wo = initializer(wo_shape, dtype=dtype)
             assert nx.isfinite(self.Wo).all(), f"non-finite detected when initializing attentipn.Wo."
 
-            self.use_symmetric = use_symmetric
-
             if quantized:
-                self.Wqkv, wqkv_scale, wqkv_bias = nx.quantize(self.Wqkv, regular=use_symmetric)
-                self.Wo, wo_scale, wo_bias = nx.quantize(self.Wo, regular=use_symmetric)
+                self.Wqkv, wqkv_scale, wqkv_bias = nx.quantize(self.Wqkv)
+                self.Wo, wo_scale, wo_bias = nx.quantize(self.Wo)
                 self.scales = (wqkv_scale, wo_scale)
                 self.biases = (wqkv_bias, wo_bias)
 
@@ -73,12 +71,12 @@ class AttentionChunked:
         return "chunked"
 
     @classmethod
-    def multihead(cls,embed_dim, n_heads, chunk_size, dtype, initializer, Q_norm:RMSNorm, K_norm:RMSNorm,*, use_symmetric=False):
-        mha = cls(embed_dim, n_heads=n_heads, n_kv_heads=n_heads, chunk_size=chunk_size, dtype=dtype, initializer=initializer, Q_norm=Q_norm, K_norm=K_norm, use_symmetric=use_symmetric)
+    def multihead(cls,embed_dim, n_heads, chunk_size, dtype, initializer, Q_norm:RMSNorm, K_norm:RMSNorm):
+        mha = cls(embed_dim, n_heads=n_heads, n_kv_heads=n_heads, chunk_size=chunk_size, dtype=dtype, initializer=initializer, Q_norm=Q_norm, K_norm=K_norm)
         return mha
     @classmethod
-    def multiquery(cls,embed_dim, n_heads, chunk_size, dtype, initializer, Q_norm:RMSNorm, K_norm:RMSNorm, *, use_symmetric=False):
-        mqa = cls(embed_dim, n_heads=n_heads, n_kv_heads=1, chunk_size=chunk_size, dtype=dtype, initializer=initializer, Q_norm=Q_norm, K_norm=K_norm, use_symmetric=use_symmetric)
+    def multiquery(cls,embed_dim, n_heads, chunk_size, dtype, initializer, Q_norm:RMSNorm, K_norm:RMSNorm):
+        mqa = cls(embed_dim, n_heads=n_heads, n_kv_heads=1, chunk_size=chunk_size, dtype=dtype, initializer=initializer, Q_norm=Q_norm, K_norm=K_norm)
         return mqa
 
     @staticmethod
@@ -91,14 +89,14 @@ class AttentionChunked:
         return weights_softmax
 
     @staticmethod
-    def _forward(x:nx.ArrayLike, causal_mask:nx.ArrayLike, configs:tuple[Any,...], params:tuple[Any,...], quantization, *, use_symmetric=False, recompute_activation=True):
+    def _forward(x:nx.ArrayLike, causal_mask:nx.ArrayLike, configs:tuple[Any,...], params:tuple[Any,...], quantization, *, recompute_activation=True):
         embed_dim, n_kv_heads, n_heads, n_rep, head_dim, chunk_size, freqs = configs
         Wqkv, Wo, Q_norm_gamma, K_norm_gamma = params
 
         wqkv_scale, wo_scale, wqkv_bias, wo_bias = quantization
 
         if wqkv_scale is not None:
-            combined = nx.quantized_matmul(x, Wqkv, wqkv_scale,wqkv_bias, transpose=True, regular=use_symmetric)
+            combined = nx.quantized_matmul(x, Wqkv, wqkv_scale,wqkv_bias, transpose=True)
         else:
             combined = x @ Wqkv.T
 
@@ -153,7 +151,7 @@ class AttentionChunked:
         output_unchunked = output_unchunked.transpose(0,2,1,3).reshape(B,T,-1)
 
         if wo_scale is not None:
-            output_projected = nx.quantized_matmul(output_unchunked, Wo, wo_scale, wo_bias, regular=use_symmetric) #B,T,D #dtype
+            output_projected = nx.quantized_matmul(output_unchunked, Wo, wo_scale, wo_bias) #B,T,D #dtype
         else:
             output_projected = output_unchunked @ Wo
 
@@ -165,7 +163,7 @@ class AttentionChunked:
         return output_projected, cache
 
     @staticmethod
-    def _backward(gradient:nx.ArrayLike, caches:tuple[Any,...], attn_configs:tuple[Any,...], attn_params: tuple[Any,...], quantization, * , use_symmetric=False, recompute_activation=True) :#-> tuple[nx.ArrayLike,...]:
+    def _backward(gradient:nx.ArrayLike, caches:tuple[Any,...], attn_configs:tuple[Any,...], attn_params: tuple[Any,...], quantization, *, recompute_activation=True) :#-> tuple[nx.ArrayLike,...]:
         embed_dim, n_kv_heads, n_heads, n_rep, head_dim, chunk_size, freqs = attn_configs
 
         if not recompute_activation:
@@ -179,14 +177,14 @@ class AttentionChunked:
         wqkv_scale, wo_scale, wqkv_bias, wo_bias = quantization
 
         if wqkv_scale is not None :
-            Wqkv = nx.dequantize(Wqkv, wqkv_scale,wqkv_bias, x.dtype, regular=use_symmetric)
+            Wqkv = nx.dequantize(Wqkv, wqkv_scale,wqkv_bias, x.dtype)
 
         B, T, D = x.shape
         chunk_size = min(chunk_size, T-1)
         remainder = (chunk_size - (T % chunk_size)) % chunk_size
 
         if wo_scale is not None:
-            d_output_unchunked = nx.quantized_matmul(gradient, Wo, wo_scale, wo_bias, True, regular=use_symmetric)
+            d_output_unchunked = nx.quantized_matmul(gradient, Wo, wo_scale, wo_bias, True)
         else:
             d_output_unchunked = gradient @ Wo.T #(B,T,D)
 
@@ -249,10 +247,10 @@ class AttentionChunked:
 
         return dx,dWqkv,dWo, Q_norm_d_gamma, K_norm_d_gamma
 
-    def inference_forward(self, x, max_cache_len, freqs, quantization, cached_k, cached_v, position = 0,  *, use_symmetric:bool=False):
+    def inference_forward(self, x, max_cache_len, freqs, quantization, cached_k, cached_v, position = 0):
         wqkv_scale, wo_scale, wqkv_bias, wo_bias = quantization #type:ignore
         if wqkv_scale is not None:
-            combined = nx.quantized_matmul(x, self.Wqkv, wqkv_scale,wqkv_bias, transpose=True, regular=use_symmetric)
+            combined = nx.quantized_matmul(x, self.Wqkv, wqkv_scale,wqkv_bias, transpose=True)
         else:
             combined =  x @ self.Wqkv.T  # dtype
         B, T, _ = x.shape
@@ -304,7 +302,7 @@ class AttentionChunked:
         output_concat = output.transpose(0, 2, 1, 3).reshape(B, T, self.embed_dim)
 
         if wo_scale is not None:
-            output_projected = nx.quantized_matmul(output_concat, self.Wo, wo_scale, wo_bias, regular=use_symmetric) #BTD
+            output_projected = nx.quantized_matmul(output_concat, self.Wo, wo_scale, wo_bias) #BTD
         else:
             output_projected = output_concat @ self.Wo
 

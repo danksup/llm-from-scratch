@@ -16,7 +16,7 @@ nx.set_seed(12345)
 
 EPOCHS = 1
 EMBED_DIM = 512
-CONTEXT_SIZE = 8192
+CONTEXT_SIZE = 2048
 BATCH_SIZE = 1
 BASE_WIDTH = 3 * EMBED_DIM
 N_HEADS = 8
@@ -25,27 +25,29 @@ N_EXPERTS = 8
 CF = 1.25
 VAL = 1
 TOP_K = 2
+MAX_STEP = 1000
 
-CORPUS_PATH = "artifacts/dataloader"
+CORPUS_PATH = "artifacts/dataloader/2025_26"
 TOKENIZER_PATH = "artifacts/tokenizer/tokenizer32768_1624612680len.tokenizer"
 tokenizer1 = Tokenizer.load(TOKENIZER_PATH)
 
 session_configs = {
     "epochs":EPOCHS,
-    "max_step":500,
+    "max_step":MAX_STEP,
     "train_split": VAL,
     "max_val_step":1000,
     "eval_every":1,
     "validate_every":200,
     "context_size": CONTEXT_SIZE,
     "batch_size": BATCH_SIZE,
-    "microbatch_size":8,
+    "microbatch_size":16,
     "optimizer":"adamw",
     "optimizer_args":{
         "lr": 5e-4,
         "use_master": True,
         "scheduler": "cosine_decay",
         "min_lr": 5e-5,
+        "t_warmup": int(MAX_STEP * 0.015)
     },
     "save":True,
     "error_save":True,
@@ -64,7 +66,7 @@ model_configs = {
     "dtype": "float16",
     "gradient_scale":32768,
     "vocab_size": len(tokenizer1.vocab),
-    "quantized":False, #here can be True, "symmetric", False
+    "quantized":False,
     "check_non_finite":True,
     "recompute_activation":True,
     "block_configs":{
@@ -78,7 +80,7 @@ model_configs = {
         "ff_moe_lambda":1e-3,
         "ff_jitter_eps":0.02,
         "attn_type":"chunked",
-        "attn_chunk_size":CONTEXT_SIZE//16,
+        "attn_chunk_size":CONTEXT_SIZE//8,
         "attn_variant":"gqa",
         "attn_n_heads":N_HEADS,
         "attn_n_kv_heads":N_KV_HEADS,
@@ -90,15 +92,14 @@ model_configs = {
 
 if __name__ == "__main__":
     transformer = Transformer(model_configs)
-    print(transformer.count_params(True))
 
     session_configs["block_size"] = len(transformer.blocks)
 
     dataloader = DataLoader(CORPUS_PATH, tokenizer1, session_configs["context_size"], session_configs["batch_size"], session_configs["train_split"])
 
-    # session1 = Session(transformer, tokenizer1, True, session_configs)
-    # start = time.perf_counter()
+    session1 = Session(transformer, tokenizer1, True, session_configs)
+    start = time.perf_counter()
 
-    # session1.train(dataloader, display_message=True)
-    # end = time.perf_counter()
-    # print(f"training finished. time: {end - start:.3f}s")
+    session1.train(dataloader, display_message=True)
+    end = time.perf_counter()
+    print(f"training finished. time: {end - start:.3f}s")

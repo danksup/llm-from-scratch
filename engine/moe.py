@@ -9,7 +9,7 @@ from helper.singleton import sleep
 C = nx.array(1e-4)
 
 class MoE:
-    def __init__(self, capacity_factor, top_k, n_experts, embed_dim, hidden_width, shared_hidden_width, n_shared_experts=2,jitter_eps=0.02,LAMBDA =1e-2, dtype:Any=nx.float16, initializer:Callable=initializer.glorot_uniform, quantized:bool|str=False, *, as_symmetric:bool=False, init=True) -> None:
+    def __init__(self, capacity_factor, top_k, n_experts, embed_dim, hidden_width, shared_hidden_width, n_shared_experts=2,jitter_eps=0.02,LAMBDA =1e-2, dtype:Any=nx.float16, initializer:Callable=initializer.glorot_uniform, quantized:bool|str=False, *, init=True) -> None:
         self.hidden_width = hidden_width
         self.embed_dim = embed_dim #D
         self.n_experts = n_experts #E
@@ -46,10 +46,10 @@ class MoE:
             self.W_shared_out = initializer(shared_out_shape, dtype=dtype)
 
             if quantized:
-                self.Wcombined, wcombined_scale, wcombined_biases = nx.quantize(self.Wcombined, regular=as_symmetric)
-                self.Wout, wout_scale, wout_biases = nx.quantize(self.Wout, regular=as_symmetric)
-                self.W_shared_combined, shared_expert_scale, shared_expert_bias = nx.quantize(self.W_shared_combined, regular=as_symmetric)
-                self.W_shared_out, shared_expert_out_scale, shared_expert_out_bias = nx.quantize(self.W_shared_out, regular=as_symmetric)
+                self.Wcombined, wcombined_scale, wcombined_biases = nx.quantize(self.Wcombined)
+                self.Wout, wout_scale, wout_biases = nx.quantize(self.Wout)
+                self.W_shared_combined, shared_expert_scale, shared_expert_bias = nx.quantize(self.W_shared_combined)
+                self.W_shared_out, shared_expert_out_scale, shared_expert_out_bias = nx.quantize(self.W_shared_out)
                 self.scales = (wcombined_scale, wout_scale, shared_expert_scale, shared_expert_out_scale)
                 self.biases = (wcombined_biases, wout_biases, shared_expert_bias,shared_expert_out_bias)
 
@@ -76,11 +76,11 @@ class MoE:
         return expert_input
 
     @staticmethod
-    def compute_projected(expert_input, Wcombined, wcombined_quants, use_symmetric):
+    def compute_projected(expert_input, Wcombined, wcombined_quants):
         wcombined_scale, wcombined_bias = wcombined_quants
         if wcombined_scale is not None:
 
-            projected = nx.quantized_matmul(expert_input, Wcombined, scales=wcombined_scale, biases=wcombined_bias, regular=use_symmetric) #(E, capacity, 2H)
+            projected = nx.quantized_matmul(expert_input, Wcombined, scales=wcombined_scale, biases=wcombined_bias) #(E, capacity, 2H)
         else:
             projected = expert_input @ Wcombined
 
@@ -95,7 +95,7 @@ class MoE:
         return s * value_half #(E, capacity, H) 
 
     @staticmethod
-    def forward(x:nx.ArrayLike, ff_configs, ff_params, quantization:tuple[Any,...]|None=None, *, use_symmetric:bool=False, recompute_activation:bool=True, is_training=True):
+    def forward(x:nx.ArrayLike, ff_configs, ff_params, quantization:tuple[Any,...]|None=None, *, recompute_activation:bool=True, is_training=True):
         #routing
         # print("moe forward x", x.dtype)
         B, T, D = x.shape
@@ -152,19 +152,19 @@ class MoE:
         safe_gates = nx.where(valid, flatten_top_gates, nx.zeros_like(flatten_top_gates))
         expert_gate = nx.add_at(expert_gate, (flatten_top_expert_indices, safe_slot), safe_gates)
 
-        projected = MoE.compute_projected(expert_input, Wcombined, (wcombined_scale, wcombined_bias), use_symmetric) #(E, capacity, 2H)
-        shared_projected = MoE.compute_projected(flatten_x, W_shared_combined, (shared_expert_scale,shared_expert_bias), use_symmetric) #(N, ns * 2Hs)
+        projected = MoE.compute_projected(expert_input, Wcombined, (wcombined_scale, wcombined_bias)) #(E, capacity, 2H)
+        shared_projected = MoE.compute_projected(flatten_x, W_shared_combined, (shared_expert_scale,shared_expert_bias)) #(N, ns * 2Hs)
 
         hidden = MoE.compute_hidden(projected, x.dtype) #(E, capacity, H)
         shared_hidden = MoE.compute_hidden(shared_projected, x.dtype) #N, ns * H
 
         if wout_scale is not None:
-            raw_output = nx.quantized_matmul(hidden, Wout, scales=wout_scale, biases=wout_bias, regular=use_symmetric) #(E, capacity, D)
+            raw_output = nx.quantized_matmul(hidden, Wout, scales=wout_scale, biases=wout_bias) #(E, capacity, D)
         else:
             raw_output = hidden @ Wout #(E, capacity, D)
 
         if shared_expert_out_scale is not None:
-            raw_shared_output = nx.quantized_matmul(shared_hidden,W_shared_out, scales=shared_expert_out_scale, biases=shared_expert_out_bias, regular=use_symmetric)
+            raw_shared_output = nx.quantized_matmul(shared_hidden,W_shared_out, scales=shared_expert_out_scale, biases=shared_expert_out_bias)
         else:
             raw_shared_output = shared_hidden @ W_shared_out #N, D
 
@@ -187,7 +187,7 @@ class MoE:
         return final_output, cache, total_aux_loss, normalized_histogram
 
     @staticmethod
-    def backward(gradient , caches, moe_configs, ff_params, gradient_scale, quantization:tuple[Any,...]|None=None, *, use_symmetric:bool=False, recompute_activation:bool=True):
+    def backward(gradient , caches, moe_configs, ff_params, gradient_scale, quantization:tuple[Any,...]|None=None, *, recompute_activation:bool=True):
         B,T,D = gradient.shape
         N = B*T
         
@@ -203,10 +203,10 @@ class MoE:
         else:
             flatten_x, router_prob, top_expert_indices, top_gates32 , flatten_top_expert_indices, assignement_tokens, valid, safe_slot, expert_gate, raw_output, normalized_histogram, scores = caches
             expert_input = MoE.compute_expert_input(n_experts, top_k, N, flatten_x, valid, safe_slot, capacity, D, flatten_top_expert_indices, gradient.dtype)
-            projected = MoE.compute_projected(expert_input, Wcombined, (wcombined_scale,wcombined_bias), use_symmetric)
+            projected = MoE.compute_projected(expert_input, Wcombined, (wcombined_scale,wcombined_bias))
             hidden = MoE.compute_hidden(projected, gradient.dtype)
 
-            shared_projected = MoE.compute_projected(flatten_x, W_shared_combined, (shared_expert_scale,shared_expert_bias), use_symmetric) #(N,2H)
+            shared_projected = MoE.compute_projected(flatten_x, W_shared_combined, (shared_expert_scale,shared_expert_bias)) #(N,2H)
             shared_hidden = MoE.compute_hidden(shared_projected, gradient.dtype) #N, H
 
         M = N *top_k
@@ -216,7 +216,7 @@ class MoE:
         d_masked_output = assignment_gradient * valid[...,None]
 
         if shared_expert_out_scale is not None:
-            d_shared_hidden = nx.quantized_matmul(flatten_gradient, W_shared_out, shared_expert_out_scale, shared_expert_out_bias, True, regular=use_symmetric)
+            d_shared_hidden = nx.quantized_matmul(flatten_gradient, W_shared_out, shared_expert_out_scale, shared_expert_out_bias, True)
         else:
             d_shared_hidden = flatten_gradient @ W_shared_out.T #N,H
 
@@ -232,7 +232,7 @@ class MoE:
         dW_shared_out = shared_hidden.T @ flatten_gradient #H, D
         
         if wout_scale is not None:
-            d_hidden = nx.quantized_matmul(d_raw_output, Wout, wout_scale,biases=wout_bias, transpose=(0,2,1), regular=use_symmetric)  #(E,C,H) fp16
+            d_hidden = nx.quantized_matmul(d_raw_output, Wout, wout_scale,biases=wout_bias, transpose=(0,2,1))  #(E,C,H) fp16
         else:
             d_hidden = d_raw_output @ Wout.transpose(0, 2, 1)
 
@@ -259,12 +259,12 @@ class MoE:
         dW_shared_combined = flatten_x.T @ d_shared_projected #D, 2H
 
         if wcombined_scale is not None:
-            d_expert_input = nx.quantized_matmul(d_projected, Wcombined, wcombined_scale,biases=wcombined_bias, transpose=(0,2,1), regular=use_symmetric)
+            d_expert_input = nx.quantized_matmul(d_projected, Wcombined, wcombined_scale,biases=wcombined_bias, transpose=(0,2,1))
         else:
             d_expert_input = d_projected @ Wcombined.transpose(0,2,1) #(E, C, D) fp16
 
         if shared_expert_scale is not None:
-            d_x_shared = nx.quantized_matmul(d_shared_projected, W_shared_combined, shared_expert_scale, shared_expert_bias, transpose=True, regular=use_symmetric)
+            d_x_shared = nx.quantized_matmul(d_shared_projected, W_shared_combined, shared_expert_scale, shared_expert_bias, transpose=True)
         else:
             d_x_shared = d_shared_projected @ W_shared_combined.T #N,D
 
@@ -318,7 +318,7 @@ class MoE:
         return dx, dWcombined, dWout, d_router, dW_shared_combined, dW_shared_out
 
     @staticmethod
-    def inference_forward(x:nx.ArrayLike, ff_configs, ff_params, quantization:tuple[Any,...]|None=None, *, use_symmetric:bool=False):
+    def inference_forward(x:nx.ArrayLike, ff_configs, ff_params, quantization:tuple[Any,...]|None=None):
         #routing
         B, T, D = x.shape
         N = B * T
@@ -355,12 +355,12 @@ class MoE:
                 wout_scale = wout_scale[flatten_top_expert_indices]
                 wout_bias = wout_bias[flatten_top_expert_indices]
                 
-            projected = MoE.compute_projected(flatten_x[None,:,:], Wcombined, (wcombined_scale, wcombined_bias),use_symmetric)
+            projected = MoE.compute_projected(flatten_x[None,:,:], Wcombined, (wcombined_scale, wcombined_bias))
 
             hidden = MoE.compute_hidden(projected, x.dtype) #(E, capacity, H)
 
             if wout_scale is not None:
-                raw_output = nx.quantized_matmul(hidden, Wout, scales=wout_scale, biases=wout_bias, regular=use_symmetric) #(E, capacity, D)
+                raw_output = nx.quantized_matmul(hidden, Wout, scales=wout_scale, biases=wout_bias) #(E, capacity, D)
             else:
                 raw_output = hidden @ Wout #(E, capacity, D)
 
@@ -385,12 +385,12 @@ class MoE:
             safe_gates = nx.where(valid, flatten_top_gates, nx.zeros_like(flatten_top_gates))
             expert_gate = nx.add_at(expert_gate, (flatten_top_expert_indices, safe_slot), safe_gates)
             
-            projected = MoE.compute_projected(expert_input, Wcombined, (wcombined_scale, wcombined_bias), use_symmetric) #(E, capacity, 2H)
+            projected = MoE.compute_projected(expert_input, Wcombined, (wcombined_scale, wcombined_bias)) #(E, capacity, 2H)
 
             hidden = MoE.compute_hidden(projected, x.dtype) #(E, capacity, H)
 
             if wout_scale is not None:
-                raw_output = nx.quantized_matmul(hidden, Wout, scales=wout_scale, biases=wout_bias, regular=use_symmetric) #(E, capacity, D)
+                raw_output = nx.quantized_matmul(hidden, Wout, scales=wout_scale, biases=wout_bias) #(E, capacity, D)
             else:
                 raw_output = hidden @ Wout #(E, capacity, D)
 
@@ -402,12 +402,12 @@ class MoE:
 
         final_output = nx.sum(final_output, axis=1, dtype=nx.float32).reshape(B,T,D) #check
 
-        shared_projected = MoE.compute_projected(flatten_x, W_shared_combined, (shared_expert_scale,shared_expert_bias), use_symmetric) #(N, ns * 2Hs)
+        shared_projected = MoE.compute_projected(flatten_x, W_shared_combined, (shared_expert_scale,shared_expert_bias)) #(N, ns * 2Hs)
         
         shared_hidden = MoE.compute_hidden(shared_projected, x.dtype) #N, ns * H
 
         if shared_expert_out_scale is not None:
-            raw_shared_output = nx.quantized_matmul(shared_hidden,W_shared_out, scales=shared_expert_out_scale, biases=shared_expert_out_bias, regular=use_symmetric)
+            raw_shared_output = nx.quantized_matmul(shared_hidden,W_shared_out, scales=shared_expert_out_scale, biases=shared_expert_out_bias)
         else:
             raw_shared_output = shared_hidden @ W_shared_out #N, D
 

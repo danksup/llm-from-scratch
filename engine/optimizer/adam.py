@@ -3,8 +3,8 @@ from typing import Any, Literal, Callable
 from engine.optimizer.adamw import AdamW
 
 class Adam:
-    def __init__(self, lr=1e-3, beta1:float=0.9, beta2:float=0.999, epsilon:float=1e-8, use_master:bool=True,scheduler:None | Callable = None, min_lr:None | float= None) -> None:
-        self.__adamw = AdamW(lr=lr, beta1=beta1, beta2=beta2, epsilon=epsilon, weight_decay=0.0, use_master=use_master, min_lr=min_lr, scheduler=scheduler, _all_not_decayed=True)
+    def __init__(self, lr=1e-3, beta1:float=0.9, beta2:float=0.999, epsilon:float=1e-8, use_master:bool=True,scheduler:None | Callable = None, min_lr:None | float= None, t_warmup:int|None=None) -> None:
+        self.__adamw = AdamW(lr=lr, beta1=beta1, beta2=beta2, epsilon=epsilon, weight_decay=0.0, use_master=use_master, min_lr=min_lr, t_warmup=t_warmup, scheduler=scheduler, _all_not_decayed=True)
         self.state = self.__adamw.state
         self.lr = self.__adamw.lr
         self.init_lr = self.__adamw.init_lr
@@ -12,9 +12,10 @@ class Adam:
         self.use_master = self.__adamw.use_master
         self.scheduler = self.__adamw.scheduler
         self.min_lr = self.__adamw.min_lr
+        self.t_warmup = self.__adamw.t_warmup
 
     def step_many(self, name_param_gradient:list[Any], max_step, total_epoch) -> dict[Any,Any]:
-        optimized = self.__adamw.step_many(name_param_gradient, max_step, total_epoch)
+        optimized = self.__adamw.step_many(name_param_gradient, max_step, total_epoch) #type:ignore
         self.lr = self.__adamw.lr
         self.state = self.__adamw.state
         return optimized
@@ -32,7 +33,8 @@ class Adam:
         use_master = adamw.use_master
         scheduler = adamw.scheduler
         min_lr = adamw.min_lr
-        adam = cls(lr=lr, beta1=beta1, beta2=beta2, epsilon=epsilon, use_master=use_master, scheduler=scheduler, min_lr=min_lr)
+        t_warmup = adamw.t_warmup
+        adam = cls(lr=lr, beta1=beta1, beta2=beta2, epsilon=epsilon, use_master=use_master, scheduler=scheduler, min_lr=min_lr, t_warmup=t_warmup)
 
         adam.__adamw = adamw
 

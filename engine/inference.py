@@ -40,8 +40,7 @@ class Inference:
         if self.temp < 0:
             warnings.warn(colorize("temp < 0 = greedy (like temp = 0)", "yellow"))
 
-        as_symmetric = self.transformer.symmetric_quant
-        logits, self.all_caches = self.transformer.inference(context,self.session_configs["context_size"], self.all_caches, self.position, use_symmetric=as_symmetric)
+        logits, self.all_caches = self.transformer.inference(context,self.session_configs["context_size"], self.all_caches, self.position)
         self.position += context.shape[1]
 
         penalty_mem = nx.array(self.penalty_memory, nx.uint32)
@@ -56,7 +55,7 @@ class Inference:
         next_token = nx.array([[token]], dtype=nx.int32)
 
         for _ in range(self.n-1):
-            logits, self.all_caches = self.transformer.inference(next_token,self.session_configs["context_size"], self.all_caches, self.position, use_symmetric=as_symmetric)
+            logits, self.all_caches = self.transformer.inference(next_token,self.session_configs["context_size"], self.all_caches, self.position)
             self.position += 1
             penalty_mem = nx.array(self.penalty_memory, nx.uint32)
             raw_token = self._sample(logits, penalty_mem,  self.temp, self.top_k, self.top_p, self.penalty)

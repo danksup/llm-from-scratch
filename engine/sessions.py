@@ -65,6 +65,7 @@ DEFAULT_OPTIMIZER_ARGS = {
         "use_master":False,
         "scheduler":None,
         "min_lr":None,
+        "t_warmup": max(1,int(DEFAULT_CONFIGS["max_step"] * 0.015))
         },
     "adam": {
         "lr":1e-3,
@@ -74,6 +75,7 @@ DEFAULT_OPTIMIZER_ARGS = {
         "use_master":False,
         "scheduler":None,
         "min_lr":None,
+        "t_warmup": max(1,int(DEFAULT_CONFIGS["max_step"] * 0.015))
         },
     "adamw":{
         "lr":1e-3,
@@ -84,6 +86,7 @@ DEFAULT_OPTIMIZER_ARGS = {
         "use_master":False,
         "scheduler":None,
         "min_lr":None,
+        "t_warmup": max(1,int(DEFAULT_CONFIGS["max_step"] * 0.015))
         },
     "rmsprop": {
         "lr":1e-3,
@@ -94,13 +97,13 @@ DEFAULT_OPTIMIZER_ARGS = {
         "use_master":False,
         "scheduler":None,
         "min_lr":None,
+        "t_warmup": max(1,int(DEFAULT_CONFIGS["max_step"] * 0.015))
         },
 }
 
 BACKEND_SPECIFICS = {
     "MLX":{
         "mlx_disable_compile":False,
-        "mlx_save_quantized_weights_as_symmetric":True
     },
     "CuPy": {},
     "NumPy": {}
@@ -135,9 +138,6 @@ class Session:
         for key in delete_keys:
             del self.configs["backend"][key]
 
-        if not nx.backend == "MLX" and self.transformer.quantized:
-            self.transformer.symmetric_quant = True
-
         if transformer.dtype == nx.float32:
             if self.configs["optimizer_args"]["use_master"]:
                 self.configs["optimizer_args"]["use_master"] = False
@@ -168,8 +168,11 @@ class Session:
 
                     if self.configs["optimizer_args"]["min_lr"] is None:
                         self.configs["optimizer_args"]["min_lr"] = optimizer_args["min_lr"] = self.configs["optimizer_args"]["lr"] / 1e2
+                    if self.configs["optimizer_args"]["t_warmup"] is None:
+                        self.configs["optimizer_args"]["t_warmup"] = optimizer_args["t_warmup"] = self.configs["max_step"] * 0.015
                 else:
                     self.configs["optimizer_args"].pop("min_lr")
+                    self.configs["optimizer_args"].pop("t_warmup")
                 self.optimizer = optimizer_class(**optimizer_args)
         elif isinstance(init_optimizer, OPTIMIZER_TYPES):
             self.optimizer = init_optimizer
@@ -426,21 +429,8 @@ class Session:
         weights = self.transformer.get_all_weights("dict") 
         quants = self.transformer.get_quant_params()
 
-        convert_to_symmetric = nx.backend == "MLX" and self.transformer.quantized and self.configs["backend"]["mlx_save_quantized_weights_as_symmetric"] and not self.transformer.symmetric_quant
-        if convert_to_symmetric:
-            for k,v in weights.items():
-                if f"{k}.scales" in quants:
-                    scale = quants[f"{k}.scales"]
-                    bias = quants[f"{k}.biases"]
-                    weights[k], new_scale, new_bias = nx.quantize(nx.dequantize(v, scale, bias), regular=True)
-                    quants[f"{k}.scales"] = new_scale
-                    quants[f"{k}.biases"] = new_bias
-
         if self.transformer.quantized:
             embedding = {"embedding":self.transformer.embedding.lookup_table, "embedding_scale":self.transformer.embedding.table_scale,  "embedding_bias":self.transformer.embedding.bias}
-            if convert_to_symmetric:
-                embedding["embedding"], embedding["embedding_scale"], embedding["embedding_bias"] = nx.quantize(nx.dequantize(embedding["embedding"], embedding["embedding_scale"], embedding["embedding_bias"]), regular=True)
-
             tensors = weights | quants | embedding
         else:
             embedding = {"embedding":self.transformer.embedding.lookup_table}
@@ -476,16 +466,11 @@ class Session:
         quantized = transformer_configs["quantized"]
         dtype = nx.str_to_dtype[transformer_configs["dtype"]]
         
-        requantize = nx.backend == "MLX" and transformer_configs["quantized"] is True and session_configs["backend"]["mlx_save_quantized_weights_as_symmetric"]
-
         embedding_lookuptable = session["embedding"] #type:ignore
         embedding_quants = None
     
         if quantized:
             embedding_quants = session["embedding_scale"],session["embedding_bias"] #type:ignore
-            if requantize:
-                embedding_lookuptable, new_scale, new_bias = nx.quantize(nx.dequantize(embedding_lookuptable, embedding_quants[0], embedding_quants[1], regular=True))
-                embedding_quants = new_scale, new_bias
 
         rmsfinal_gamma = session["rmsnorm_final"] #type:ignore
         rmsfinal_config = ast.literal_eval(metadata["rmsnorm_final_configs"]) #type:ignore
@@ -514,22 +499,8 @@ class Session:
             if quantized:
                 attn_quants = ((session[f"{i}.attention.Wqkv.scales"],session[f"{i}.attention.Wo.scales"]), (session[f"{i}.attention.Wqkv.biases"],session[f"{i}.attention.Wo.biases"])) #type:ignore
                 ff_quants = ((session[f"{i}.ff.Wcombined.scales"],session[f"{i}.ff.Wout.scales"],session[f"{i}.ff.W_shared_combined.scales"],session[f"{i}.ff.W_shared_out.scales"]), (session[f"{i}.ff.Wcombined.biases"],session[f"{i}.ff.Wout.biases"],session[f"{i}.ff.W_shared_combined.biases"],session[f"{i}.ff.W_shared_out.biases"])) #type:ignore
-
-                if requantize:
-                    wqkv, wqkv_scale,wqkv_bias =  nx.quantize(nx.dequantize( session[f"{i}.attention.Wqkv"], attn_quants[0][0], attn_quants[1][0], regular=True)) #type:ignore
-                    wo, wo_scale,wo_bias =  nx.quantize(nx.dequantize( session[f"{i}.attention.Wo"], attn_quants[0][1], attn_quants[1][1], regular=True)) #type:ignore
-                    wcombined, wcombined_scale, wcombined_bias =  nx.quantize(nx.dequantize( session[f"{i}.ff.Wcombined"], ff_quants[0][0],ff_quants[1][0], regular=True)) #type:ignore
-                    wout, wout_scale, wout_bias =  nx.quantize(nx.dequantize( session[f"{i}.ff.Wout"],  ff_quants[0][1],ff_quants[1][1], regular=True)) #type:ignore
-                    wsharedcombined,wsharedcombined_scale, wsharedcombined_bias = nx.quantize(nx.dequantize( session[f"{i}.ff.W_shared_combined"], ff_quants[0][2],ff_quants[1][2], regular=True)) #type:ignore
-                    wsharedout,wsharedout_scale, wsharedout_bias = nx.quantize(nx.dequantize( session[f"{i}.ff.W_shared_out"], ff_quants[0][3],ff_quants[1][3], regular=True)) #type:ignore
-
-                    attn_params = (wqkv, wo) #type:ignore
-                    ff_params = (session[f"{i}.ff.router"], wcombined, wout, wsharedcombined, wsharedout) #type:ignore
-                    attn_quants = ((wqkv_scale, wo_scale), (wqkv_bias,wo_bias)) #type:ignore
-                    ff_quants = ((wcombined_scale, wout_scale,wsharedcombined_scale,wsharedout_scale), (wcombined_bias, wout_bias,wsharedcombined_bias,wsharedout_bias)) #type:ignore
-                else:
-                    attn_params = (session[f"{i}.attention.Wqkv"], session[f"{i}.attention.Wo"]) #type:ignore
-                    ff_params = (session[f"{i}.ff.router"],session[f"{i}.ff.Wcombined"], session[f"{i}.ff.Wout"], session[f"{i}.ff.W_shared_combined"], session[f"{i}.ff.W_shared_out"]) #type:ignore
+                attn_params = (session[f"{i}.attention.Wqkv"], session[f"{i}.attention.Wo"]) #type:ignore
+                ff_params = (session[f"{i}.ff.router"],session[f"{i}.ff.Wcombined"], session[f"{i}.ff.Wout"], session[f"{i}.ff.W_shared_combined"], session[f"{i}.ff.W_shared_out"]) #type:ignore
             else:
                 attn_params = (session[f"{i}.attention.Wqkv"], session[f"{i}.attention.Wo"]) #type:ignore
                 ff_params = (session[f"{i}.ff.router"],session[f"{i}.ff.Wcombined"], session[f"{i}.ff.Wout"], session[f"{i}.ff.W_shared_combined"], session[f"{i}.ff.W_shared_out"]) #type:ignore

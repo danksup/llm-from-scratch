@@ -36,10 +36,10 @@ class TransformerBlock:
         # this_str = f""
         return str(this)
 
-    def count_param(self, dense=False, *, quantized=False, use_symmetric=False) -> int:
+    def count_param(self, dense=False, *, quantized=False) -> int:
         total = 0
         ff_params = 0
-        if quantized and nx.backend == "MLX" and not use_symmetric:
+        if quantized:
             ff_params += self.ff.Wcombined.size * 4
             ff_params += self.ff.Wout.size * 4
             total += self.ff.W_shared_combined.size * 4
@@ -64,12 +64,12 @@ class TransformerBlock:
 
     @staticmethod
     @nx.compile
-    def _forward(x, causal_mask:Any, attention:str, attn_configs:tuple[Any,...], attn_params:tuple[Any,...], ff_configs, ff_params, epsilon:float, gamma1:Any, gamma2:Any, p:float, is_training:bool, quantization:tuple[Any,...]|None=None, *, use_symmetric:bool=False, recompute_activation:bool=True) -> tuple[Any, Any, Any, Any, Any]:
+    def _forward(x, causal_mask:Any, attention:str, attn_configs:tuple[Any,...], attn_params:tuple[Any,...], ff_configs, ff_params, epsilon:float, gamma1:Any, gamma2:Any, p:float, is_training:bool, quantization:tuple[Any,...]|None=None, *, recompute_activation:bool=True) -> tuple[Any, Any, Any, Any, Any]:
         rmsnorm1_out, caches_rmsnorm1 = RMSNorm._forward(x, gamma1,epsilon)
 
         rmsnorm1_out = rmsnorm1_out.astype(x.dtype)
 
-        attn_out, caches_attn = ATTN_TYPE[attention]._forward(rmsnorm1_out, causal_mask, attn_configs, attn_params, quantization[0], use_symmetric=use_symmetric, recompute_activation=recompute_activation) #type:ignore
+        attn_out, caches_attn = ATTN_TYPE[attention]._forward(rmsnorm1_out, causal_mask, attn_configs, attn_params, quantization[0], recompute_activation=recompute_activation) #type:ignore
         drop_attn_out, mask1 = Dropout._forward(attn_out, p,is_training)
 
         attn_out = drop_attn_out + x
@@ -77,7 +77,7 @@ class TransformerBlock:
         rmsnorm2_out, caches_rmsnorm2 = RMSNorm._forward(attn_out, gamma2,epsilon)
 
         rmsnorm2_out = rmsnorm2_out.astype(x.dtype)
-        ff_out, caches_ff, aux_loss, normalized_histogram = MoE.forward(rmsnorm2_out, ff_configs, ff_params, quantization[1], use_symmetric=use_symmetric, recompute_activation=recompute_activation, is_training=is_training) #type:ignore
+        ff_out, caches_ff, aux_loss, normalized_histogram = MoE.forward(rmsnorm2_out, ff_configs, ff_params, quantization[1], recompute_activation=recompute_activation, is_training=is_training) #type:ignore
         drop_ff_out, mask2 =  Dropout._forward(ff_out, p,is_training)
 
         ff_out = drop_ff_out + attn_out
@@ -88,10 +88,10 @@ class TransformerBlock:
 
     @staticmethod
     @nx.compile
-    def _backward(gradient:Any, mask1:Any, mask2:Any, attention:str, p, caches_attn:tuple[Any,...], caches_ff:tuple[Any,...], caches_rmsnorm1:tuple[Any,...], caches_rmsnorm2:tuple[Any,...], attn_configs:tuple[Any,...], attn_params:tuple[Any,...], gamma1:Any, gamma2:Any, ff_params:tuple, moe_configs,gradient_scale, quantization:tuple[Any,...]|None=None, *, use_symmetric:bool=False, recompute_activation:bool=True) -> tuple[Any, Any, Any, Any, Any, Any, Any, Any,Any, Any, Any, Any]:
+    def _backward(gradient:Any, mask1:Any, mask2:Any, attention:str, p, caches_attn:tuple[Any,...], caches_ff:tuple[Any,...], caches_rmsnorm1:tuple[Any,...], caches_rmsnorm2:tuple[Any,...], attn_configs:tuple[Any,...], attn_params:tuple[Any,...], gamma1:Any, gamma2:Any, ff_params:tuple, moe_configs,gradient_scale, quantization:tuple[Any,...]|None=None, *, recompute_activation:bool=True) -> tuple[Any, Any, Any, Any, Any, Any, Any, Any,Any, Any, Any, Any]:
         d_ff_drop = Dropout._backward(gradient, mask2, p) #grad dtype
 
-        dx_ff, dWcombined, dWout, d_router, dW_shared_combined, dW_shared_out = MoE.backward(d_ff_drop, caches_ff, moe_configs, ff_params,gradient_scale, quantization[1], use_symmetric=use_symmetric, recompute_activation=recompute_activation) #out:fp32 #type:ignore
+        dx_ff, dWcombined, dWout, d_router, dW_shared_combined, dW_shared_out = MoE.backward(d_ff_drop, caches_ff, moe_configs, ff_params,gradient_scale, quantization[1], recompute_activation=recompute_activation) #out:fp32 #type:ignore
 
         d_rmsn2,d_gamma2 = RMSNorm._backward(dx_ff, caches_rmsnorm2 ,gamma2)
 
@@ -100,7 +100,7 @@ class TransformerBlock:
         d_attn_out = d_attn_out.astype(gradient.dtype)
         d_attn_drop = Dropout._backward(d_attn_out, mask1, p)
 
-        d_attn, dWqkv, dWo, Q_norm_d_gamma, K_norm_d_gamma = ATTN_TYPE[attention]._backward(d_attn_drop, caches_attn, attn_configs, attn_params, quantization[0], use_symmetric=use_symmetric, recompute_activation=recompute_activation) #type:ignore
+        d_attn, dWqkv, dWo, Q_norm_d_gamma, K_norm_d_gamma = ATTN_TYPE[attention]._backward(d_attn_drop, caches_attn, attn_configs, attn_params, quantization[0], recompute_activation=recompute_activation) #type:ignore
 
         d_attn = d_attn.astype(nx.float32)
         d_rmsn1, d_gamma1 = RMSNorm._backward(d_attn,caches_rmsnorm1,gamma1)
@@ -110,19 +110,19 @@ class TransformerBlock:
         return dx, dWout, dWcombined, d_router,dW_shared_combined, dW_shared_out, dWqkv,dWo, d_gamma1, d_gamma2, Q_norm_d_gamma, K_norm_d_gamma
 
     #TODO:compiled, dtype consistency fix/check
-    def inference_forward(self, x, max_cache_len, cached_k=None, cached_v=None,  position=0, * ,use_symmetric=False):
+    def inference_forward(self, x, max_cache_len, cached_k=None, cached_v=None,  position=0):
         rmsnorm1_out, _ = RMSNorm._forward(x, self.rmsnorm1.gamma, self.rmsnorm1.epsilon)
         rmsnorm1_out = rmsnorm1_out.astype(x.dtype)
 
         attn_quant_params = self.attention.scales + self.attention.biases
-        attn_out, cached_k, cached_v = self.attention.inference_forward(x=rmsnorm1_out, max_cache_len=max_cache_len,freqs= self.attention.freqs, quantization=attn_quant_params, cached_k=cached_k, cached_v= cached_v, position=position, use_symmetric=use_symmetric)
+        attn_out, cached_k, cached_v = self.attention.inference_forward(x=rmsnorm1_out, max_cache_len=max_cache_len,freqs= self.attention.freqs, quantization=attn_quant_params, cached_k=cached_k, cached_v= cached_v, position=position)
         attn_out = attn_out + x
 
         rmsnorm2_out, _ = RMSNorm._forward(attn_out, self.rmsnorm2.gamma, self.rmsnorm2.epsilon)
         rmsnorm2_out = rmsnorm2_out.astype(x.dtype)
 
         ff_quant_params = self.ff.scales + self.ff.biases
-        ff_out= MoE.inference_forward(rmsnorm2_out, self.ff.configs, (self.ff.Wcombined, self.ff.Wout, self.ff.router, self.ff.W_shared_combined, self.ff.W_shared_out ), ff_quant_params, use_symmetric=use_symmetric)
+        ff_out= MoE.inference_forward(rmsnorm2_out, self.ff.configs, (self.ff.Wcombined, self.ff.Wout, self.ff.router, self.ff.W_shared_combined, self.ff.W_shared_out ), ff_quant_params)
         ff_out = ff_out + attn_out
 
         return ff_out, cached_k, cached_v

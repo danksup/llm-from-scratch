@@ -2,18 +2,19 @@ import engine.backend as nx
 from typing import Any, Callable
 
 class AdamW:
-    def __init__(self, lr=1e-3, beta1:float=0.9, beta2:float=0.999, epsilon:float=1e-8, weight_decay:float=0.01, use_master:bool=True, scheduler:None|Callable=None, min_lr:None | float= None, *, _all_not_decayed:bool=False) -> None:
+    def __init__(self, lr=1e-3, beta1:float=0.9, beta2:float=0.999, epsilon:float=1e-8, weight_decay:float=0.01, use_master:bool=True, scheduler:None|Callable=None, min_lr:None | float= None, t_warmup:None|int=None, *, _all_not_decayed:bool=False) -> None:
         assert lr >= 0, "lr must be non-negative"
         assert beta1 >= 0 and beta1 < 1, "allowed beta1 range: [0,1)"
         assert beta2 >= 0 and beta2 < 1, "allowed beta2 range: [0,1)"
         assert weight_decay >= 0, "weight_decay must be non-negative"
 
         self.state = {}
-        self.state["t"] = nx.array(0, dtype=nx.int32)
+        self.state["t"] = nx.array(1, dtype=nx.int32)
         self.init_lr = nx.float_32(lr)
         self.lr = nx.float_32(lr)
         self.min_lr = min_lr
         self.scheduler = scheduler
+        self.t_warmup = t_warmup
         if scheduler:
             self.schedule = scheduler(self.init_lr, min_lr)
             if min_lr is not None:
@@ -31,15 +32,20 @@ class AdamW:
         self.__all_not_decayed = _all_not_decayed
     
     def step_many(self, name_param_gradient_decay:list[Any], max_step:int, total_epoch:int) -> dict[Any,Any]:
-
+        t_warmup = self.t_warmup
         if self.scheduler:
             current_step = self.state["t"]
-            total_step = max_step * total_epoch
-            progress = min(1, current_step / total_step) 
-            self.lr = self.schedule(progress)
-
-        
-        self.state["t"] = self.state.get("t", nx.array(0, dtype=nx.int32)) + 1
+            if t_warmup is not None and t_warmup>0 :
+                if current_step > t_warmup:
+                    total_step = max_step * total_epoch
+                    progress = min(1, (current_step - t_warmup) / max(1, total_step - t_warmup)) #type:ignore
+                    self.lr = self.schedule(progress)
+                else:
+                    self.lr = self.init_lr * min(1, current_step / t_warmup)
+            else:
+                total_step = max_step * total_epoch
+                progress = min(1, current_step / total_step) #type:ignore
+                self.lr = self.schedule(progress)
 
         group = {}
         for x in name_param_gradient_decay:
@@ -101,6 +107,8 @@ class AdamW:
             
             del new_params
 
+        self.state["t"] = self.state.get("t", nx.array(1, dtype=nx.int32)) + 1
+
         return optimized
     
     @staticmethod
@@ -141,7 +149,8 @@ class AdamW:
             "weight_decay":self.weight_decay.item(),
             "use_master":self.use_master,
             "scheduler":self.scheduler,
-            "min_lr": self.min_lr
+            "min_lr": self.min_lr,
+            "t_warmup": self.t_warmup
         }
         if self.min_lr is not None and hasattr(self.min_lr, "dtype"):
             adamw_configs["min_lr"] = self.min_lr.item() #type:ignore
@@ -161,7 +170,8 @@ class AdamW:
         use_master = configs["use_master"]
         scheduler = configs["scheduler"]
         min_lr = configs["min_lr"]
-        adamw = cls(lr=lr, beta1=beta1, beta2=beta2, epsilon=epsilon, weight_decay=weight_decay, use_master=use_master, scheduler=scheduler, min_lr=min_lr)
+        t_warmup = configs["t_warmup"]
+        adamw = cls(lr=lr, beta1=beta1, beta2=beta2, epsilon=epsilon, weight_decay=weight_decay, use_master=use_master, scheduler=scheduler, min_lr=min_lr, t_warmup=t_warmup)
         if not config_only:
             adamw.state["t"] = nx.array(thing["t"], dtype=nx.int32)
             for key, value in thing.items():

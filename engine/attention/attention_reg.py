@@ -7,7 +7,7 @@ from engine.rope import precompute_freqs
 from engine.rmsnorm import RMSNorm
 
 class AttentionFull:
-    def __init__(self,embed_dim:int, n_heads:int,Q_norm:RMSNorm, K_norm:RMSNorm,  n_kv_heads:int=-1, dtype:Any=nx.float16,  initializer:Callable=initializer.glorot_uniform, quantized:bool=False, *, use_symmetric=False, init=True) -> None:
+    def __init__(self,embed_dim:int, n_heads:int,Q_norm:RMSNorm, K_norm:RMSNorm,  n_kv_heads:int=-1, dtype:Any=nx.float16,  initializer:Callable=initializer.glorot_uniform, quantized:bool=False, *, init=True) -> None:
         self.n_kv_heads = n_kv_heads
 
         if n_kv_heads < 0:
@@ -42,10 +42,9 @@ class AttentionFull:
             self.Wo = initializer(wo_shape, dtype=dtype)
             assert nx.isfinite(self.Wo).all(), f"non-finite detected when initializing attentipn.Wo."
 
-            self.use_symmetric = use_symmetric
             if quantized:
-                self.Wqkv, wqkv_scale, wqkv_bias = nx.quantize(self.Wqkv, regular=use_symmetric)
-                self.Wo, wo_scale, wo_bias = nx.quantize(self.Wo, regular=use_symmetric)
+                self.Wqkv, wqkv_scale, wqkv_bias = nx.quantize(self.Wqkv)
+                self.Wo, wo_scale, wo_bias = nx.quantize(self.Wo)
                 self.scales = (wqkv_scale, wo_scale)
                 self.biases = (wqkv_bias, wo_bias)
 
@@ -66,15 +65,15 @@ class AttentionFull:
         return "full"
 
     @classmethod
-    def multihead(cls, embed_dim, n_heads, dtype, initializer, quantized, Q_norm, K_norm, *, use_symmetric=False):
+    def multihead(cls, embed_dim, n_heads, dtype, initializer, quantized, Q_norm, K_norm):
         if quantized:
             pass
-        mha = cls(embed_dim, n_heads=n_heads,Q_norm=Q_norm, K_norm=K_norm, n_kv_heads=n_heads, dtype=dtype, initializer=initializer, quantized=quantized, use_symmetric=use_symmetric)
+        mha = cls(embed_dim, n_heads=n_heads,Q_norm=Q_norm, K_norm=K_norm, n_kv_heads=n_heads, dtype=dtype, initializer=initializer, quantized=quantized)
         return mha
 
     @classmethod
-    def multiquery(cls, embed_dim, n_heads, dtype, initializer, quantized, Q_norm, K_norm, *, use_symmetric=False):
-        mqa = cls(embed_dim, n_heads=n_heads,Q_norm=Q_norm, K_norm=K_norm,  n_kv_heads=1, dtype=dtype, initializer=initializer, quantized=quantized, use_symmetric=use_symmetric)
+    def multiquery(cls, embed_dim, n_heads, dtype, initializer, quantized, Q_norm, K_norm):
+        mqa = cls(embed_dim, n_heads=n_heads,Q_norm=Q_norm, K_norm=K_norm,  n_kv_heads=1, dtype=dtype, initializer=initializer, quantized=quantized)
         return mqa
 
     @staticmethod
@@ -90,7 +89,7 @@ class AttentionFull:
         return weights
 
     @staticmethod
-    def _forward(x:nx.ArrayLike, causal_mask:nx.ArrayLike,  attn_configs:tuple[Any,...], attn_params: tuple[Any,...], quantization,  *, use_symmetric:bool=False, recompute_activation=True) -> tuple[nx.ArrayLike, tuple[nx.ArrayLike,...]]:
+    def _forward(x:nx.ArrayLike, causal_mask:nx.ArrayLike,  attn_configs:tuple[Any,...], attn_params: tuple[Any,...], quantization,  *, recompute_activation=True) -> tuple[nx.ArrayLike, tuple[nx.ArrayLike,...]]:
         #fp_16_x shape = (B,T,D)
         #Wqkv.T (D, D + 2 * n_kv_heads * H)
         #combined (B, T, D + 2 * n_kv_heads * H)
@@ -100,7 +99,7 @@ class AttentionFull:
         wqkv_scale, wo_scale, wqkv_bias, wo_bias = quantization
 
         if wqkv_scale is not None:
-            combined = nx.quantized_matmul(x, Wqkv, wqkv_scale,wqkv_bias, transpose=True, regular=use_symmetric)
+            combined = nx.quantized_matmul(x, Wqkv, wqkv_scale,wqkv_bias, transpose=True)
         else:
             combined =  x @ Wqkv.T  # dtype
 
@@ -127,7 +126,7 @@ class AttentionFull:
         output_concat = output.transpose(0, 2, 1, 3).reshape(B, T, embed_dim)
 
         if wo_scale is not None:
-            output_projected = nx.quantized_matmul(output_concat, Wo, wo_scale, wo_bias, regular=use_symmetric) #BTD
+            output_projected = nx.quantized_matmul(output_concat, Wo, wo_scale, wo_bias) #BTD
         else:
             output_projected = output_concat @ Wo
 
@@ -139,7 +138,7 @@ class AttentionFull:
         return output_projected, cache
 
     @staticmethod
-    def _backward(gradient:nx.ArrayLike, caches:tuple[Any,...], attn_configs:tuple[Any,...], attn_params: tuple[Any,...], quantization:tuple[Any,...]|None=None,  *, use_symmetric:bool=False, recompute_activation=True) -> tuple[nx.ArrayLike,...]:
+    def _backward(gradient:nx.ArrayLike, caches:tuple[Any,...], attn_configs:tuple[Any,...], attn_params: tuple[Any,...], quantization:tuple[Any,...]|None=None,  *, recompute_activation=True) -> tuple[nx.ArrayLike,...]:
         embed_dim, n_kv_heads, n_heads, n_rep, head_dim, freqs = attn_configs
         Wqkv, Wo, Q_norm_gamma, K_norm_gamma = attn_params
 
@@ -154,7 +153,7 @@ class AttentionFull:
         B, T, _ = x.shape
 
         if wo_scale is not None:
-            d_output_concat = nx.quantized_matmul(gradient, Wo, wo_scale,wo_bias, transpose=True, regular=use_symmetric) #B,T,D
+            d_output_concat = nx.quantized_matmul(gradient, Wo, wo_scale,wo_bias, transpose=True) #B,T,D
         else:
             d_output_concat = gradient @ Wo.T
 
@@ -198,17 +197,17 @@ class AttentionFull:
         dWo = H.T @ G
 
         if wqkv_scale is not None:
-            dx = nx.quantized_matmul(dQKV, Wqkv, wqkv_scale, wqkv_bias, regular=use_symmetric)
+            dx = nx.quantized_matmul(dQKV, Wqkv, wqkv_scale, wqkv_bias)
         else:
             dx = dQKV @ Wqkv
 
         del x, output_concat, freqs, Wqkv, Wo
         return dx,dWqkv,dWo,Q_norm_d_gamma,K_norm_d_gamma
 
-    def inference_forward(self, x, max_cache_len, freqs, quantization, cached_k, cached_v, position = 0,  *, use_symmetric:bool=False):
+    def inference_forward(self, x, max_cache_len, freqs, quantization, cached_k, cached_v, position = 0):
         wqkv_scale, wo_scale, wqkv_bias, wo_bias = quantization #type:ignore
         if wqkv_scale is not None:
-            combined = nx.quantized_matmul(x, self.Wqkv, wqkv_scale,wqkv_bias, transpose=True, regular=use_symmetric)
+            combined = nx.quantized_matmul(x, self.Wqkv, wqkv_scale,wqkv_bias, transpose=True)
         else:
             combined =  x @ self.Wqkv.T  # dtype
         B, T, _ = x.shape
@@ -260,7 +259,7 @@ class AttentionFull:
         output_concat = output.transpose(0, 2, 1, 3).reshape(B, T, self.embed_dim)
 
         if wo_scale is not None:
-            output_projected = nx.quantized_matmul(output_concat, self.Wo, wo_scale, wo_bias, regular=use_symmetric) #BTD
+            output_projected = nx.quantized_matmul(output_concat, self.Wo, wo_scale, wo_bias) #BTD
         else:
             output_projected = output_concat @ self.Wo
 

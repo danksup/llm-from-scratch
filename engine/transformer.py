@@ -68,16 +68,12 @@ class Transformer:
             raise ValueError(f"please use floating type for dtype initialization, got {self.dtype} instead.")
 
         self.quantized = configs.get("quantized", False)
-        self.quantized = self.quantized.lower() if isinstance(self.quantized, str) else self.quantized
-        self.symmetric_quant = True if self.quantized == "symmetric" else False
         self.recompute_activation = configs.get("recompute_activation", True)
 
         self.check_non_finite = configs.get("check_non_finite", True)
         
-        validate_choice(self.quantized, "quantized", [True, False, "symmetric"])
-
         if not isinstance(embedding, Embedding):
-            self.embedding = Embedding(self.vocab_size, self.embed_dim, self.dtype, self.quantized, use_symmetric=self.symmetric_quant)
+            self.embedding = Embedding(self.vocab_size, self.embed_dim, self.dtype, self.quantized)
         else:
             self.embedding = embedding
         if not isinstance(self.embedding, Embedding):
@@ -153,26 +149,26 @@ class Transformer:
                 match (attn_type_str, attn_variant):
                     case ("chunked", "gqa"):
                         n_kv_heads = overrided["attn_n_kv_heads"]
-                        attn = attn_type(embed_dim=D, n_heads=n_heads, Q_norm=Q_norm, K_norm=K_norm, n_kv_heads=n_kv_heads, chunk_size=chunk_size, dtype=self.dtype, initializer=attn_init, quantized=self.quantized, use_symmetric=self.symmetric_quant)
+                        attn = attn_type(embed_dim=D, n_heads=n_heads, Q_norm=Q_norm, K_norm=K_norm, n_kv_heads=n_kv_heads, chunk_size=chunk_size, dtype=self.dtype, initializer=attn_init, quantized=self.quantized)
                     case ("chunked", "mha"):
-                        attn = attn_type.multihead(D, n_heads,chunk_size , self.dtype, attn_init, quantized=self.quantized, use_symmetric=self.symmetric_quant, Q_norm=Q_norm, K_norm=K_norm,)
+                        attn = attn_type.multihead(D, n_heads,chunk_size , self.dtype, attn_init, quantized=self.quantized, Q_norm=Q_norm, K_norm=K_norm,)
                     case ("chunked", "mqa"):
-                        attn = attn_type.multiquery(D, n_heads, chunk_size, self.dtype, attn_init,quantized=self.quantized, use_symmetric=self.symmetric_quant, Q_norm=Q_norm, K_norm=K_norm,)
+                        attn = attn_type.multiquery(D, n_heads, chunk_size, self.dtype, attn_init,quantized=self.quantized, Q_norm=Q_norm, K_norm=K_norm,)
                     case ("chunked", invalid):
                         raise ValueError(f"[block {i}] invalid variant of \"{invalid}\". valid variants: {", ".join(ATTN_VARIANT)}")
                     case ("full", "gqa"):
                         n_kv_heads = overrided["attn_n_kv_heads"]
-                        attn = attn_type(embed_dim=D, n_heads=n_heads, n_kv_heads=n_kv_heads,  dtype=self.dtype, initializer=attn_init,quantized=self.quantized, use_symmetric=self.symmetric_quant, Q_norm=Q_norm, K_norm=K_norm,)
+                        attn = attn_type(embed_dim=D, n_heads=n_heads, n_kv_heads=n_kv_heads,  dtype=self.dtype, initializer=attn_init,quantized=self.quantized, Q_norm=Q_norm, K_norm=K_norm,)
                     case ("full", "mha"):
-                        attn = attn_type.multihead(embed_dim=D, n_heads=n_heads,  dtype=self.dtype, initializer=attn_init,quantized=self.quantized, use_symmetric=self.symmetric_quant, Q_norm=Q_norm, K_norm=K_norm,)
+                        attn = attn_type.multihead(embed_dim=D, n_heads=n_heads,  dtype=self.dtype, initializer=attn_init,quantized=self.quantized, Q_norm=Q_norm, K_norm=K_norm,)
                     case ("full", "mqa"):
-                        attn = attn_type.multiquery(embed_dim=D, n_heads=n_heads,  dtype=self.dtype, initializer=attn_init,quantized=self.quantized, use_symmetric=self.symmetric_quant, Q_norm=Q_norm, K_norm=K_norm,)
+                        attn = attn_type.multiquery(embed_dim=D, n_heads=n_heads,  dtype=self.dtype, initializer=attn_init,quantized=self.quantized, Q_norm=Q_norm, K_norm=K_norm,)
                     case ("full", invalid):
                         raise ValueError(f"[block {i}] invalid variant of \"{invalid}\". valid variants: {", ".join(ATTN_VARIANT)}")
                     case _:
                         raise ValueError(f"[block {i}] invalid variant of \"{attn_variant}\". valid variants: {", ".join(ATTN_VARIANT)}")
 
-                ff = MoE(CF, topk, E, D, H, ff_shared_hidden_width, ff_n_shared_experts,ff_jitter_eps,ff_moe_lambda, dtype=self.dtype, initializer=ff_init, quantized=self.quantized, as_symmetric=self.symmetric_quant)
+                ff = MoE(CF, topk, E, D, H, ff_shared_hidden_width, ff_n_shared_experts,ff_jitter_eps,ff_moe_lambda, dtype=self.dtype, initializer=ff_init, quantized=self.quantized)
                 rmsnorm1 = RMSNorm(D)
                 rmsnorm2 = RMSNorm(D)
                 transformer_block = TransformerBlock(attn, ff, rmsnorm1, rmsnorm2)
@@ -197,11 +193,11 @@ class Transformer:
         total = 0
         total_dense = 0
         for i in self.blocks:
-            total += i.count_param(quantized=self.quantized, use_symmetric=self.symmetric_quant)
-            total_dense += i.count_param(dense=True, quantized=self.quantized, use_symmetric=self.symmetric_quant)
+            total += i.count_param(quantized=self.quantized)
+            total_dense += i.count_param(dense=True, quantized=self.quantized)
 
         embedding_size = self.embedding.lookup_table.size
-        if self.quantized and not self.symmetric_quant:
+        if self.quantized:
             embedding_size *= 4
 
         total += embedding_size
@@ -250,7 +246,7 @@ class Transformer:
                 attn_params = block.attention.Wqkv, block.attention.Wo, block.attention.Q_norm.gamma, block.attention.K_norm.gamma
                 ff_params = block.ff.Wcombined, block.ff.Wout, block.ff.router, block.ff.W_shared_combined, block.ff.W_shared_out
                 scales = (block.attention.scales + block.attention.biases, block.ff.scales + block.ff.biases)
-                ff_out ,masks, caches, router_loss, normalized_histogram = block._forward(output, block.causal_mask, attn_str ,block.attention.configs, attn_params, block.ff.configs, ff_params, epsilon, gamma1, gamma2, P, is_training, scales, use_symmetric=self.symmetric_quant, recompute_activation=self.recompute_activation)
+                ff_out ,masks, caches, router_loss, normalized_histogram = block._forward(output, block.causal_mask, attn_str ,block.attention.configs, attn_params, block.ff.configs, ff_params, epsilon, gamma1, gamma2, P, is_training, scales, recompute_activation=self.recompute_activation)
                 total_router_loss += router_loss
                 output = ff_out
                 all_masks.append(masks)
@@ -267,7 +263,7 @@ class Transformer:
         last_output = output.astype(self.dtype)
         rmsnorm_out, rms_cache = self.rmsnorm_final._forward(last_output, self.rmsnorm_final.gamma,self.rmsnorm_final.epsilon)
         if self.quantized:
-            scores = nx.quantized_matmul(rmsnorm_out, self.embedding.lookup_table, self.embedding.table_scale, self.embedding.bias, transpose=True, regular=self.symmetric_quant)
+            scores = nx.quantized_matmul(rmsnorm_out, self.embedding.lookup_table, self.embedding.table_scale, self.embedding.bias, transpose=True)
         else:
             scores = rmsnorm_out.astype(self.dtype) @ self.embedding.lookup_table.T # B,T,V
 
@@ -301,7 +297,7 @@ class Transformer:
 
             dx, dWout, dWcombined, d_router,dW_shared_combined, dW_shared_out, dWqkv,dWo, d_gamma1, d_gamma2, Q_norm_d_gamma, K_norm_d_gamma = block._backward(current_grad, mask1=mask1, mask2=mask2, p=P, attention=attn_str,
                                                                 caches_attn=caches_attn, caches_ff=caches_ff, caches_rmsnorm1=caches_rmsnorm1, caches_rmsnorm2=caches_rmsnorm2,
-                                                                attn_configs = attn_configs, attn_params=attn_params, gamma1=block.rmsnorm1.gamma, gamma2=block.rmsnorm2.gamma, ff_params=ff_params, moe_configs=moe_configs, gradient_scale=self.gradient_scale, quantization=scales, use_symmetric=self.symmetric_quant, recompute_activation=self.recompute_activation)
+                                                                attn_configs = attn_configs, attn_params=attn_params, gamma1=block.rmsnorm1.gamma, gamma2=block.rmsnorm2.gamma, ff_params=ff_params, moe_configs=moe_configs, gradient_scale=self.gradient_scale, quantization=scales, recompute_activation=self.recompute_activation)
 
             block.ff.dWout += dWout
             block.ff.dWcombined += dWcombined
@@ -496,7 +492,7 @@ class Transformer:
 
             lookup_table = self.embedding.lookup_table
             if self.quantized:
-                lookup_table = nx.dequantize(lookup_table, self.embedding.table_scale,biases=self.embedding.bias, dtype=self.dtype, regular=self.symmetric_quant)
+                lookup_table = nx.dequantize(lookup_table, self.embedding.table_scale,biases=self.embedding.bias, dtype=self.dtype)
 
             block_gradient =  batch_gradient @ lookup_table #dtype
 
@@ -565,12 +561,12 @@ class Transformer:
                     d_gamma2 = block.rmsnorm2.d_gamma.astype(nx.float32) / self.gradient_scale / microbatch_size* gscale
 
                     if self.quantized:
-                        Wqkv = nx.dequantize(block.attention.Wqkv, block.attention.scales[0], block.attention.biases[0], regular=self.symmetric_quant)
-                        Wo = nx.dequantize(block.attention.Wo, block.attention.scales[1], block.attention.biases[1], regular=self.symmetric_quant)
-                        Wcombined = nx.dequantize(block.ff.Wcombined, block.ff.scales[0], block.ff.biases[0], regular=self.symmetric_quant)
-                        Wout = nx.dequantize(block.ff.Wout, block.ff.scales[1], block.ff.biases[1], regular=self.symmetric_quant)
-                        W_shared_combined = nx.dequantize(block.ff.W_shared_combined, block.ff.scales[2], block.ff.biases[2], regular=self.symmetric_quant)
-                        W_shared_out  = nx.dequantize(block.ff.W_shared_out, block.ff.scales[3], block.ff.biases[3], regular=self.symmetric_quant)
+                        Wqkv = nx.dequantize(block.attention.Wqkv, block.attention.scales[0], block.attention.biases[0], )
+                        Wo = nx.dequantize(block.attention.Wo, block.attention.scales[1], block.attention.biases[1])
+                        Wcombined = nx.dequantize(block.ff.Wcombined, block.ff.scales[0], block.ff.biases[0])
+                        Wout = nx.dequantize(block.ff.Wout, block.ff.scales[1], block.ff.biases[1])
+                        W_shared_combined = nx.dequantize(block.ff.W_shared_combined, block.ff.scales[2], block.ff.biases[2])
+                        W_shared_out  = nx.dequantize(block.ff.W_shared_out, block.ff.scales[3], block.ff.biases[3])
                     else:
                         Wqkv = block.attention.Wqkv.astype(nx.float32)
                         Wo = block.attention.Wo.astype(nx.float32)
@@ -596,7 +592,7 @@ class Transformer:
                     block.zeroes_gradient()
 
                 if self.quantized:
-                    lookup_table = nx.dequantize(lookup_table, self.embedding.table_scale, self.embedding.bias, regular=self.symmetric_quant)
+                    lookup_table = nx.dequantize(lookup_table, self.embedding.table_scale, self.embedding.bias)
                 else:
                     lookup_table = self.embedding.lookup_table.astype(nx.float32)
                 all_network_params.extend([("embedding",lookup_table, self.embedding.d_lookup_table / microbatch_size * gscale, False)])
@@ -615,23 +611,23 @@ class Transformer:
                 for i,block in enumerate(self.blocks):
                     if self.quantized:
                         Wqkv = optimized[f"Wqkv_{i}"]
-                        block.attention.Wqkv, wqkv_scale, wqkv_bias = nx.quantize(Wqkv, regular=self.symmetric_quant)
+                        block.attention.Wqkv, wqkv_scale, wqkv_bias = nx.quantize(Wqkv)
                         Wo = optimized[f"Wo_{i}"]
-                        block.attention.Wo, wo_scale, wo_bias = nx.quantize(Wo, regular=self.symmetric_quant)
+                        block.attention.Wo, wo_scale, wo_bias = nx.quantize(Wo)
                         block.attention.scales = (wqkv_scale, wo_scale)
                         block.attention.biases = (wqkv_bias, wo_bias)
 
                         Wcombined = optimized[f"ff_wcombined_{i}"]
-                        block.ff.Wcombined, wcombined_scale, wcombined_bias = nx.quantize(Wcombined, regular=self.symmetric_quant)
+                        block.ff.Wcombined, wcombined_scale, wcombined_bias = nx.quantize(Wcombined)
 
                         Wout = optimized[f"ff_wout_{i}"]
-                        block.ff.Wout, wout_scale, wout_bias = nx.quantize(Wout, regular=self.symmetric_quant)
+                        block.ff.Wout, wout_scale, wout_bias = nx.quantize(Wout)
 
                         W_shared_combined = optimized[f"ff_W_shared_combined_{i}"]
-                        block.ff.W_shared_combined, W_shared_combined_scale, W_shared_combined_bias = nx.quantize(W_shared_combined, regular=self.symmetric_quant)
+                        block.ff.W_shared_combined, W_shared_combined_scale, W_shared_combined_bias = nx.quantize(W_shared_combined)
 
                         W_shared_out = optimized[f"ff_W_shared_out_{i}"]
-                        block.ff.W_shared_out, W_shared_out_scale, W_shared_out_bias = nx.quantize(W_shared_out, regular=self.symmetric_quant)
+                        block.ff.W_shared_out, W_shared_out_scale, W_shared_out_bias = nx.quantize(W_shared_out)
                         
                         block.ff.scales = (wcombined_scale, wout_scale, W_shared_combined_scale, W_shared_out_scale)
                         block.ff.biases = (wcombined_bias, wout_bias, W_shared_combined_bias, W_shared_out_bias)
@@ -653,7 +649,7 @@ class Transformer:
 
                 if self.quantized:
                     embedding = optimized[f"embedding"]
-                    self.embedding.lookup_table, self.embedding.table_scale, self.embedding.bias = nx.quantize(embedding, regular=self.symmetric_quant)
+                    self.embedding.lookup_table, self.embedding.table_scale, self.embedding.bias = nx.quantize(embedding)
                     del embedding
                 else:
                     self.embedding.lookup_table = optimized["embedding"].astype(self.dtype)
@@ -707,7 +703,7 @@ class Transformer:
         final_loss = total_loss / count
         return final_loss.item()
 
-    def inference(self, context:Any, max_cache_len, all_caches = None,  position = 0, *, use_symmetric) -> Any:
+    def inference(self, context:Any, max_cache_len, all_caches = None,  position = 0) -> Any:
         if all_caches is None:
             all_caches = []
             for idx, block in enumerate(self.blocks):
@@ -716,17 +712,16 @@ class Transformer:
                 kv_chace_shape = (context.shape[0], n_kv,max_cache_len, head_dim)
                 all_caches.append((nx.zeros(kv_chace_shape, dtype=self.dtype), nx.zeros(kv_chace_shape, dtype=self.dtype)))
 
-        as_symmetric = self.symmetric_quant or use_symmetric
         output = self.embedding.forward(context)
         for idx, block in enumerate(self.blocks):
             cached_k, cached_v = all_caches[idx]
-            ff_out, cache_k, cache_v = block.inference_forward(output,max_cache_len, cached_k, cached_v, position, use_symmetric=as_symmetric)
+            ff_out, cache_k, cache_v = block.inference_forward(output,max_cache_len, cached_k, cached_v, position)
             all_caches[idx] = (cache_k, cache_v)
             output = ff_out
 
         rmsfinal_out, _ = self.rmsnorm_final._forward(output, self.rmsnorm_final.gamma, self.rmsnorm_final.epsilon)
         if self.quantized:
-            scores = nx.quantized_matmul(rmsfinal_out, self.embedding.lookup_table, self.embedding.table_scale, self.embedding.bias, transpose=True, regular=as_symmetric) #type:ignore
+            scores = nx.quantized_matmul(rmsfinal_out, self.embedding.lookup_table, self.embedding.table_scale, self.embedding.bias, transpose=True) #type:ignore
         else:
             scores = rmsfinal_out @ self.embedding.lookup_table.T
 
@@ -738,7 +733,6 @@ class Transformer:
         configs["embed_dim"] = self.embed_dim
         configs["dtype"] = nx.dtype_to_srt[self.dtype]
         configs["quantized"] =  self.quantized
-        configs["symmetric_quant"] =  self.symmetric_quant
         configs["gradient_scale"] = self.gradient_scale
         configs["recompute_activation"] = self.recompute_activation
         return configs
@@ -746,7 +740,7 @@ class Transformer:
     def get_configs_str(self):
         configs = ""
         for k,v in self.get_configs().items():
-            if k not in ["dtype", "symmetric_quant"]:
+            if k not in ["dtype"]:
                 configs += f"{k}: {str(v)}\n"
 
         configs += "precision: full (float32)\n" if self.dtype == nx.float32 else f"precision: mixed precision ({self.dtype})\n"

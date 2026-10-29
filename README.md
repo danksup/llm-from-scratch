@@ -69,17 +69,19 @@ logs:
 - shared experts oct 16 2026
 - static kv caching oct 18 2026
 - moe jitter oct 27 2026
+- lr warmup oct 29 2026
   
 ## Ongoing:
 - optimizing/cleanup/docs
 
 ## TODO (not in order):
-- mmap tokenizer
+- support exporting and importing other model(like gguf or huggingfacemodel or llama or etc)
+- random sequence dataloader
 - parallelizing tokenizer word frequency counting
-- ReLoRa
-- conversation memory
+- ReLoRa and LoRa
   
 #### Maybe:
+- conversation memory
 - autograd
 
 ## Bugs:

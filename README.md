@@ -72,6 +72,7 @@ logs:
 - lr warmup oct 29 2026
   
 ## Ongoing:
+- moe cleanup
 - optimizing/cleanup/docs
 
 ## TODO (not in order):

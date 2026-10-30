@@ -2,3 +2,6 @@ mlx==0.31.2; sys_platform == "darwin" and platform_machine == "arm64"
 mlx_metal==0.31.2; sys_platform == "darwin" and platform_machine == "arm64"
 
 numpy==2.5.1; sys_platform != "darwin" or platform_machine != "arm64"
+
+pyarrow>=15.0.0
+safetensors>=0.4.0

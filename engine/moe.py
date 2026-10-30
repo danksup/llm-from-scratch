@@ -448,3 +448,16 @@ class MoE:
             moe_copy.biases = (nx.copy(self.biases[0]), nx.copy(self.biases[1]), nx.copy(self.biases[2]), nx.copy(self.biases[3]))
 
         return moe_copy
+
+    def quantize(self):
+        if self.quantized:
+            return
+        
+        self.quantized = True
+        self.Wcombined, scale_wcombined, bias_wcombined = nx.quantize(self.Wcombined)
+        self.Wout, scale_wout, bias_out = nx.quantize(self.Wout)
+        self.W_shared_combined, scale_wsharedcombined, bias_wsharedcombined = nx.quantize(self.W_shared_combined)
+        self.W_shared_out, scale_wsharedout, bias_wsharedout = nx.quantize(self.W_shared_out)
+
+        self.scales = (scale_wcombined, scale_wout, scale_wsharedcombined,scale_wsharedout)
+        self.biases = (bias_wcombined, bias_out, bias_wsharedcombined,bias_wsharedout)

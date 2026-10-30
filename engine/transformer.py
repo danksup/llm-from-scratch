@@ -773,31 +773,43 @@ class Transformer:
     def get_all_weights(self, flatten: Literal[True]) -> list[Any]: ...
 
     def get_all_weights(self, flatten:bool|Literal["dict"]=False) -> dict[int,dict[str,dict[str,nx.ArrayLike]]] | dict[str,nx.ArrayLike] | list[Any]:
-            layers = ["ff", "attention", "rmsnorm1", "rmsnorm2"]
-            weights = [["router", "Wcombined", "Wout","W_shared_combined", "W_shared_out"],[ "Wqkv", "Wo"],[ "gamma"],[ "gamma"]]
+        layers = ["ff", "attention", "rmsnorm1", "rmsnorm2"]
+        weights = [["router", "Wcombined", "Wout","W_shared_combined", "W_shared_out"],[ "Wqkv", "Wo"],[ "gamma"],[ "gamma"]]
 
-            if not flatten:
+        if not flatten:
+            all_weights = {}
+            for idx, block in enumerate(self.blocks):
+                all_weights[idx] = {}
+                for layer_i, layer in enumerate(layers):
+                    layer_ = getattr(block, layer)
+                    all_weights[idx][layer] = {}
+                    for weight in weights[layer_i]:
+                        weight_ = getattr(layer_, weight)
+                        all_weights[idx][layer][weight] = weight_
+        else:
+            if flatten == "dict":
                 all_weights = {}
-                for idx, block in enumerate(self.blocks):
-                    all_weights[idx] = {}
-                    for layer_i, layer in enumerate(layers):
-                        layer_ = getattr(block, layer)
-                        all_weights[idx][layer] = {}
-                        for weight in weights[layer_i]:
-                            weight_ = getattr(layer_, weight)
-                            all_weights[idx][layer][weight] = weight_
+                weights = self.get_weights(block_only=True)
+                for layer_obj, param_name, name in weights:
+                    weight = getattr(layer_obj, param_name)
+                    all_weights[name] = weight
             else:
-                if flatten == "dict":
-                    all_weights = {}
-                    weights = self.get_weights(block_only=True)
-                    for layer_obj, param_name, name in weights:
-                        weight = getattr(layer_obj, param_name)
-                        all_weights[name] = weight
-                else:
-                    a:dict[str,nx.ArrayLike] = self.get_all_weights("dict") #type:ignore
-                    return list(a.values())
+                a:dict[str,nx.ArrayLike] = self.get_all_weights("dict") #type:ignore
+                return list(a.values())
 
-            return all_weights
+        return all_weights
+
+    def quantize(self):
+        if self.quantized:
+            return
+        else:
+            self.quantized = True
+            self.configs["quantized"] = True
+
+            self.embedding.quantize()
+            for block in self.blocks:
+                block.quantize()
+
 
     def get_quant_params(self):
         quant_params = {}

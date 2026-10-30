@@ -75,12 +75,16 @@ logs:
 - optimizing/cleanup/docs
 
 ## TODO (not in order):
-- GaLoRA
+- doc boundary masking
+- multi token prediction
+- moe aux loss free loss balancing
+- fill in the middle transformer
 - support exporting and importing other model(like gguf or huggingfacemodel or llama or etc)
 - parallelizing tokenizer word frequency counting
   
 #### Maybe:
 - LoRA
+- GaLoRA
 - conversation memory
 - autograd
 

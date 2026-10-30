@@ -157,3 +157,7 @@ class TransformerBlock:
         block_copy = TransformerBlock(attn_copy, ff_copy, rms1_copy, rms2_copy)
         return block_copy
 
+    def quantize(self):
+        self.attention.quantize()
+        self.ff.quantize()
+

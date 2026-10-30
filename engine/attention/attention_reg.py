@@ -301,3 +301,14 @@ class AttentionFull:
             attn_copy.biases = (nx.copy(self.biases[0]), nx.copy(self.biases[1]))
 
         return attn_copy
+    
+    def quantize(self):
+        if self.quantized:
+            return
+
+        self.quantized = True
+        self.Wqkv, scale_wcombined, bias_wcombined = nx.quantize(self.Wqkv)
+        self.Wo, scale_wout, bias_out = nx.quantize(self.Wo)
+
+        self.scales = (scale_wcombined, scale_wout)
+        self.biases = (bias_wcombined, bias_out)

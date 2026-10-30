@@ -597,10 +597,6 @@ def quantize(w) -> tuple[Any,...]:
 
     scale = _nx.maximum(1e-9, (w_max - w_min) / q_max)
     bias = w_min
-    # scale = _nx.repeat(scale, QUANTIZATION_GROUP_SIZE, axis=-1)
-    # scale = scale.reshape(*scale.shape[:-1], scale.shape[-1]//QUANTIZATION_GROUP_SIZE, QUANTIZATION_GROUP_SIZE)
-    # bias = _nx.repeat(w_min, QUANTIZATION_GROUP_SIZE, axis=-1)
-    # bias = bias.reshape(*bias.shape[:-1], bias.shape[-1]//QUANTIZATION_GROUP_SIZE, QUANTIZATION_GROUP_SIZE)
 
     quantized = _nx.clip(_nx.round((w - bias[...,None])/scale[...,None]), q_min, q_max)
     quantized = quantized.astype(uint8).reshape(*w_shape)
@@ -666,9 +662,9 @@ def load(file:Path,/, return_metadata=True):
 def tril(a, k=0):
     return _nx.tril(a, k)
 
-def svd(a, compute_uv:bool=True):
-    if backend.lower() == "mlx":
-        return _nx.linalg.svd(a, compute_uv=compute_uv, stream=_nx.cpu)
-    return _nx.linalg.svd(a, compute_uv=compute_uv)
+# def svd(a, compute_uv:bool=True):
+#     if backend.lower() == "mlx":
+#         return _nx.linalg.svd(a, compute_uv=compute_uv, stream=_nx.cpu)
+#     return _nx.linalg.svd(a, compute_uv=compute_uv)
 
 set_seed(seed)

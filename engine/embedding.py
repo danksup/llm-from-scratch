@@ -61,3 +61,13 @@ class Embedding:
             embedding_copy.bias = nx.copy(self.bias)
 
         return embedding_copy
+
+    def quantize(self):
+        if self.quantized:
+            return
+
+        self.quantized = True
+        q, scale, bias = nx.quantize(self.lookup_table)
+        self.lookup_table = q
+        self.table_scale = scale
+        self.bias = bias

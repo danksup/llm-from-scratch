@@ -88,6 +88,13 @@ class DataLoader:
         for i in permutation:
             yield files[i]
 
+    @staticmethod
+    def file_permutation(token_len, token_chunk_size):
+        type_code = "I" if token_len <= 4_294_967_295 else "Q"
+        a = array.array(type_code,range(0, token_len, token_chunk_size))
+        random.shuffle(a)
+        return a
+
     def stream_tokens(self, file:Path, tokenizer_uuid:Any|None=None, carry_leftover:bool=True):
         if file.is_file() and file.suffix == ".tokenized":
             with open(file, 'rb') as f:
@@ -99,10 +106,15 @@ class DataLoader:
                 validate_match(file_tok_id, tokenizer_uuid, f"please use the tokenizer you used to tokenize this file (with id: {str(tokenizer_uuid)}), got with id: {file_str_tokId}")
                 tokens = memoryview(a)[29:].cast(self.type_code)
 
-                for i in range(0, len(tokens), self.context_size + 1):
-                    y_tokens = tokens[i:i+self.context_size+1]
+                tsize = self.context_size+1
+                for i in self.file_permutation(len(tokens),tsize):
+                    y_tokens = tokens[i:i+tsize]
                     if len(y_tokens) == self.context_size + 1:
                         yield y_tokens
+                # for i in range(0, len(tokens), self.context_size + 1):
+                #     y_tokens = tokens[i:i+self.context_size+1]
+                #     if len(y_tokens) == self.context_size + 1:
+                #         yield y_tokens
                     
     def stream_batches(self, path:str|Path|list[Path]|None=None):
         if path is not None:
@@ -123,7 +135,7 @@ class DataLoader:
 
         context_batches = array.array(self.type_code)
         target_batches = array.array(self.type_code)
-        for file in iter_:
+        for file in self.stream_files(list(iter_)):
             for tokens in self.stream_tokens(file, self.tokenizer.tokenizer_id):
                 context_batches.extend(tokens[0:len(tokens)-1])
                 target_batches.extend(tokens[1:len(tokens)])

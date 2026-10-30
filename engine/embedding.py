@@ -37,40 +37,6 @@ class Embedding:
             return qtized
         return embed
 
-    # def to_dict(self) -> dict[str, Any]:
-    #     lookup = {"n":self.n, "embed_dim":self.embed_dim, "lookuptable": self.lookup_table.tolist(), "quantized":self.quantized, "dtype":nx.dtype_to_srt[self.dtype]}
-    #     if self.quantized:
-    #         if as_symmetric:
-    #             lookup_table, table_scale, bias = nx.quantize(nx.dequantize(self.lookup_table, self.table_scale, self.bias, self.dtype))
-    #             lookup["table_scale"] = table_scale.tolist() #type:ignore
-    #             lookup["bias"] = bias.tolist() #type:ignore
-    #             lookup["lookuptable"] = lookup_table.tolist()
-    #         else:
-    #             lookup["table_scale"] = self.table_scale.tolist() #type:ignore
-    #             lookup["bias"] = self.bias.tolist() #type:ignore
-    #     else:
-    #         lookup["table_scale"] = self.table_scale
-    #         lookup["bias"] = self.bias
-    #     return lookup
-
-    # @classmethod
-    # def from_dict(cls, thing:dict[str, Any]) -> "Embedding":
-    #     is_quantized = thing["quantized"]
-    #     dtype = nx.str_to_dtype[thing["dtype"]]
-    #     lookup_table = thing["lookuptable"]
-    #     scale = thing["table_scale"]
-    #     bias = thing["bias"]
-    #     embedding = cls(thing["n"],thing["embed_dim"], dtype, is_quantized)
-
-    #     if is_quantized:
-    #         embedding.lookup_table = nx.array(lookup_table, dtype=nx.uint32)
-    #         embedding.table_scale = nx.array(scale, dtype=dtype)
-    #         embedding.bias = nx.array(bias, dtype=dtype)
-    #     else:
-    #         embedding.lookup_table =  nx.array(lookup_table, dtype=dtype)
-
-    #     return embedding
-
     def get_configs(self):
         return(self.n, self.embed_dim)
 

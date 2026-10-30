@@ -75,12 +75,12 @@ logs:
 - optimizing/cleanup/docs
 
 ## TODO (not in order):
+- GaLoRA
 - support exporting and importing other model(like gguf or huggingfacemodel or llama or etc)
-- random sequence dataloader
 - parallelizing tokenizer word frequency counting
-- ReLoRa and LoRa
   
 #### Maybe:
+- LoRA
 - conversation memory
 - autograd
 

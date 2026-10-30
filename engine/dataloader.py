@@ -111,11 +111,7 @@ class DataLoader:
                     y_tokens = tokens[i:i+tsize]
                     if len(y_tokens) == self.context_size + 1:
                         yield y_tokens
-                # for i in range(0, len(tokens), self.context_size + 1):
-                #     y_tokens = tokens[i:i+self.context_size+1]
-                #     if len(y_tokens) == self.context_size + 1:
-                #         yield y_tokens
-                    
+
     def stream_batches(self, path:str|Path|list[Path]|None=None):
         if path is not None:
             if isinstance(path, str):

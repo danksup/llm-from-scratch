@@ -666,4 +666,9 @@ def load(file:Path,/, return_metadata=True):
 def tril(a, k=0):
     return _nx.tril(a, k)
 
+def svd(a, compute_uv:bool=True):
+    if backend.lower() == "mlx":
+        return _nx.linalg.svd(a, compute_uv=compute_uv, stream=_nx.cpu)
+    return _nx.linalg.svd(a, compute_uv=compute_uv)
+
 set_seed(seed)

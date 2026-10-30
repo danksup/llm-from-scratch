@@ -41,6 +41,7 @@ DEFAULT_CONFIGS = {
     "create_checkpoint":False,
     "checkpoint_every":1000,
     "weights_only": True,
+    "logger":True
 }
 
 OPTIMIZERS = {
@@ -115,15 +116,16 @@ class Session:
         if self.session_id is None:
             self.session_id = str(uuid.uuid4())
 
-        self.logger = Logger(str(self.session_id), "logs")
+        if configs is None:
+            configs = {}
+
+        self.logger = Logger(str(self.session_id), "logs", not configs.get("logger", True))
 
         self.tokenizer = tokenizer
         self.transformer:Transformer = transformer(logger=self.logger)
 
         validate_match(transformer.vocab_size, len(tokenizer.vocab), f"between {transformer.vocab_size} in transformer and {len(tokenizer.vocab)} in tokenizer.")
-
-        if configs is None:
-            configs = {}
+        
         configs["session_id"] = self.session_id
         self.configs = DEFAULT_CONFIGS | configs
         config_optimizer = self.configs["optimizer"].lower()
@@ -190,10 +192,6 @@ class Session:
             configs_str["save"]= colorize("False", "red")
             configs_str["create_checkpoint"] = "disabled because save is false"
 
-        if nx.backend == "MLX":
-            if self.configs["backend"]["mlx_disable_compile"]:
-                configs_str["backend"]["mlx_disable_compile"] = colorize("True", "red")
-
         configs_str["using"] = nx.using_backend()
 
         for key,val in configs_str.items():
@@ -240,6 +238,8 @@ class Session:
             if self.configs["backend"]["mlx_disable_compile"]:
                 info += f"mlx_disable_compile: {colorize("True", "red")}\n"
 
+        if not self.configs["logger"]:
+            info += f"logger: {colorize("False", "red")}"
         return info
 
     @classmethod
@@ -288,11 +288,14 @@ class Session:
                     counts += count
                     final_loss += loss
                     total_steps = step_counter
+
                     if total_histograms is None:
                         total_histograms = histograms
                     else:
                         for n in range(self.transformer.configs["n_blocks"]):
-                            total_histograms[n] += histograms[n]
+                            if histograms[n] is not None:
+                                total_histograms[n] += histograms[n]
+
                     flag_to_check_if_validate_checkpoint_crash_with_regular_checkpoint = False
 
                     if ema is None:
@@ -339,7 +342,8 @@ class Session:
 
                 if total_histograms is not None:
                     for histo_idx in range(len(total_histograms)):
-                        total_histograms[histo_idx] /= total_steps * self.configs["microbatch_size"]
+                        if total_histograms[histo_idx] is not None:
+                            total_histograms[histo_idx] /= total_steps * self.configs["microbatch_size"]
                 end = time.perf_counter()
                 time_ = end-start
 
@@ -353,12 +357,15 @@ class Session:
                         val_loss = 'validation is skipped because something is wrong'
 
                 msg_res = f"epoch {epoch} | step_counter: {total_steps}:  | avg loss: {final_loss} | avg val: {val_loss} | lr: {self.optimizer.lr:.6f} | time: {time_}"
-                
+
                 if total_histograms:
                     for idx, histogram in enumerate(total_histograms):
-                        hmin = nx.min(histogram).item()
-                        hmax = nx.max(histogram).item()
-                        hist_res += f"block{idx}: ideal: {1/histogram.shape[0]} | spread: {hmax-hmin} | min: {hmin} | max: {hmax}\n"
+                        if histogram is not None:
+                            hmin = nx.min(histogram).item()
+                            hmax = nx.max(histogram).item()
+                            hist_res += f"block{idx}: ideal: {1/histogram.shape[0]} | spread: {hmax-hmin} | min: {hmin} | max: {hmax}\n"
+                        else:
+                            hist_res += f"block{idx}: Dense"
 
                 self.logger.info(msg_res, hist_res, print_msg=True)
 
@@ -426,7 +433,7 @@ class Session:
             self.logger.error(msg_res, hist_res, e)
 
     def save(self, filename:str="test123", *, save_tokenizer:bool=False):
-        weights = self.transformer.get_all_weights("dict") 
+        weights = self.transformer.get_all_weights() 
         quants = self.transformer.get_quant_params()
 
         if self.transformer.quantized:

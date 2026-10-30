@@ -58,6 +58,10 @@ uint16 = _nx.uint16
 uint8 = _nx.uint8
 bool_ = _nx.bool_
 
+
+inf16 = _nx.array(float('inf'), dtype=_nx.float16)
+inf32 = _nx.array(float('inf'), dtype=_nx.float32)
+
 unsigned_integer = _nx.unsignedinteger
 signed_integer = _nx.signedinteger
 integer = _nx.integer

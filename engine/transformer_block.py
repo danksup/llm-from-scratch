@@ -3,7 +3,7 @@ from typing import Any
 import engine.attention as attn
 import engine.backend as nx
 from engine.dropout import Dropout
-from engine.moe import MoE
+from engine.ffn import FFN
 from engine.rmsnorm import RMSNorm
 Attention = attn.AttentionFull | attn.AttentionChunked
 
@@ -13,7 +13,7 @@ ATTN_TYPE = {
 }
 
 class TransformerBlock:
-    def __init__(self ,attention:Attention, ff:MoE, rmsnorm1:RMSNorm, rmsnorm2:RMSNorm) -> None:
+    def __init__(self ,attention:Attention, ff:FFN, rmsnorm1:RMSNorm, rmsnorm2:RMSNorm) -> None:
         self.causal_mask = None
 
         self.attention = attention
@@ -38,24 +38,15 @@ class TransformerBlock:
 
     def count_param(self, dense=False, *, quantized=False) -> int:
         total = 0
-        ff_params = 0
         if quantized:
-            ff_params += self.ff.Wcombined.size * 4
-            ff_params += self.ff.Wout.size * 4
-            total += self.ff.W_shared_combined.size * 4
-            total += self.ff.W_shared_out.size * 4
             total += self.attention.Wqkv.size * 4
             total += self.attention.Wo.size * 4
         else:
-            ff_params += self.ff.Wcombined.size
-            ff_params += self.ff.Wout.size
-            total += self.ff.W_shared_combined.size
-            total += self.ff.W_shared_out.size
             total += self.attention.Wqkv.size
             total += self.attention.Wo.size
 
-        total += ff_params // self.ff.n_experts if dense else ff_params
-        total += self.ff.router.size
+        ff_param_sparse, ff_param_dense = self.ff.count_param()
+        total += ff_param_dense if dense else ff_param_sparse
         total += self.rmsnorm1.gamma.size
         total += self.rmsnorm2.gamma.size
         total += self.attention.Q_norm.gamma.size
@@ -77,7 +68,7 @@ class TransformerBlock:
         rmsnorm2_out, caches_rmsnorm2 = RMSNorm._forward(attn_out, gamma2,epsilon)
 
         rmsnorm2_out = rmsnorm2_out.astype(x.dtype)
-        ff_out, caches_ff, aux_loss, normalized_histogram = MoE.forward(rmsnorm2_out, ff_configs, ff_params, quantization[1], recompute_activation=recompute_activation, is_training=is_training) #type:ignore
+        ff_out, caches_ff, aux_loss, normalized_histogram = FFN.forward(rmsnorm2_out, ff_configs, ff_params, quantization[1], recompute_activation=recompute_activation, is_training=is_training) #type:ignore
         drop_ff_out, mask2 =  Dropout._forward(ff_out, p,is_training)
 
         ff_out = drop_ff_out + attn_out
@@ -91,7 +82,7 @@ class TransformerBlock:
     def _backward(gradient:Any, mask1:Any, mask2:Any, attention:str, p, caches_attn:tuple[Any,...], caches_ff:tuple[Any,...], caches_rmsnorm1:tuple[Any,...], caches_rmsnorm2:tuple[Any,...], attn_configs:tuple[Any,...], attn_params:tuple[Any,...], gamma1:Any, gamma2:Any, ff_params:tuple, moe_configs,gradient_scale, quantization:tuple[Any,...]|None=None, *, recompute_activation:bool=True) -> tuple[Any, Any, Any, Any, Any, Any, Any, Any,Any, Any, Any, Any]:
         d_ff_drop = Dropout._backward(gradient, mask2, p) #grad dtype
 
-        dx_ff, dWcombined, dWout, d_router, dW_shared_combined, dW_shared_out = MoE.backward(d_ff_drop, caches_ff, moe_configs, ff_params,gradient_scale, quantization[1], recompute_activation=recompute_activation) #out:fp32 #type:ignore
+        dx_ff, dWcombined, dWout, d_router, dW_dense_combined, dW_dense_out = FFN.backward(d_ff_drop, caches_ff, moe_configs, ff_params,gradient_scale, quantization[1], recompute_activation=recompute_activation) #out:fp32 #type:ignore
 
         d_rmsn2,d_gamma2 = RMSNorm._backward(dx_ff, caches_rmsnorm2 ,gamma2)
 
@@ -107,7 +98,7 @@ class TransformerBlock:
 
         dx = d_rmsn1 + d_attn_out
 
-        return dx, dWout, dWcombined, d_router,dW_shared_combined, dW_shared_out, dWqkv,dWo, d_gamma1, d_gamma2, Q_norm_d_gamma, K_norm_d_gamma
+        return dx, dWout, dWcombined, d_router,dW_dense_combined, dW_dense_out, dWqkv,dWo, d_gamma1, d_gamma2, Q_norm_d_gamma, K_norm_d_gamma
 
     #TODO:compiled, dtype consistency fix/check
     def inference_forward(self, x, max_cache_len, cached_k=None, cached_v=None,  position=0):
@@ -122,7 +113,7 @@ class TransformerBlock:
         rmsnorm2_out = rmsnorm2_out.astype(x.dtype)
 
         ff_quant_params = self.ff.scales + self.ff.biases
-        ff_out= MoE.inference_forward(rmsnorm2_out, self.ff.configs, (self.ff.Wcombined, self.ff.Wout, self.ff.router, self.ff.W_shared_combined, self.ff.W_shared_out ), ff_quant_params)
+        ff_out= FFN.inference_forward(rmsnorm2_out, self.ff.configs, (self.ff.Wcombined, self.ff.Wout, self.ff.router, self.ff.W_dense_combined, self.ff.W_dense_out ), ff_quant_params)
         ff_out = ff_out + attn_out
 
         return ff_out, cached_k, cached_v
@@ -142,7 +133,7 @@ class TransformerBlock:
     def from_weights(cls, attn_type, attn_configs, attn_weights, attn_quants, attn_QK_gamma, ff_configs, ff_weights,ff_quants, rmsnorm1_configs,gamma1, rmsnorm2_configs,gamma2, dtype):
         #def from_weight(cls, configs, weights, quants, attn_QK_gamma, dtype) -> "AttentionFull":
         attn = ATTN_TYPE[attn_type].from_weight(configs=attn_configs, weights=attn_weights, quants=attn_quants, attn_QK_gamma=attn_QK_gamma, dtype=dtype)
-        ff = MoE.from_weight(configs=ff_configs, weights=ff_weights, quants=ff_quants, dtype=dtype)
+        ff = FFN.from_weight(configs=ff_configs, weights=ff_weights, quants=ff_quants, dtype=dtype)
         rmsnorm1 = RMSNorm.from_weight(rmsnorm1_configs, gamma1)
         rmsnorm2 = RMSNorm.from_weight(rmsnorm2_configs, gamma2)
         block = TransformerBlock(attn, ff, rmsnorm1, rmsnorm2)

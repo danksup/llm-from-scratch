@@ -16,7 +16,7 @@ nx.set_seed(12345)
 
 EPOCHS = 1
 EMBED_DIM = 512
-CONTEXT_SIZE = 2048
+CONTEXT_SIZE = 4096
 BATCH_SIZE = 1
 BASE_WIDTH = 3 * EMBED_DIM
 N_HEADS = 8
@@ -25,7 +25,7 @@ N_EXPERTS = 8
 CF = 1.25
 VAL = 1
 TOP_K = 2
-MAX_STEP = 1000
+MAX_STEP = 50000
 
 CORPUS_PATH = "artifacts/dataloader/2025_26"
 TOKENIZER_PATH = "artifacts/tokenizer/tokenizer32768_1624612680len.tokenizer"
@@ -35,9 +35,9 @@ session_configs = {
     "epochs":EPOCHS,
     "max_step":MAX_STEP,
     "train_split": VAL,
-    "max_val_step":1000,
+    "max_val_step":100,
     "eval_every":1,
-    "validate_every":200,
+    "validate_every":10,
     "context_size": CONTEXT_SIZE,
     "batch_size": BATCH_SIZE,
     "microbatch_size":16,
@@ -49,7 +49,8 @@ session_configs = {
         "min_lr": 5e-5,
         "t_warmup": int(MAX_STEP * 0.015)
     },
-    "save":True,
+    "save":False,
+    "logger":False,
     "error_save":True,
     "create_checkpoint":True,
     "checkpoint_every":100,
@@ -75,8 +76,8 @@ model_configs = {
         "ff_topk":TOP_K,
         "ff_cf":CF,
         "ff_init":"glorot_uniform",
-        "ff_shared_hidden_width":BASE_WIDTH, 
-        "ff_n_shared_experts":2,
+        "ff_dense_hidden_width":BASE_WIDTH, 
+        "ff_n_dense":2,
         "ff_moe_lambda":1e-3,
         "ff_jitter_eps":0.02,
         "attn_type":"chunked",

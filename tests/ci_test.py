@@ -37,10 +37,11 @@ session_configs = {
         "min_lr": 1e-5,
     },
     "using":os.environ.get("BACKEND"),
-    "save":True,
+    "save":False,
     "create_checkpoint":True,
     "checkpoint_every":1000,
-    "weights_only": True
+    "weights_only": True,
+    "logger":True
 }
 
 model_configs = {
@@ -54,12 +55,12 @@ model_configs = {
     "recompute_activation":True,
     "block_configs":{
         "ff_hidden_width": 512,
-        "ff_n_experts":1,
+        "ff_n_experts":2,
         "ff_topk":1,
         "ff_cf":1.25,
         "ff_init":"glorot_uniform",
-        "ff_shared_hidden_width":512, 
-        "ff_n_shared_experts":2,
+        "ff_dense_hidden_width":512, 
+        "ff_n_dense":1,
         "ff_moe_lambda":1e-3,
         "ff_jitter_eps":0.02,
         "attn_type":"chunked",

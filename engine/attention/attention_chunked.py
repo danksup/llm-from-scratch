@@ -91,7 +91,7 @@ class AttentionChunked:
     @staticmethod
     def _forward(x:nx.ArrayLike, causal_mask:nx.ArrayLike, configs:tuple[Any,...], params:tuple[Any,...], quantization, *, recompute_activation=True):
         embed_dim, n_kv_heads, n_heads, n_rep, head_dim, chunk_size, freqs = configs
-        Wqkv, Wo, Q_norm_gamma, K_norm_gamma = params
+        Wqkv, Wo, Q_norm_gamma, K_norm_gamma, doc_id = params
 
         wqkv_scale, wo_scale, wqkv_bias, wo_bias = quantization
 
@@ -115,7 +115,6 @@ class AttentionChunked:
 
         Q = rope_forward(Q, freqs)
         K = rope_forward(K, freqs)
-
 
         remainder = (chunk_size - (T % chunk_size)) % chunk_size
         pad = [(0,0), (0,0), (0, remainder), (0,0)]
@@ -142,7 +141,19 @@ class AttentionChunked:
 
         V_chunked_repeat = nx.repeat(V_chunked, n_rep, axis=1)  #(B, n_heads, n_chunk, 2W, head_dim)
 
-        weights_softmax = AttentionChunked.compute_weights_softmax(causal_mask, head_dim, Q, K_chunked, n_rep)
+        if doc_id is not None:
+            doc_id = nx.pad(doc_id,[(0,0), (0,remainder)]) #B, T+remainder
+            doc_id = doc_id.reshape(B, n_chunk, chunk_size) #B, n_chunk, 1,chunk_size
+            doc_id_q = doc_id[:,:,:,None]
+            doc_pad = nx.zeros((B, 1, 1, chunk_size), doc_id.dtype)
+            doc_id = doc_id[:,:,None,:]
+            preprendix = nx.concatenate([doc_pad, doc_id[:,:-1,:, :]], axis=1) 
+            doc_id_k = nx.concatenate([preprendix, doc_id], axis=-1) #B, n_chunk, 1, 2c
+            doc_mask = doc_id_k == doc_id_q
+            combined_mask = causal_mask & (doc_mask[:,None,:,:])
+        else:
+            combined_mask = causal_mask
+        weights_softmax = AttentionChunked.compute_weights_softmax(combined_mask, head_dim, Q, K_chunked, n_rep)
         weights = weights_softmax.astype(x.dtype) #(B, n_heads, n_chunk, WQ, 2WK)
 
         output = weights @ V_chunked_repeat #(B, n_heads, n_chunk, chunk_size, Dh)
@@ -158,21 +169,22 @@ class AttentionChunked:
         if not recompute_activation:
             cache = (x, Q, K_chunked, V_chunked, Q_norm_caches,K_norm_caches, weights_softmax, output_unchunked)
         else:
-            cache = (x, Q, K_chunked, V_chunked, Q_norm_caches,K_norm_caches, output_unchunked, causal_mask)
+            cache = (x, Q, K_chunked, V_chunked, Q_norm_caches,K_norm_caches, output_unchunked, combined_mask)
 
         return output_projected, cache
 
     @staticmethod
     def _backward(gradient:nx.ArrayLike, caches:tuple[Any,...], attn_configs:tuple[Any,...], attn_params: tuple[Any,...], quantization, *, recompute_activation=True) :#-> tuple[nx.ArrayLike,...]:
         embed_dim, n_kv_heads, n_heads, n_rep, head_dim, chunk_size, freqs = attn_configs
+        Wqkv, Wo, Q_norm_gamma, K_norm_gamma = attn_params
 
         if not recompute_activation:
             x, Q, K_chunked, V_chunked, Q_norm_caches,K_norm_caches, weights_softmax, output_unchunked = caches
         else:
-            x, Q, K_chunked, V_chunked, Q_norm_caches,K_norm_caches, output_unchunked, causal_mask = caches
-            weights_softmax = AttentionChunked.compute_weights_softmax(causal_mask, head_dim, Q, K_chunked, n_rep)
+            x, Q, K_chunked, V_chunked, Q_norm_caches,K_norm_caches, output_unchunked, combined_mask = caches
 
-        Wqkv, Wo, Q_norm_gamma, K_norm_gamma = attn_params
+            weights_softmax = AttentionChunked.compute_weights_softmax(combined_mask, head_dim, Q, K_chunked, n_rep)
+
 
         wqkv_scale, wo_scale, wqkv_bias, wo_bias = quantization
 
@@ -316,10 +328,7 @@ class AttentionChunked:
         mask = nx.zeros(mask_shape, dtype)
         mask[1:,:,:chunk_size] = nx.ones((chunk_size, chunk_size), dtype)
         mask[..., chunk_size:] = nx.tril(nx.ones((chunk_size, chunk_size), dtype=dtype))
-        # row_idx = nx.ones((chunk_size,chunk_size))
-        # column_idx = nx.ones((chunk_size,chunk_size))
-        # trilled = nx.tril(column_idx)
-        # return nx.concatenate([row_idx, trilled], axis=1)
+        mask = mask > 0
         return mask
 
     @staticmethod

@@ -70,13 +70,13 @@ logs:
 - static kv caching oct 18 2026
 - moe jitter oct 27 2026
 - lr warmup oct 29 2026
+- doc boundary masking oct 31 2026
   
 ## Ongoing:
 - moe cleanup
 - optimizing/cleanup/docs
 
 ## TODO (not in order):
-- doc boundary masking
 - multi token prediction
 - moe aux loss free loss balancing
 - fill in the middle transformer

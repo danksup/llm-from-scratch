@@ -15,12 +15,12 @@ from engine.transformer import Transformer
 nx.set_seed(12345)
 
 EPOCHS = 1
-EMBED_DIM = 512
-CONTEXT_SIZE = 4096
+EMBED_DIM = 2048
+CONTEXT_SIZE = 8192
 BATCH_SIZE = 1
 BASE_WIDTH = 3 * EMBED_DIM
-N_HEADS = 8
-N_KV_HEADS = max(1, N_HEADS // 2)
+N_HEADS = 16
+N_KV_HEADS = max(1, N_HEADS // 4)
 N_EXPERTS = 8
 CF = 1.25
 VAL = 1
@@ -49,7 +49,7 @@ session_configs = {
         "min_lr": 5e-5,
         "t_warmup": int(MAX_STEP * 0.015)
     },
-    "save":False,
+    "save":True,
     "logger":False,
     "error_save":True,
     "create_checkpoint":True,
@@ -62,12 +62,13 @@ session_configs = {
 }
 
 model_configs = {
-    "n_blocks":12,
+    "n_blocks":32,
     "embed_dim":EMBED_DIM,
     "dtype": "float16",
     "gradient_scale":32768,
     "vocab_size": len(tokenizer1.vocab),
     "quantized":False,
+    "doc_id":True,
     "check_non_finite":True,
     "recompute_activation":True,
     "block_configs":{
@@ -77,11 +78,11 @@ model_configs = {
         "ff_cf":CF,
         "ff_init":"glorot_uniform",
         "ff_dense_hidden_width":BASE_WIDTH, 
-        "ff_n_dense":2,
+        "ff_n_dense":1,
         "ff_moe_lambda":1e-3,
         "ff_jitter_eps":0.02,
         "attn_type":"chunked",
-        "attn_chunk_size":CONTEXT_SIZE//8,
+        "attn_chunk_size":CONTEXT_SIZE//16,
         "attn_variant":"gqa",
         "attn_n_heads":N_HEADS,
         "attn_n_kv_heads":N_KV_HEADS,
@@ -93,14 +94,15 @@ model_configs = {
 
 if __name__ == "__main__":
     transformer = Transformer(model_configs)
+    print(transformer.count_params())
 
     session_configs["block_size"] = len(transformer.blocks)
 
-    dataloader = DataLoader(CORPUS_PATH, tokenizer1, session_configs["context_size"], session_configs["batch_size"], session_configs["train_split"])
+    # dataloader = DataLoader(CORPUS_PATH, tokenizer1, session_configs["context_size"], session_configs["batch_size"], session_configs["train_split"])
 
-    session1 = Session(transformer, tokenizer1, True, session_configs)
-    start = time.perf_counter()
+    session1 = Session(transformer, tokenizer1, True, session_configs).save("10B")
+    # start = time.perf_counter()
 
-    session1.train(dataloader, display_message=True)
-    end = time.perf_counter()
-    print(f"training finished. time: {end - start:.3f}s")
+    # session1.train(dataloader, display_message=True)
+    # end = time.perf_counter()
+    # print(f"training finished. time: {end - start:.3f}s")

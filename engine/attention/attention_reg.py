@@ -94,7 +94,7 @@ class AttentionFull:
         #Wqkv.T (D, D + 2 * n_kv_heads * H)
         #combined (B, T, D + 2 * n_kv_heads * H)
         embed_dim, n_kv_heads, n_heads, n_rep, head_dim, freqs = attn_configs
-        Wqkv, Wo, Q_norm_gamma, K_norm_gamma = attn_params
+        Wqkv, Wo, Q_norm_gamma, K_norm_gamma, doc_id = attn_params
 
         wqkv_scale, wo_scale, wqkv_bias, wo_bias = quantization
 
@@ -118,7 +118,12 @@ class AttentionFull:
         K = rope_forward(K, freqs)
 
         Q = Q.reshape(B,n_kv_heads, n_rep, T, head_dim)
-        weights = AttentionFull.compute_weights(causal_mask, head_dim, Q, K, x.dtype)
+
+        if doc_id is not None:
+            combined_mask = causal_mask | (doc_id[:,None,None,:] != doc_id[:,None,:,None])
+        else:
+            combined_mask = causal_mask
+        weights = AttentionFull.compute_weights(combined_mask[:,:,None,:,:], head_dim, Q, K, x.dtype)
 
         output = nx.einsum("bkrQK,bkKh->bkrQh",weights, V) #(B, n_kv_heads, n_rep, Tq, Dh)
 
@@ -133,7 +138,7 @@ class AttentionFull:
         if not recompute_activation:
             cache =  (x, Q, Q_norm_caches, K, K_norm_caches, V, weights, output_concat)
         else:
-            cache =  (x, Q, Q_norm_caches, K, K_norm_caches, V, output_concat, causal_mask)
+            cache =  (x, Q, Q_norm_caches, K, K_norm_caches, V, output_concat, combined_mask)
 
         return output_projected, cache
 
@@ -147,8 +152,9 @@ class AttentionFull:
         if not recompute_activation:
             x, Q,Q_norm_caches, K,K_norm_caches, V, weights, output_concat = caches
         else:
-            x, Q,Q_norm_caches, K,K_norm_caches, V, output_concat, causal_mask = caches
-            weights = AttentionFull.compute_weights(causal_mask,head_dim, Q, K, x.dtype)
+            x, Q,Q_norm_caches, K,K_norm_caches, V, output_concat, combined_mask = caches
+
+            weights = AttentionFull.compute_weights(combined_mask[:,:,None,:,:],head_dim, Q, K, x.dtype)
 
         B, T, _ = x.shape
 

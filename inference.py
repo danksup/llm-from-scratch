@@ -11,11 +11,11 @@ import random
 nx.set_seed(random.randrange(0,99999))
 
 tokenizer = Tokenizer.load("artifacts/tokenizer/tokenizer32768_1624612680len.tokenizer")
-session = Session.load("artifacts/sessions/session_checkpoint_latest_e6f5ac34-78f0-4e39-b11c-dfd7582c054e.safetensors", tokenizer)
+session = Session.load("artifacts/sessions/session_10B.safetensors", tokenizer)
 
 configs = {
     "seed":12345,
-    "n":1024,
+    "n":128,
     "top_k": 50,
     "temp":.7,
     "top_p":0.9,

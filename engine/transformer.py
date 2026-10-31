@@ -13,6 +13,7 @@ from engine.losses import cross_entropy, cross_entropy_gradient
 from engine.transformer_block import TransformerBlock
 from helper.logger import Logger
 from helper.validate_and_raise import validate_choice
+from helper.singleton import sleep
 import time
 
 optimizers = optim.Adam | optim.AdamW | optim.SGD
@@ -51,6 +52,7 @@ INITIALIZERS = {
 }
 
 class Transformer:
+    #TODO: bug when config isnt in dict
     def __init__(self, configs: dict[str, Any] | None = None, blocks:list|None=None, *, embedding:bool|Embedding=False, rmsfinal:bool|RMSNorm=False):
         self.blocks = []
         configs =  {} if configs is None else configs
@@ -69,6 +71,7 @@ class Transformer:
 
         self.quantized = configs.get("quantized", False)
         self.recompute_activation = configs.get("recompute_activation", True)
+        self.doc_id = configs.get("doc_id", True)
 
         self.check_non_finite = configs.get("check_non_finite", True)
         
@@ -207,7 +210,7 @@ class Transformer:
         total_dense += self.rmsnorm_final.gamma.size
         return total, total_dense
 
-    def forward(self, inputs:Any, return_cache= True, is_training=True) -> Any:
+    def forward(self, inputs:Any, doc_id:Any=None,*, return_cache= True, is_training=True) -> Any:
         '''
         inputs = list of inputs
         '''
@@ -243,7 +246,7 @@ class Transformer:
                     if block.causal_mask is None or block.causal_mask.shape != (T, W + 1):
                         block.causal_mask = block.attention.compute_mask(T)
 
-                attn_params = block.attention.Wqkv, block.attention.Wo, block.attention.Q_norm.gamma, block.attention.K_norm.gamma
+                attn_params = block.attention.Wqkv, block.attention.Wo, block.attention.Q_norm.gamma, block.attention.K_norm.gamma, doc_id
                 ff_params = block.ff.Wcombined, block.ff.Wout, block.ff.router, block.ff.W_dense_combined, block.ff.W_dense_out
                 scales = (block.attention.scales + block.attention.biases, block.ff.scales + block.ff.biases)
                 ff_out ,masks, caches, router_loss, normalized_histogram = block._forward(output, block.causal_mask, attn_str ,block.attention.configs, attn_params, block.ff.configs, ff_params, epsilon, gamma1, gamma2, P, is_training, scales, recompute_activation=self.recompute_activation)
@@ -273,7 +276,7 @@ class Transformer:
             return scores, rmsnorm_out, all_masks, all_caches, total_router_loss, histograms
         return scores, total_router_loss
 
-    def backward(self, err_signal:Any,  all_masks, all_caches:list) -> Any:
+    def backward(self, err_signal:Any,  all_masks, all_caches:list, doc_id) -> Any:
         '''
         Args:
             traces error contribution and then optimize
@@ -468,13 +471,16 @@ class Transformer:
 
         for contexts, next_tokens in dataloader.stream_batches(dataloader.train_files):
             contexts = nx.array(contexts).reshape(dataloader.batch_size, dataloader.context_size)
+
+            doc_id = nx.cumsum(contexts == 2, axis=-1) if self.doc_id else None #B,T
+
             next_tokens = nx.array(next_tokens).reshape(dataloader.batch_size, dataloader.context_size)
 
             if step >= max_step:
                 break
 
             embedded = self.embedding.forward(contexts)  # shape (batch, context_size, embed_dim)
-            batch_scores, last_output, all_masks, all_caches, total_aux_loss, histograms = self.forward(embedded)
+            batch_scores, last_output, all_masks, all_caches, total_aux_loss, histograms = self.forward(embedded, doc_id)
 
             if total_histograms is None:
                 total_histograms = histograms
@@ -488,22 +494,25 @@ class Transformer:
 
             batch_gradient = cross_entropy_gradient(batch_scores, next_tokens)
             scale_factor = nx.array(self.gradient_scale / (batch_gradient.shape[0] * batch_gradient.shape[1]), nx.float16)
-            # batch_gradient /= (batch_gradient.shape[0] * batch_gradient.shape[1])
-            # scaled_batch_gradient = batch_gradient * self.gradient_scale
+   
             scaled_batch_gradient = batch_gradient * scale_factor
 
             batch_gradient = scaled_batch_gradient.astype(self.dtype)
 
             lookup_table = self.embedding.lookup_table
-            if self.quantized:
-                lookup_table = nx.dequantize(lookup_table, self.embedding.table_scale,biases=self.embedding.bias, dtype=self.dtype)
-
+            lookup_table = nx.dequantize(lookup_table, self.embedding.table_scale,biases=self.embedding.bias, dtype=self.dtype)
             block_gradient =  batch_gradient @ lookup_table #dtype
+
+            # if self.quantized:
+            #     lookup_table = nx.dequantize(lookup_table, self.embedding.table_scale,biases=self.embedding.bias, dtype=self.dtype)
+            #     block_gradient = nx.quantized_matmul(batch_gradient, lookup_table,self.embedding.table_scale,biases=self.embedding.bias)
+            # else:
+            #     block_gradient =  batch_gradient @ lookup_table #dtype
 
             d_table = batch_gradient.reshape(-1, self.vocab_size).T @ last_output.reshape(-1, self.embed_dim)
             d_table = d_table.astype(nx.float32) / self.gradient_scale
 
-            current_grad = self.backward(block_gradient, all_masks, all_caches)
+            current_grad = self.backward(block_gradient, all_masks, all_caches, doc_id)
             current_grad = current_grad.astype(nx.float32) / self.gradient_scale
 
             embedding_gradient = nx.zeros_like(lookup_table, dtype=nx.float32)
@@ -714,7 +723,10 @@ class Transformer:
             next_tokens = nx.array(next_tokens).reshape(dataloader.batch_size, dataloader.context_size)
 
             embedded = self.embedding.forward(contexts)
-            batch_validation_scores, total_router_loss = self.forward(embedded, False, False)
+
+            doc_id = nx.cumsum(contexts == 2, axis=-1) if self.doc_id else None #B,T
+
+            batch_validation_scores, total_router_loss = self.forward(embedded,doc_id=doc_id, return_cache=False, is_training=False)
 
             val_loss = cross_entropy(batch_validation_scores, next_tokens)
             val_loss = nx.mean(val_loss)  + total_router_loss

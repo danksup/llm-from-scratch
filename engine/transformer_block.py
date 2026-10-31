@@ -113,7 +113,7 @@ class TransformerBlock:
         rmsnorm2_out = rmsnorm2_out.astype(x.dtype)
 
         ff_quant_params = self.ff.scales + self.ff.biases
-        ff_out= FFN.inference_forward(rmsnorm2_out, self.ff.configs, (self.ff.Wcombined, self.ff.Wout, self.ff.router, self.ff.W_dense_combined, self.ff.W_dense_out ), ff_quant_params)
+        ff_out= FFN.inference_forward(rmsnorm2_out, self.ff.configs, (self.ff.Wcombined, self.ff.Wout, self.ff.router, self.ff.W_dense_combined, self.ff.W_dense_out, self.ff.router_bias ), ff_quant_params)
         ff_out = ff_out + attn_out
 
         return ff_out, cached_k, cached_v

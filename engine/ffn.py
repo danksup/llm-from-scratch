@@ -9,7 +9,7 @@ from helper.singleton import sleep
 C = nx.array(1e-4)
 
 class FFN:
-    def __init__(self, capacity_factor, top_k, n_experts, embed_dim, hidden_width, dense_hidden_width, n_dense=2,jitter_eps=0.02,LAMBDA =1e-2, dtype:Any=nx.float16, initializer:Callable=initializer.glorot_uniform, quantized:bool|str=False, *, init=True) -> None:
+    def __init__(self, capacity_factor, top_k, n_experts, embed_dim, hidden_width, dense_hidden_width, n_dense=2,jitter_eps=0.02,gamma=1e-3, dtype:Any=nx.float16, initializer:Callable=initializer.glorot_uniform, quantized:bool|str=False, *, init=True) -> None:
         self.hidden_width = hidden_width
         self.embed_dim = embed_dim #D
         self.n_experts = n_experts #E
@@ -19,9 +19,9 @@ class FFN:
         self.n_dense = n_dense
         self.dense_hidden_width = dense_hidden_width
         self.jitter_eps = jitter_eps
-        self.LAMBDA = LAMBDA
+        self.bias_gamma = gamma
 
-        self.configs = (hidden_width, embed_dim, n_experts, capacity_factor, top_k,dense_hidden_width, n_dense,jitter_eps, LAMBDA)
+        self.configs = (hidden_width, embed_dim, n_experts, capacity_factor, top_k,dense_hidden_width, n_dense,jitter_eps)
         self.quantized = quantized
 
         self.scales = (None, None, None, None)
@@ -35,6 +35,7 @@ class FFN:
         
         if init:
             if self.n_experts > 0:
+                self.router_bias = nx.zeros(n_experts, dtype=nx.float32)
                 self.router = initializer(router_shape, dtype= nx.float32)
                 self.Wcombined = initializer(wcombined_shape, dtype=dtype)
                 self.Wout = initializer(wout_shape, dtype = dtype)
@@ -42,6 +43,7 @@ class FFN:
                 self.router = None
                 self.Wcombined = None
                 self.Wout = None
+                self.router_bias = None
 
             if n_dense > 0:
                 self.W_dense_combined = initializer(dense_combined_shape, dtype=dtype)
@@ -92,28 +94,27 @@ class FFN:
     def count_param(self):
         total = 0
         total_dense = 0
-        total_param = 0
 
         if self.n_experts > 0:
-            total += 0 if not hasattr(self.router, "size") else getattr(self.router, "size")
+            router_size = 0 if not hasattr(self.router, "size") else getattr(self.router, "size")
+            router_bias_size = 0 if not hasattr(self.router_bias, "size") else getattr(self.router_bias, "size")
+            total += router_size + router_bias_size
 
             wcombined_size = 0 if not hasattr(self.Wcombined, "size") else getattr(self.Wcombined, "size")
-            total  += wcombined_size
-            total_dense += wcombined_size // self.n_experts
+            wout_size = 0 if not hasattr(self.Wout, "size") else getattr(self.Wout, "size")
+            routed_param = (wcombined_size + wout_size) * 4 if self.quantized else (wcombined_size + wout_size)
 
-            wout_size = 0 if not hasattr(self.Wout, "size") else getattr(self.Wout, "size") 
-            total  += wout_size
-            total_dense += wout_size // self.n_experts
+            k = min(self.top_k, self.n_experts)
+            total += routed_param
+            total_dense += routed_param * k // self.n_experts
 
         if self.n_dense > 0:
-            total_param += 0 if not hasattr(self.W_dense_combined, "size") else getattr(self.W_dense_combined, "size") 
-            total_param += 0 if not hasattr(self.W_dense_out, "size") else getattr(self.W_dense_out, "size")
+            dense_combined_size = 0 if not hasattr(self.W_dense_combined, "size") else getattr(self.W_dense_combined, "size")
+            dense_out_size = 0 if not hasattr(self.W_dense_out, "size") else getattr(self.W_dense_out, "size")
+            dense_param = (dense_combined_size + dense_out_size) * 4 if self.quantized else (dense_combined_size + dense_out_size)
 
-        if self.quantized:
-            total_param *= 4
-
-        total += total_param
-        total_dense += total_param
+            total += dense_param
+            total_dense += dense_param
 
         return total, total_dense
 
@@ -144,14 +145,18 @@ class FFN:
         s = swish(gate_half, dtype)
         return s * value_half #(E, capacity, H) 
 
+    def update_bias(self, n_routed_tokens, gamma:float=1e-3):
+        ideal = 1 / self.n_experts
+        self.router_bias = self.router_bias + self.bias_gamma * (ideal - n_routed_tokens)
+
     @staticmethod
     def forward(x:nx.ArrayLike, ff_configs, ff_params, quantization:tuple[Any,...]|None=None, *, recompute_activation:bool=True, is_training=True):
         #routing
         # print("moe forward x", x.dtype)
         B, T, D = x.shape
         N = B * T
-        _, _, n_experts, capacity_factor, top_k, _, n_dense,jitter_eps, LAMBDA = ff_configs
-        Wcombined, Wout, router, W_dense_combined, W_dense_out  = ff_params
+        _, _, n_experts, capacity_factor, top_k, _, n_dense,jitter_eps = ff_configs
+        Wcombined, Wout, router, W_dense_combined, W_dense_out,router_bias  = ff_params
 
         wcombined_scale, wout_scale, dense_combined_scale, dense_out_scale, wcombined_bias, wout_bias, dense_combined_bias,  dense_out_bias = quantization  #type:ignore
         flatten_x = x.reshape(-1, D)
@@ -163,11 +168,12 @@ class FFN:
 
             capacity = math.ceil(capacity_factor * N * top_k / n_experts)
                 
-            scores =  flatten_x.astype(nx.float32) @ router #(N, E)
+            scores =  flatten_x.astype(nx.float32) @ router#(N, E)
+
             if is_training and jitter_eps > 0:
                 scores += nx.uniform(-jitter_eps, jitter_eps,size=scores.shape, dtype=nx.float32)
             z_loss = C * nx.mean(nx.square(nx.logsumexp(scores, -1)))
-            router_prob = nx.softmax(scores, -1) #(N, E)
+            router_prob = nx.softmax(scores + router_bias, -1) #(N, E)
 
             #top-k
             top_expert_indices = nx.topk(router_prob, top_k) #(N, K)
@@ -182,9 +188,7 @@ class FFN:
 
             histogram = nx.zeros(n_experts, dtype=nx.int32)
             histogram = nx.add_at(histogram, flatten_top_expert_indices, 1)
-            avg_prob = nx.mean(router_prob, axis=0) #P
             normalized_histogram = histogram / ( N * top_k) #f
-            router_loss = n_experts * nx.sum(normalized_histogram * avg_prob) * LAMBDA #L, fp32
 
             #dispatch
             M = N * top_k
@@ -221,8 +225,6 @@ class FFN:
 
             final_output += moe_output
 
-            total_aux_loss = router_loss + z_loss
-
             if not recompute_activation:
                 moe_cache = (router_prob, top_expert_indices, top_gates32, flatten_top_expert_indices, assignement_tokens, valid, safe_slot, expert_input, expert_gate, projected, hidden, raw_output, normalized_histogram, scores)
             else:
@@ -230,7 +232,7 @@ class FFN:
 
         else:
             moe_output = nx.zeros((B,T,D), dtype=x.dtype)
-            total_aux_loss = nx.zeros((), dtype=nx.float32)
+            z_loss = nx.zeros((), dtype=nx.float32)
             normalized_histogram = None
             moe_cache = (None, None, None, None, None, None, None, None, None, None, None, None, None, None)
 
@@ -256,7 +258,7 @@ class FFN:
             dense_cache = (None, None)
 
         cache = (flatten_x,) + moe_cache + dense_cache
-        return final_output, cache, total_aux_loss, normalized_histogram
+        return final_output, cache, z_loss, normalized_histogram
 
     @staticmethod
     def backward(gradient , caches, moe_configs, ff_params, gradient_scale, quantization:tuple[Any,...]|None=None, *, recompute_activation:bool=True):
@@ -265,42 +267,42 @@ class FFN:
 
         flatten_gradient = gradient.reshape(-1, D)
         
-        wcombined_scale, wout_scale,shared_expert_scale,shared_expert_out_scale, wcombined_bias, wout_bias, shared_expert_bias,  shared_expert_out_bias = quantization  #type:ignore
+        wcombined_scale, wout_scale,dense_expert_scale,dense_expert_out_scale, wcombined_bias, wout_bias, dense_expert_bias,  dense_expert_out_bias = quantization  #type:ignore
 
-        router, Wout, Wcombined, W_shared_combined, W_shared_out = ff_params
+        router, Wout, Wcombined, W_dense_combined, W_dense_out = ff_params
 
-        hidden_width, D, n_experts, capacity_factor, top_k,shared_hidden_width, n_shared_experts, _, LAMBDA = moe_configs
+        hidden_width, D, n_experts, capacity_factor, top_k,dense_hidden_width, n_dense, _ = moe_configs
 
-        flatten_x, router_prob, top_expert_indices, top_gates32, flatten_top_expert_indices, assignement_tokens, valid, safe_slot, expert_input, expert_gate, projected, hidden, raw_output, normalized_histogram, scores, shared_projected, shared_hidden = caches
+        flatten_x, router_prob, top_expert_indices, top_gates32, flatten_top_expert_indices, assignement_tokens, valid, safe_slot, expert_input, expert_gate, projected, hidden, raw_output, normalized_histogram, scores, dense_projected, dense_hidden = caches
 
         dx_flat = nx.zeros((N,D), dtype=gradient.dtype)
 
-        if n_shared_experts > 0:
+        if n_dense > 0:
             if recompute_activation:
-                shared_projected = FFN.compute_projected(flatten_x, W_shared_combined, (shared_expert_scale,shared_expert_bias)) #(N,2H)
-                shared_hidden = FFN.compute_hidden(shared_projected, gradient.dtype) #N, H
+                dense_projected = FFN.compute_projected(flatten_x, W_dense_combined, (dense_expert_scale,dense_expert_bias)) #(N,2H)
+                dense_hidden = FFN.compute_hidden(dense_projected, gradient.dtype) #N, H
 
-            dW_shared_out = shared_hidden.T @ flatten_gradient #H, D
-            if shared_expert_out_scale is not None:
-                    d_shared_hidden = nx.quantized_matmul(flatten_gradient, W_shared_out, shared_expert_out_scale, shared_expert_out_bias, True)
+            dW_dense_out = dense_hidden.T @ flatten_gradient #H, D
+            if dense_expert_out_scale is not None:
+                    d_dense_hidden = nx.quantized_matmul(flatten_gradient, W_dense_out, dense_expert_out_scale, dense_expert_out_bias, True)
             else:
-                d_shared_hidden = flatten_gradient @ W_shared_out.T #N,H
+                d_dense_hidden = flatten_gradient @ W_dense_out.T #N,H
             
-            shared_gate_half = shared_projected[..., :shared_hidden_width * n_shared_experts] #N,H
-            shared_value_half = shared_projected[..., shared_hidden_width* n_shared_experts:]
+            dense_gate_half = dense_projected[..., :dense_hidden_width * n_dense] #N,H
+            dense_value_half = dense_projected[..., dense_hidden_width* n_dense:]
 
-            d_shared_gate_half = d_shared_hidden * shared_value_half * swish_derivative(shared_gate_half, dtype=shared_gate_half.dtype)
-            d_shared_value_half = d_shared_hidden * swish(shared_gate_half, dtype=shared_value_half.dtype)
-            d_shared_projected = nx.concatenate([d_shared_gate_half, d_shared_value_half], axis=-1) #N,2H
+            d_dense_gate_half = d_dense_hidden * dense_value_half * swish_derivative(dense_gate_half, dtype=dense_gate_half.dtype)
+            d_dense_value_half = d_dense_hidden * swish(dense_gate_half, dtype=dense_value_half.dtype)
+            d_dense_projected = nx.concatenate([d_dense_gate_half, d_dense_value_half], axis=-1) #N,2H
 
-            dW_shared_combined = flatten_x.T @ d_shared_projected #D, 2H
-            if shared_expert_scale is not None:
-                d_x_shared = nx.quantized_matmul(d_shared_projected, W_shared_combined, shared_expert_scale, shared_expert_bias, transpose=True)
+            dW_dense_combined = flatten_x.T @ d_dense_projected #D, 2H
+            if dense_expert_scale is not None:
+                d_x_dense = nx.quantized_matmul(d_dense_projected, W_dense_combined, dense_expert_scale, dense_expert_bias, transpose=True)
             else:
-                d_x_shared = d_shared_projected @ W_shared_combined.T #N,D
+                d_x_dense = d_dense_projected @ W_dense_combined.T #N,D
 
-            dx_flat += d_x_shared
-            ret_dense = (dW_shared_combined, dW_shared_out)
+            dx_flat += d_x_dense
+            ret_dense = (dW_dense_combined, dW_dense_out)
         else:
             ret_dense = (None, None)
 
@@ -371,9 +373,6 @@ class FFN:
 
             del coupling, gate_sum, token_rows, selected_prob, top_gates32, d_chosen_gate,d_selected_prob, assignement_tokens, flatten_top_expert_indices
 
-            d_avg_prob = n_experts * normalized_histogram
-            d_router_prob += LAMBDA * (d_avg_prob / N)
-
             d_scores = softmax_derivative(router_prob, d_router_prob) #(N,E)
             d_z_loss = ((2 * C) / N) * nx.logsumexp(scores, -1, keepdims=True) * router_prob
             d_scores += d_z_loss * gradient_scale
@@ -382,7 +381,7 @@ class FFN:
             d_router = flatten_x.astype(nx.float32).T @ d_scores #(D,E) #fp32
             d_x_router = d_scores @ router.T #(N, D)
 
-            del normalized_histogram, d_avg_prob,flatten_x, d_scores, router
+            del normalized_histogram,flatten_x, d_scores, router
 
             d_x_expert = d_x_expert.reshape(N, top_k, D)
             d_x_expert = nx.sum(d_x_expert, axis=1, dtype=nx.float32) #(N,D)
@@ -404,11 +403,11 @@ class FFN:
         B, T, D = x.shape
         N = B * T
 
-        _, _, n_experts, capacity_factor, top_k, _, n_dense, _, _ = ff_configs
+        _, _, n_experts, capacity_factor, top_k, _, n_dense, _ = ff_configs
 
-        Wcombined, Wout, router, W_shared_combined, W_shared_out  = ff_params
+        Wcombined, Wout, router, W_dense_combined, W_dense_out, router_bias  = ff_params
 
-        wcombined_scale, wout_scale,shared_expert_scale,shared_expert_out_scale, wcombined_bias, wout_bias, shared_expert_bias,  shared_expert_out_bias = quantization  #type:ignore
+        wcombined_scale, wout_scale,dense_expert_scale,dense_expert_out_scale, wcombined_bias, wout_bias, dense_expert_bias,  dense_expert_out_bias = quantization  #type:ignore
 
         flatten_x = x.reshape(-1, D)
         final_output = nx.zeros((B,T,D), dtype=x.dtype )
@@ -417,7 +416,7 @@ class FFN:
 
             top_k = min(top_k, n_experts)
 
-            scores =  flatten_x.astype(nx.float32) @ router #(N, E)
+            scores =  flatten_x.astype(nx.float32) @ router + router_bias #(N, E)
             router_prob = nx.softmax(scores, -1) #(N, E)
 
             #top-k
@@ -488,28 +487,29 @@ class FFN:
 
             final_output += moe_output
         if n_dense > 0:
-            shared_projected = FFN.compute_projected(flatten_x, W_shared_combined, (shared_expert_scale,shared_expert_bias)) #(N, ns * 2Hs)
+            dense_projected = FFN.compute_projected(flatten_x, W_dense_combined, (dense_expert_scale,dense_expert_bias)) #(N, ns * 2Hs)
 
-            shared_hidden = FFN.compute_hidden(shared_projected, x.dtype) #N, ns * H
+            dense_hidden = FFN.compute_hidden(dense_projected, x.dtype) #N, ns * H
 
-            if shared_expert_out_scale is not None:
-                raw_shared_output = nx.quantized_matmul(shared_hidden,W_shared_out, scales=shared_expert_out_scale, biases=shared_expert_out_bias)
+            if dense_expert_out_scale is not None:
+                raw_dense_output = nx.quantized_matmul(dense_hidden,W_dense_out, scales=dense_expert_out_scale, biases=dense_expert_out_bias)
             else:
-                raw_shared_output = shared_hidden @ W_shared_out #N, D
+                raw_dense_output = dense_hidden @ W_dense_out #N, D
 
-            shared_output = raw_shared_output.reshape(B,T,D)
+            dense_output = raw_dense_output.reshape(B,T,D)
 
-            final_output += shared_output.astype(x.dtype)
+            final_output += dense_output.astype(x.dtype)
 
         return final_output
 
     @classmethod
     def from_weight(cls, configs, weights, quants, dtype) -> "FFN":
-        hidden_width, embed_dim, n_experts, capacity_factor, top_k, shared_hidden_width, n_shared_experts, jitter_eps, LAMBDA = configs
-        router, wcombined, wout,W_dense_combined,W_dense_out = weights
+        hidden_width, embed_dim, n_experts, capacity_factor, top_k, dense_hidden_width, n_dense_experts, jitter_eps = configs
+        router,router_bias, wcombined, wout,W_dense_combined,W_dense_out = weights
 
-        moe = cls(capacity_factor, top_k, n_experts, embed_dim, hidden_width, shared_hidden_width, n_shared_experts,jitter_eps,LAMBDA, dtype, init=False)
+        moe = cls(capacity_factor, top_k, n_experts, embed_dim, hidden_width, dense_hidden_width, n_dense_experts,jitter_eps, dtype, init=False)
         moe.router = router
+        moe.router_bias = router_bias
         moe.Wcombined = wcombined
         moe.Wout = wout
         moe.W_dense_combined = W_dense_combined
@@ -523,10 +523,11 @@ class FFN:
         return moe
 
     def copy(self):
-        moe_copy = FFN(self.cf, self.top_k, self.n_experts, self.embed_dim, self.hidden_width, self.dense_hidden_width, self.n_dense, self.jitter_eps,self.LAMBDA, dtype=self.dtype, quantized=self.quantized, init=False)
+        moe_copy = FFN(self.cf, self.top_k, self.n_experts, self.embed_dim, self.hidden_width, self.dense_hidden_width, self.n_dense, self.jitter_eps,self.bias_gamma, dtype=self.dtype, quantized=self.quantized, init=False)
 
         if self.n_experts > 0:
             moe_copy.router = nx.copy(self.router)
+            moe_copy.router_bias = nx.copy(self.router_bias)
             moe_copy.Wcombined = nx.copy(self.Wcombined)
             moe_copy.Wout = nx.copy(self.Wout)
             if self.quantized:
@@ -556,8 +557,8 @@ class FFN:
             self.biases = (bias_wcombined, bias_out, self.biases[2], self.biases[3])
 
         if self.n_dense > 0:
-            self.W_dense_combined, scale_wsharedcombined, bias_wsharedcombined = nx.quantize(self.W_dense_combined)
-            self.W_dense_out, scale_wsharedout, bias_wsharedout = nx.quantize(self.W_dense_out)
+            self.W_dense_combined, scale_wdensecombined, bias_wdensecombined = nx.quantize(self.W_dense_combined)
+            self.W_dense_out, scale_wdenseout, bias_wdenseout = nx.quantize(self.W_dense_out)
 
-            self.scales = (self.scales[0], self.scales[1], scale_wsharedcombined, scale_wsharedout)
-            self.biases = (self.biases[0], self.biases[1], bias_wsharedcombined, bias_wsharedout)
+            self.scales = (self.scales[0], self.scales[1], scale_wdensecombined, scale_wdenseout)
+            self.biases = (self.biases[0], self.biases[1], bias_wdensecombined, bias_wdenseout)

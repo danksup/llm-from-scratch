@@ -71,6 +71,7 @@ logs:
 - moe jitter oct 27 2026
 - lr warmup oct 29 2026
 - doc boundary masking oct 31 2026
+- moe aux loss free balancing nov 1 2026
   
 ## Ongoing:
 - moe cleanup
@@ -78,7 +79,6 @@ logs:
 
 ## TODO (not in order):
 - multi token prediction
-- moe aux loss free loss balancing
 - fill in the middle transformer
 - support exporting and importing other model(like gguf or huggingfacemodel or llama or etc)
 - parallelizing tokenizer word frequency counting

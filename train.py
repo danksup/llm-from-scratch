@@ -79,8 +79,8 @@ model_configs = {
         "ff_init":"glorot_uniform",
         "ff_dense_hidden_width":BASE_WIDTH, 
         "ff_n_dense":1,
-        "ff_moe_lambda":1e-3,
         "ff_jitter_eps":0.02,
+        "ff_bias_gamma": 1e-3,
         "attn_type":"chunked",
         "attn_chunk_size":CONTEXT_SIZE//16,
         "attn_variant":"gqa",
@@ -94,15 +94,14 @@ model_configs = {
 
 if __name__ == "__main__":
     transformer = Transformer(model_configs)
-    print(transformer.count_params())
 
     session_configs["block_size"] = len(transformer.blocks)
 
-    # dataloader = DataLoader(CORPUS_PATH, tokenizer1, session_configs["context_size"], session_configs["batch_size"], session_configs["train_split"])
+    dataloader = DataLoader(CORPUS_PATH, tokenizer1, session_configs["context_size"], session_configs["batch_size"], session_configs["train_split"])
 
-    session1 = Session(transformer, tokenizer1, True, session_configs).save("10B")
-    # start = time.perf_counter()
+    session1 = Session(transformer, tokenizer1, True, session_configs)
+    start = time.perf_counter()
 
-    # session1.train(dataloader, display_message=True)
-    # end = time.perf_counter()
-    # print(f"training finished. time: {end - start:.3f}s")
+    session1.train(dataloader, display_message=True)
+    end = time.perf_counter()
+    print(f"training finished. time: {end - start:.3f}s")

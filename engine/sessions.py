@@ -505,12 +505,12 @@ class Session:
 
             if quantized:
                 attn_quants = ((session[f"{i}.attention.Wqkv.scales"],session[f"{i}.attention.Wo.scales"]), (session[f"{i}.attention.Wqkv.biases"],session[f"{i}.attention.Wo.biases"])) #type:ignore
-                ff_quants = ((session[f"{i}.ff.Wcombined.scales"],session[f"{i}.ff.Wout.scales"],session[f"{i}.ff.W_shared_combined.scales"],session[f"{i}.ff.W_shared_out.scales"]), (session[f"{i}.ff.Wcombined.biases"],session[f"{i}.ff.Wout.biases"],session[f"{i}.ff.W_dense_combined.biases"],session[f"{i}.ff.W_dense_out.biases"])) #type:ignore
+                ff_quants = ((session[f"{i}.ff.Wcombined.scales"],session[f"{i}.ff.Wout.scales"],session[f"{i}.ff.W_dense_combined.scales"],session[f"{i}.ff.W_dense_out.scales"]), (session[f"{i}.ff.Wcombined.biases"],session[f"{i}.ff.Wout.biases"],session[f"{i}.ff.W_dense_combined.biases"],session[f"{i}.ff.W_dense_out.biases"])) #type:ignore
                 attn_params = (session[f"{i}.attention.Wqkv"], session[f"{i}.attention.Wo"]) #type:ignore
-                ff_params = (session[f"{i}.ff.router"],session[f"{i}.ff.Wcombined"], session[f"{i}.ff.Wout"], session[f"{i}.ff.W_shared_combined"], session[f"{i}.ff.W_shared_out"]) #type:ignore
+                ff_params = (session.get(f"{i}.ff.router", None), session.get(f"{i}.ff.router_bias", None),session.get(f"{i}.ff.Wcombined", None), session.get(f"{i}.ff.Wout", None), session.get(f"{i}.ff.W_dense_combined",None), session.get(f"{i}.ff.W_dense_out", None)) #type:ignore
             else:
                 attn_params = (session[f"{i}.attention.Wqkv"], session[f"{i}.attention.Wo"]) #type:ignore
-                ff_params = (session[f"{i}.ff.router"],session[f"{i}.ff.Wcombined"], session[f"{i}.ff.Wout"], session[f"{i}.ff.W_dense_combined"], session[f"{i}.ff.W_dense_out"]) #type:ignore
+                ff_params = (session.get(f"{i}.ff.router", None), session.get(f"{i}.ff.router_bias", None),session.get(f"{i}.ff.Wcombined", None), session.get(f"{i}.ff.Wout", None), session.get(f"{i}.ff.W_dense_combined",None), session.get(f"{i}.ff.W_dense_out", None)) #type:ignore
 
             block = TransformerBlock.from_weights(attn_type=attn_type, attn_configs=attn_configs, attn_weights=attn_params,attn_quants=attn_quants,attn_QK_gamma=attn_QK_norm, ff_configs=ff_configs, ff_weights=ff_params,ff_quants=ff_quants, rmsnorm1_configs=rmsnorm1_configs, rmsnorm2_configs=rmsnorm2_configs, gamma1=rmsnorm1_gamma, gamma2=rmsnorm2_gamma, dtype=dtype)
             blocks.append(block)

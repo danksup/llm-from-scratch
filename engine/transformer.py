@@ -23,11 +23,11 @@ default_block_configs = {
     "ff_n_experts":24,
     "ff_topk":2,
     "ff_cf":1.25,
-    "ff_moe_lambda":1e-2,
     "ff_init":"glorot_uniform",
     "ff_dense_hidden_width":1024, 
     "ff_n_dense":2,
     "ff_jitter_eps":0.02,
+    "ff_bias_gamma":1e-3,
     "attn_dropout":0.1,
     "attn_type":"chunked",
     "attn_variant":"gqa",
@@ -135,10 +135,10 @@ class Transformer:
                 CF = overrided["ff_cf"]
                 topk = overrided["ff_topk"]
                 ff_init = INITIALIZERS[overrided["ff_init"]]
-                ff_moe_lambda = overrided["ff_moe_lambda"]
                 ff_dense_hidden_width = overrided["ff_dense_hidden_width"]
                 ff_n_dense = overrided["ff_n_dense"]
                 ff_jitter_eps = overrided["ff_jitter_eps"]
+                ff_bias_gamma = overrided["ff_bias_gamma"]
 
                 if "attn_chunk_size" in override and override.get("attn_type", None) == "full":
                     raise ValueError(f"[block {i}] attention type of {attn_type_str} doesn't accept \"attn_chunk_size\"")
@@ -171,7 +171,7 @@ class Transformer:
                     case _:
                         raise ValueError(f"[block {i}] invalid variant of \"{attn_variant}\". valid variants: {", ".join(ATTN_VARIANT)}")
 
-                ff = FFN(CF, topk, E, D, H, ff_dense_hidden_width, ff_n_dense,ff_jitter_eps,ff_moe_lambda, dtype=self.dtype, initializer=ff_init, quantized=self.quantized)
+                ff = FFN(CF, topk, E, D, H, ff_dense_hidden_width, ff_n_dense,ff_jitter_eps,ff_bias_gamma, dtype=self.dtype, initializer=ff_init, quantized=self.quantized)
                 rmsnorm1 = RMSNorm(D)
                 rmsnorm2 = RMSNorm(D)
                 transformer_block = TransformerBlock(attn, ff, rmsnorm1, rmsnorm2)
@@ -217,7 +217,7 @@ class Transformer:
         output = inputs.astype(self.dtype)
         all_masks = []
         all_caches = []
-        total_router_loss = nx.array(0.0, dtype=nx.float32)
+        total_z_loss = nx.array(0.0, dtype=nx.float32)
         histograms = [None for _ in range(len(self.blocks))]
         for idx, block in enumerate(self.blocks):
             try:
@@ -247,10 +247,10 @@ class Transformer:
                         block.causal_mask = block.attention.compute_mask(T)
 
                 attn_params = block.attention.Wqkv, block.attention.Wo, block.attention.Q_norm.gamma, block.attention.K_norm.gamma, doc_id
-                ff_params = block.ff.Wcombined, block.ff.Wout, block.ff.router, block.ff.W_dense_combined, block.ff.W_dense_out
+                ff_params = block.ff.Wcombined, block.ff.Wout, block.ff.router, block.ff.W_dense_combined, block.ff.W_dense_out, block.ff.router_bias
                 scales = (block.attention.scales + block.attention.biases, block.ff.scales + block.ff.biases)
-                ff_out ,masks, caches, router_loss, normalized_histogram = block._forward(output, block.causal_mask, attn_str ,block.attention.configs, attn_params, block.ff.configs, ff_params, epsilon, gamma1, gamma2, P, is_training, scales, recompute_activation=self.recompute_activation)
-                total_router_loss += router_loss
+                ff_out ,masks, caches, z_loss, normalized_histogram = block._forward(output, block.causal_mask, attn_str ,block.attention.configs, attn_params, block.ff.configs, ff_params, epsilon, gamma1, gamma2, P, is_training, scales, recompute_activation=self.recompute_activation)
+                total_z_loss += z_loss
                 output = ff_out
                 all_masks.append(masks)
                 all_caches.append(caches)
@@ -273,8 +273,8 @@ class Transformer:
 
         if return_cache:
             all_caches += rms_cache,
-            return scores, rmsnorm_out, all_masks, all_caches, total_router_loss, histograms
-        return scores, total_router_loss
+            return scores, rmsnorm_out, all_masks, all_caches, total_z_loss, histograms
+        return scores, total_z_loss
 
     def backward(self, err_signal:Any,  all_masks, all_caches:list, doc_id) -> Any:
         '''
@@ -371,7 +371,7 @@ class Transformer:
                 yield self.rmsnorm_final, "gamma", "rmsnorm_final.gamma"
 
         layers = ["ff", "attention", "rmsnorm1", "rmsnorm2"]
-        weights = [["router", "Wcombined", "Wout", "W_dense_combined", "W_dense_out"],[ "Wqkv", "Wo", ["Q_norm", "gamma"], ["K_norm", "gamma"]],[ "gamma"],[ "gamma"]]
+        weights = [["router","router_bias", "Wcombined", "Wout", "W_dense_combined", "W_dense_out"],[ "Wqkv", "Wo", ["Q_norm", "gamma"], ["K_norm", "gamma"]],[ "gamma"],[ "gamma"]]
         for a,b,c in self.get_block_weights(layers, weights):
             yield a,b,c
 
@@ -470,7 +470,9 @@ class Transformer:
                 block.zeroes_gradient()
 
         for contexts, next_tokens in dataloader.stream_batches(dataloader.train_files):
-            contexts = nx.array(contexts).reshape(dataloader.batch_size, dataloader.context_size)
+            B = dataloader.batch_size
+            T = dataloader.context_size
+            contexts = nx.array(contexts).reshape(B,T)
 
             doc_id = nx.cumsum(contexts == 2, axis=-1) if self.doc_id else None #B,T
 
@@ -523,6 +525,10 @@ class Transformer:
 
             total_loss += loss * next_tokens.size
             count += next_tokens.size
+
+            for idx, block in enumerate(self.blocks):
+                if histograms[idx] is not None:
+                    block.ff.update_bias(histograms[idx], 1e-3)
             microstep += 1
 
             if microstep % eval_every == 0 or microstep == microbatch_size:
@@ -726,10 +732,10 @@ class Transformer:
 
             doc_id = nx.cumsum(contexts == 2, axis=-1) if self.doc_id else None #B,T
 
-            batch_validation_scores, total_router_loss = self.forward(embedded,doc_id=doc_id, return_cache=False, is_training=False)
+            batch_validation_scores, total_z_loss = self.forward(embedded,doc_id=doc_id, return_cache=False, is_training=False)
 
             val_loss = cross_entropy(batch_validation_scores, next_tokens)
-            val_loss = nx.mean(val_loss)  + total_router_loss
+            val_loss = nx.mean(val_loss)  + total_z_loss
             total_loss += val_loss * next_tokens.size
             count += next_tokens.size
             step_counter += 1
@@ -803,7 +809,7 @@ class Transformer:
         return configs
 
     def get_all_weights(self) ->  dict[str,nx.ArrayLike]:
-        weights = [["router", "Wcombined", "Wout","W_dense_combined", "W_dense_out"],[ "Wqkv", "Wo"],[ "gamma"],[ "gamma"]]
+        weights = [["router","router_bias", "Wcombined", "Wout","W_dense_combined", "W_dense_out"],[ "Wqkv", "Wo"],[ "gamma"],[ "gamma"]]
 
         all_weights = {}
         weights = self.get_weights(block_only=True)

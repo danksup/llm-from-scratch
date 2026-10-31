@@ -1,3 +1,4 @@
+# OUTDATED
 # Big Picture of the Flow
 1. First, we encode the corpus. Then we make sliding windows of it. For training we split into two:
     * context this is what is fed into the network sequence, 

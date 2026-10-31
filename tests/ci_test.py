@@ -61,7 +61,6 @@ model_configs = {
         "ff_init":"glorot_uniform",
         "ff_dense_hidden_width":512, 
         "ff_n_dense":1,
-        "ff_moe_lambda":1e-3,
         "ff_jitter_eps":0.02,
         "attn_type":"chunked",
         "attn_chunk_size":16,

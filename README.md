@@ -74,11 +74,11 @@ logs:
 - moe aux loss free balancing nov 1 2026
   
 ## Ongoing:
+- multi token prediction
 - moe cleanup
 - optimizing/cleanup/docs
 
 ## TODO (not in order):
-- multi token prediction
 - fill in the middle transformer
 - support exporting and importing other model(like gguf or huggingfacemodel or llama or etc)
 - parallelizing tokenizer word frequency counting

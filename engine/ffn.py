@@ -91,7 +91,7 @@ class FFN:
             self.dW_dense_combined = nx.zeros_like(self.dW_dense_combined)
             self.dW_dense_out = nx.zeros_like(self.dW_dense_out)
 
-    def count_param(self):
+    def count_params(self):
         total = 0
         total_dense = 0
 
@@ -269,7 +269,7 @@ class FFN:
         
         wcombined_scale, wout_scale,dense_expert_scale,dense_expert_out_scale, wcombined_bias, wout_bias, dense_expert_bias,  dense_expert_out_bias = quantization  #type:ignore
 
-        router, Wout, Wcombined, W_dense_combined, W_dense_out = ff_params
+        router, Wout, Wcombined, W_dense_combined, W_dense_out, _ = ff_params
 
         hidden_width, D, n_experts, capacity_factor, top_k,dense_hidden_width, n_dense, _ = moe_configs
 

@@ -89,12 +89,12 @@ class AttentionFull:
         return weights
 
     @staticmethod
-    def _forward(x:nx.ArrayLike, causal_mask:nx.ArrayLike,  attn_configs:tuple[Any,...], attn_params: tuple[Any,...], quantization,  *, recompute_activation=True) -> tuple[nx.ArrayLike, tuple[nx.ArrayLike,...]]:
+    def _forward(x:nx.ArrayLike, causal_mask:nx.ArrayLike,doc_id,  attn_configs:tuple[Any,...], attn_params: tuple[Any,...], quantization,  *, recompute_activation=True) -> tuple[nx.ArrayLike, tuple[nx.ArrayLike,...]]:
         #fp_16_x shape = (B,T,D)
         #Wqkv.T (D, D + 2 * n_kv_heads * H)
         #combined (B, T, D + 2 * n_kv_heads * H)
         embed_dim, n_kv_heads, n_heads, n_rep, head_dim, freqs = attn_configs
-        Wqkv, Wo, Q_norm_gamma, K_norm_gamma, doc_id = attn_params
+        Wqkv, Wo, Q_norm_gamma, K_norm_gamma = attn_params
 
         wqkv_scale, wo_scale, wqkv_bias, wo_bias = quantization
 

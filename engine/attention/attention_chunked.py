@@ -89,9 +89,9 @@ class AttentionChunked:
         return weights_softmax
 
     @staticmethod
-    def _forward(x:nx.ArrayLike, causal_mask:nx.ArrayLike, configs:tuple[Any,...], params:tuple[Any,...], quantization, *, recompute_activation=True):
+    def _forward(x:nx.ArrayLike, causal_mask:nx.ArrayLike,doc_id, configs:tuple[Any,...], params:tuple[Any,...], quantization, *, recompute_activation=True):
         embed_dim, n_kv_heads, n_heads, n_rep, head_dim, chunk_size, freqs = configs
-        Wqkv, Wo, Q_norm_gamma, K_norm_gamma, doc_id = params
+        Wqkv, Wo, Q_norm_gamma, K_norm_gamma = params
 
         wqkv_scale, wo_scale, wqkv_bias, wo_bias = quantization
 

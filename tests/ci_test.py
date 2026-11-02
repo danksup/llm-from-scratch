@@ -41,7 +41,7 @@ session_configs = {
     "create_checkpoint":True,
     "checkpoint_every":1000,
     "weights_only": True,
-    "logger":True
+    "logger":False
 }
 
 model_configs = {

@@ -9,6 +9,7 @@ import engine.optimizer as optim
 from engine.rmsnorm import RMSNorm
 from engine.dataloader import DataLoader
 from engine.embedding import Embedding
+from engine.mtpblock import MTPBlock
 from engine.losses import cross_entropy, cross_entropy_gradient
 from engine.transformer_block import TransformerBlock
 from helper.logger import Logger
@@ -53,8 +54,9 @@ INITIALIZERS = {
 
 class Transformer:
     #TODO: bug when config isnt in dict
-    def __init__(self, configs: dict[str, Any] | None = None, blocks:list|None=None, *, embedding:bool|Embedding=False, rmsfinal:bool|RMSNorm=False):
+    def __init__(self, configs: dict[str, Any] | None = None, blocks:list|None=None,mtp_blocks:list|None=None, *, embedding:bool|Embedding=False, rmsfinal:bool|RMSNorm=False):
         self.blocks = []
+        self.mtp_blocks = []
         configs =  {} if configs is None else configs
         self.configs = configs
 
@@ -62,7 +64,7 @@ class Transformer:
         assert self.vocab_size is not None, "vocab size can't be None"
 
         self.embed_dim = configs.get("embed_dim", 128)
-        self.dtype = configs.get("dtype", nx.float32)
+        self.dtype = configs.get("dtype", "float32")
         validate_choice(self.dtype, "dtype", nx.floating_type_str)
         if isinstance(self.dtype, str):
             self.dtype = nx.str_to_dtype[self.dtype]
@@ -72,6 +74,7 @@ class Transformer:
         self.quantized = configs.get("quantized", False)
         self.recompute_activation = configs.get("recompute_activation", True)
         self.doc_id = configs.get("doc_id", True)
+
 
         self.check_non_finite = configs.get("check_non_finite", True)
         
@@ -182,6 +185,18 @@ class Transformer:
             if not self.blocks:
                 raise ValueError("this transformer doesnt have any block.")
 
+        if mtp_blocks is None:
+            n_mtp = configs.get("n_mtp", 1)
+            for i in range(n_mtp):
+                last_block = self.blocks[-1].copy()
+                rmsnorm1 = RMSNorm(self.embed_dim)
+                rmsnorm2 = RMSNorm(self.embed_dim)
+                mtp = MTPBlock(self.embed_dim, last_block, rmsnorm1, rmsnorm2, dtype=self.dtype, quantized=self.quantized, init=True)
+                self.mtp_blocks.append(mtp)
+        else:
+            self.mtp_blocks = mtp_blocks
+                
+            
     def __call__(self, *args: Any, **kwds: Any) -> Any:
         self.logger:Logger = kwds["logger"]
         return self
@@ -196,8 +211,12 @@ class Transformer:
         total = 0
         total_dense = 0
         for i in self.blocks:
-            total += i.count_param(quantized=self.quantized)
-            total_dense += i.count_param(dense=True, quantized=self.quantized)
+            total += i.count_params(quantized=self.quantized)
+            total_dense += i.count_params(dense=True, quantized=self.quantized)
+
+        for mtp in self.mtp_blocks:
+            total += mtp.count_params()
+            total_dense += mtp.count_params(dense=True)
 
         embedding_size = self.embedding.lookup_table.size
         if self.quantized:
@@ -246,10 +265,10 @@ class Transformer:
                     if block.causal_mask is None or block.causal_mask.shape != (T, W + 1):
                         block.causal_mask = block.attention.compute_mask(T)
 
-                attn_params = block.attention.Wqkv, block.attention.Wo, block.attention.Q_norm.gamma, block.attention.K_norm.gamma, doc_id
+                attn_params = block.attention.Wqkv, block.attention.Wo, block.attention.Q_norm.gamma, block.attention.K_norm.gamma
                 ff_params = block.ff.Wcombined, block.ff.Wout, block.ff.router, block.ff.W_dense_combined, block.ff.W_dense_out, block.ff.router_bias
                 scales = (block.attention.scales + block.attention.biases, block.ff.scales + block.ff.biases)
-                ff_out ,masks, caches, z_loss, normalized_histogram = block._forward(output, block.causal_mask, attn_str ,block.attention.configs, attn_params, block.ff.configs, ff_params, epsilon, gamma1, gamma2, P, is_training, scales, recompute_activation=self.recompute_activation)
+                ff_out ,masks, caches, z_loss, normalized_histogram = block._forward(output, block.causal_mask,doc_id, attn_str ,block.attention.configs, attn_params, block.ff.configs, ff_params, epsilon, gamma1, gamma2, P, is_training, scales, recompute_activation=self.recompute_activation)
                 total_z_loss += z_loss
                 output = ff_out
                 all_masks.append(masks)
@@ -290,10 +309,10 @@ class Transformer:
             _,T,_ = current_grad.shape
             caches_attn, caches_ff, caches_rmsnorm1, caches_rmsnorm2 = caches
             mask1, mask2 = masks
-            moe_configs = block.ff.configs
+            ff_configs = block.ff.configs
             P = nx.array(0.1, dtype=self.dtype)
 
-            ff_params = (block.ff.router, block.ff.Wout, block.ff.Wcombined, block.ff.W_dense_combined, block.ff.W_dense_out)
+            ff_params = (block.ff.router, block.ff.Wout, block.ff.Wcombined, block.ff.W_dense_combined, block.ff.W_dense_out, block.ff.router_bias)
             attn_str = block.attention.self_type()
             attn_configs = block.attention.configs
             attn_params = block.attention.Wqkv, block.attention.Wo, block.attention.Q_norm.gamma, block.attention.K_norm.gamma
@@ -301,7 +320,7 @@ class Transformer:
 
             dx, dWout, dWcombined, d_router,dW_dense_combined, dW_dense_out, dWqkv,dWo, d_gamma1, d_gamma2, Q_norm_d_gamma, K_norm_d_gamma = block._backward(current_grad, mask1=mask1, mask2=mask2, p=P, attention=attn_str,
                                                                 caches_attn=caches_attn, caches_ff=caches_ff, caches_rmsnorm1=caches_rmsnorm1, caches_rmsnorm2=caches_rmsnorm2,
-                                                                attn_configs = attn_configs, attn_params=attn_params, gamma1=block.rmsnorm1.gamma, gamma2=block.rmsnorm2.gamma, ff_params=ff_params, moe_configs=moe_configs, gradient_scale=self.gradient_scale, quantization=scales, recompute_activation=self.recompute_activation)
+                                                                attn_configs = attn_configs, attn_params=attn_params, gamma1=block.rmsnorm1.gamma, gamma2=block.rmsnorm2.gamma, ff_params=ff_params, ff_configs=ff_configs, gradient_scale=self.gradient_scale, quantization=scales, recompute_activation=self.recompute_activation)
             if block.ff.n_experts > 0:
                 block.ff.dWout += dWout
                 block.ff.dWcombined += dWcombined
@@ -346,8 +365,10 @@ class Transformer:
 
         nx.eval(*to_eval)
 
-    def get_block_weights(self, layers, params):
-        for i, block in enumerate(self.blocks):
+    def get_block_weights(self, layers, params, iterable:list|None=None, prefix=None):
+        iterable = self.blocks if iterable is None else iterable
+        for i, block in enumerate(iterable):
+            prefix_ = i if prefix is None else prefix
             for layer_i, layer in enumerate(layers):
                 layer_obj = getattr(block, layer)
                 for param_name in params[layer_i]:
@@ -356,13 +377,41 @@ class Transformer:
                         layer_obj_list = getattr(layer_obj, attr, None)
                         if layer_obj_list is not None:
                             if getattr(layer_obj_list, param_name_list, None) is not None:
-                                yield layer_obj_list, param_name_list, f"{i}.{layer}.{attr}.{param_name_list}"
-   
+                                yield layer_obj_list, param_name_list, f"{prefix_}.{layer}.{attr}.{param_name_list}"
                     else:
                         if getattr(layer_obj, param_name, None) is not None:
-                                yield layer_obj, param_name, f"{i}.{layer}.{param_name}"
+                                yield layer_obj, param_name, f"{prefix_}.{layer}.{param_name}"
 
-    def get_weights(self, *, block_only:bool=False):
+    def get_mtp_things(self, get_gradient=False):
+        upper = [None, None, None , "transformer_block"]
+        middle = [None, "rmsnorm1", "rmsnorm2", ["ff", "attention", "rmsnorm1", "rmsnorm2"]]
+        if not get_gradient:
+            lower = ["Wproj", "gamma", "gamma",[["router","router_bias", "Wcombined", "Wout", "W_dense_combined", "W_dense_out"],[ "Wqkv", "Wo", ["Q_norm", "gamma"], ["K_norm", "gamma"]],[ "gamma"],[ "gamma"]]]
+        else:
+            lower = ["dWproj", "d_gamma", "d_gamma",[["d_router", "dWcombined","dWout", "dW_dense_combined", "dW_dense_out"], ["dWo", "dWqkv", ["K_norm", "d_gamma"], ["Q_norm", "d_gamma"]],[ "d_gamma"],["d_gamma"]]]
+
+        for i, mtp in enumerate(self.mtp_blocks):
+            for idx, thing in enumerate(upper):
+                layer = middle[idx]
+                param = lower[idx]
+                if thing is None:
+                    if layer is None:
+                        param_ = getattr(mtp, param, None)
+                        if param_ is not None:
+                            yield mtp, param, f"mtp.{i}.{param}"
+
+                    else:
+                        layer_ = getattr(mtp, layer, None)
+                        if layer_ is not None:
+                            param_ = getattr(layer_, param, None)
+                            if param_ is not None:
+                                yield layer_, param, f"mtp.{i}.{layer}.{param}"
+                else:
+                    for a,b,c in self.get_block_weights(layer, param, [mtp.transformer_block], f"mtp.{i}.transformer_block"):
+                        yield a,b,c
+                
+
+    def get_weights(self, *, block_only:bool=False, include_mtp=True):
         if not block_only:
             if getattr(self.embedding, "lookup_table", None) is not None:
                 yield self.embedding, "lookup_table", "embedding.lookup_table"
@@ -375,7 +424,11 @@ class Transformer:
         for a,b,c in self.get_block_weights(layers, weights):
             yield a,b,c
 
-    def get_gradients(self):
+        if include_mtp:
+            for a,b,c in self.get_mtp_things():
+                yield a,b,c
+
+    def get_gradients(self, include_mtp=True):
         if getattr(self.embedding, "d_lookup_table", None) is not None:
             yield self.embedding, "d_lookup_table", "embedding.d_lookup_table"
 
@@ -383,9 +436,13 @@ class Transformer:
             yield self.rmsnorm_final, "d_gamma", "rmsnorm_final.d_gamma"
 
         layers = ["ff", "attention", "rmsnorm1", "rmsnorm2"]
-        dweights = [ ["d_router", "dWcombined","dWout", "dW_dense_combined", "dW_dense_out"], ["dWo", "dWqkv", ["K_norm", "d_gamma"], ["Q_norm", "d_gamma"]],[ "d_gamma"],["d_gamma"]]
+        dweights = [["d_router", "dWcombined","dWout", "dW_dense_combined", "dW_dense_out"], ["dWo", "dWqkv", ["K_norm", "d_gamma"], ["Q_norm", "d_gamma"]],[ "d_gamma"],["d_gamma"]]
         for a,b,c in self.get_block_weights(layers, dweights): 
             yield a,b,c
+
+        if include_mtp:
+            for a,b,c in self.get_mtp_things(get_gradient=True):
+                yield a,b,c
 
     def gradient_clipping_factor(self, microbatch_size, max_norm=nx.float_32(0.5)):
         summed = nx.array(0, nx.float32)
@@ -809,8 +866,6 @@ class Transformer:
         return configs
 
     def get_all_weights(self) ->  dict[str,nx.ArrayLike]:
-        weights = [["router","router_bias", "Wcombined", "Wout","W_dense_combined", "W_dense_out"],[ "Wqkv", "Wo"],[ "gamma"],[ "gamma"]]
-
         all_weights = {}
         weights = self.get_weights(block_only=True)
         for layer_obj, param_name, name in weights:
@@ -829,6 +884,9 @@ class Transformer:
             self.embedding.quantize()
             for block in self.blocks:
                 block.quantize()
+
+            for mtpblock in self.mtp_blocks:
+                mtpblock.quantize()
 
 
     def get_quant_params(self):
@@ -857,11 +915,15 @@ class Transformer:
     def copy(self) -> "Transformer":
         configs = copy.deepcopy(self.configs)
         block_copy = []
+        mtp_copy = []
         for block in self.blocks:
             block_copy.append(block.copy())
 
+        for mtp in self.mtp_blocks:
+            mtp_copy.append(mtp.copy())
+
         embedding_copy = self.embedding.copy()
         rmsfinal_copy = self.rmsnorm_final.copy()
-        transformer_copy = Transformer(configs, block_copy, embedding=embedding_copy, rmsfinal=rmsfinal_copy)
+        transformer_copy = Transformer(configs, block_copy,mtp_copy, embedding=embedding_copy, rmsfinal=rmsfinal_copy)
 
         return transformer_copy

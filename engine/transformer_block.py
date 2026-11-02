@@ -29,14 +29,14 @@ class TransformerBlock:
         self.rmsnorm2.zeroes_gradient()
 
     def __str__(self) -> str:
-        param_count = self.count_param()
+        param_count = self.count_params()
         this = {
             "param_count":param_count,
         }
         # this_str = f""
         return str(this)
 
-    def count_param(self, dense=False, *, quantized=False) -> int:
+    def count_params(self, dense=False, *, quantized=False) -> int:
         total = 0
         if quantized:
             total += self.attention.Wqkv.size * 4
@@ -45,7 +45,7 @@ class TransformerBlock:
             total += self.attention.Wqkv.size
             total += self.attention.Wo.size
 
-        ff_param_sparse, ff_param_dense = self.ff.count_param()
+        ff_param_sparse, ff_param_dense = self.ff.count_params()
         total += ff_param_dense if dense else ff_param_sparse
         total += self.rmsnorm1.gamma.size
         total += self.rmsnorm2.gamma.size
@@ -55,12 +55,12 @@ class TransformerBlock:
 
     @staticmethod
     @nx.compile
-    def _forward(x, causal_mask:Any, attention:str, attn_configs:tuple[Any,...], attn_params:tuple[Any,...], ff_configs, ff_params, epsilon:float, gamma1:Any, gamma2:Any, p:float, is_training:bool, quantization:tuple[Any,...]|None=None, *, recompute_activation:bool=True) -> tuple[Any, Any, Any, Any, Any]:
+    def _forward(x, causal_mask:Any,doc_id, attention:str, attn_configs:tuple[Any,...], attn_params:tuple[Any,...], ff_configs, ff_params, epsilon:float, gamma1:Any, gamma2:Any, p:float, is_training:bool, quantization:tuple[Any,...]|None=None, *, recompute_activation:bool=True) -> tuple[Any, Any, Any, Any, Any]:
         rmsnorm1_out, caches_rmsnorm1 = RMSNorm._forward(x, gamma1,epsilon)
 
         rmsnorm1_out = rmsnorm1_out.astype(x.dtype)
 
-        attn_out, caches_attn = ATTN_TYPE[attention]._forward(rmsnorm1_out, causal_mask, attn_configs, attn_params, quantization[0], recompute_activation=recompute_activation) #type:ignore
+        attn_out, caches_attn = ATTN_TYPE[attention]._forward(rmsnorm1_out, causal_mask,doc_id, attn_configs, attn_params, quantization[0], recompute_activation=recompute_activation) #type:ignore
         drop_attn_out, mask1 = Dropout._forward(attn_out, p,is_training)
 
         attn_out = drop_attn_out + x
@@ -68,21 +68,21 @@ class TransformerBlock:
         rmsnorm2_out, caches_rmsnorm2 = RMSNorm._forward(attn_out, gamma2,epsilon)
 
         rmsnorm2_out = rmsnorm2_out.astype(x.dtype)
-        ff_out, caches_ff, aux_loss, normalized_histogram = FFN.forward(rmsnorm2_out, ff_configs, ff_params, quantization[1], recompute_activation=recompute_activation, is_training=is_training) #type:ignore
+        ff_out, caches_ff, z_loss, normalized_histogram = FFN.forward(rmsnorm2_out, ff_configs, ff_params, quantization[1], recompute_activation=recompute_activation, is_training=is_training) #type:ignore
         drop_ff_out, mask2 =  Dropout._forward(ff_out, p,is_training)
 
         ff_out = drop_ff_out + attn_out
 
         masks = (mask1, mask2)
         caches = (caches_attn, caches_ff, caches_rmsnorm1, caches_rmsnorm2)
-        return ff_out, masks, caches, aux_loss, normalized_histogram
+        return ff_out, masks, caches, z_loss, normalized_histogram
 
     @staticmethod
     @nx.compile
-    def _backward(gradient:Any, mask1:Any, mask2:Any, attention:str, p, caches_attn:tuple[Any,...], caches_ff:tuple[Any,...], caches_rmsnorm1:tuple[Any,...], caches_rmsnorm2:tuple[Any,...], attn_configs:tuple[Any,...], attn_params:tuple[Any,...], gamma1:Any, gamma2:Any, ff_params:tuple, moe_configs,gradient_scale, quantization:tuple[Any,...]|None=None, *, recompute_activation:bool=True) -> tuple[Any, Any, Any, Any, Any, Any, Any, Any,Any, Any, Any, Any]:
+    def _backward(gradient:Any, mask1:Any, mask2:Any, attention:str, p, caches_attn:tuple[Any,...], caches_ff:tuple[Any,...], caches_rmsnorm1:tuple[Any,...], caches_rmsnorm2:tuple[Any,...], attn_configs:tuple[Any,...], attn_params:tuple[Any,...], gamma1:Any, gamma2:Any, ff_params:tuple, ff_configs, gradient_scale, quantization:tuple[Any,...]|None=None, *, recompute_activation:bool=True) -> tuple[Any, Any, Any, Any, Any, Any, Any, Any,Any, Any, Any, Any]:
         d_ff_drop = Dropout._backward(gradient, mask2, p) #grad dtype
 
-        dx_ff, dWcombined, dWout, d_router, dW_dense_combined, dW_dense_out = FFN.backward(d_ff_drop, caches_ff, moe_configs, ff_params,gradient_scale, quantization[1], recompute_activation=recompute_activation) #out:fp32 #type:ignore
+        dx_ff, dWcombined, dWout, d_router, dW_dense_combined, dW_dense_out = FFN.backward(d_ff_drop, caches_ff, ff_configs, ff_params,gradient_scale, quantization[1], recompute_activation=recompute_activation) #out:fp32 #type:ignore
 
         d_rmsn2,d_gamma2 = RMSNorm._backward(dx_ff, caches_rmsnorm2 ,gamma2)
 

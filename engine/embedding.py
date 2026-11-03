@@ -21,6 +21,13 @@ class Embedding:
 
         self.d_lookup_table = nx.zeros(table_shape)
 
+    def get_quants(self, name=None):
+        return self.table_scale, self.bias
+
+    def set_quants(self, scale, bias, name=None):
+        self.table_scale = scale
+        self.bias = bias
+
     def zeroes_gradient(self):
         self.d_lookup_table = nx.zeros_like(self.d_lookup_table)
 

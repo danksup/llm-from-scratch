@@ -646,6 +646,18 @@ def quantized_matmul(x,w,/, scales, biases, transpose:bool|tuple=False):
             return x @ dequant_q.transpose(transpose)
     return x @ dequant_q
 
+def mul(x,w,/, scales, biases, transpose:bool|tuple=False, quantized=False):
+    if quantized:
+        return quantized_matmul(x, w, scales=scales, biases=biases, transpose=transpose)
+    else:
+        if transpose:
+            if isinstance(transpose, bool):
+                return x @ w.T
+            else:
+                return x @ w.transpose(transpose)
+        else:
+            return x @ w
+
 def save_safetensors(file:Path, arrays:dict[str,ArrayLike], metadata:dict[str,str]|None=None):
     if backend == "MLX":
         _nx.save_safetensors(file=file, arrays=arrays, metadata=metadata)

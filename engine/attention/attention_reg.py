@@ -35,6 +35,11 @@ class AttentionFull:
         wqkv_shape = embed_dim + 2 * n_kv_heads * self.head_dim, embed_dim
         wo_shape = embed_dim,embed_dim
 
+        self.quant_map = {
+            "Wqkv": 0,
+            "Wo": 1,
+        }
+
         if init:
             self.Wqkv = initializer(wqkv_shape, dtype=dtype)
             assert nx.isfinite(self.Wqkv).all(), f"non-finite detected when initializing attentipn.Wqkv."
@@ -59,6 +64,24 @@ class AttentionFull:
         self.dWo = nx.zeros_like(self.dWo)
         self.Q_norm.d_gamma = nx.zeros_like(self.Q_norm.d_gamma)
         self.K_norm.d_gamma = nx.zeros_like(self.K_norm.d_gamma)
+
+    def set_gradient(self, dwqkv, dwo, Q_d_gamma, K_d_gamma):
+        self.dWqkv += dwqkv
+        self.dWo += dwo
+        self.Q_norm.set_gradient(Q_d_gamma)
+        self.K_norm.set_gradient(K_d_gamma)
+
+    def get_quants(self, name):
+        return self.scales[self.quant_map[name]], self.biases[self.quant_map[name]]
+        
+    def set_quants(self, name, scale, bias):
+        scale_list = list(self.scales)
+        scale_list[self.quant_map[name]] = scale
+        self.scales = tuple(scale_list)
+
+        bias_list = list(self.biases)
+        bias_list[self.quant_map[name]] = bias
+        self.biases = tuple(bias_list)
 
     @staticmethod
     def self_type() -> str:

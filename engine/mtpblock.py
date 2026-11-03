@@ -40,8 +40,15 @@ class MTPBlock:
 
         return total
 
+    def get_quants(self, name):
+        return self.scale, self.bias
+
+    def set_quants(self, scale, bias, name=None):
+        self.scale = scale
+        self.bias = bias
+
     @staticmethod
-    def forward(h, next_token_embed, params, configs,attention, causal_mask, doc_id, epsilon,quantization, *, is_training=True, recompute_activation=True):
+    def forward(h, next_token_embed, params, configs, attention, causal_mask, doc_id, epsilon,quantization, *, is_training=True, recompute_activation=True):
         wproj, gamma1, gamma2, attn_params,ffn_params, block_gamma1, block_gamma2 = params
         wproj_scale, wproj_bias, tblock_quants = quantization
         attn_configs, ff_configs = configs
@@ -93,7 +100,7 @@ class MTPBlock:
 
         de = dz[...,D:]
         dh = dz[...,:D]
-        tblock_grads = dx, dWout, dWcombined, d_router,dW_dense_combined, dW_dense_out, dWqkv,dWo, tblock_d_gamma1, tblock_d_gamma2, Q_norm_d_gamma, K_norm_d_gamma
+        tblock_grads = {"dx":dx, "dwout":dWout, "dwcombined":dWcombined, "d_router":d_router,"dw_dense_combined":dW_dense_combined, "dw_dense_out":dW_dense_out, "dwqkv":dWqkv,"dwo":dWo, "tblock_d_gamma1":tblock_d_gamma1, "tblock_d_gamma2":tblock_d_gamma2, "q_d_gamma":Q_norm_d_gamma, "k_d_gamma":K_norm_d_gamma}
 
         return dh, de, dWproj, d_gamma1, d_gamma2, tblock_grads
 
@@ -116,3 +123,29 @@ class MTPBlock:
             copy.bias = nx.copy(self.bias)
 
         return copy
+
+    def get_things(self):
+        tblock_attn = self.transformer_block.attention
+        causal_mask = self.transformer_block.causal_mask
+        tblock_ff = self.transformer_block.ff
+        tblock_rmsnorm1 = self.transformer_block.rmsnorm1
+        tblock_rmsnorm2 = self.transformer_block.rmsnorm2
+        epsilon = self.rmsnorm1.epsilon
+
+        attn_params = tblock_attn.Wqkv, tblock_attn.Wo, tblock_attn.Q_norm.gamma, tblock_attn.K_norm.gamma
+        ff_params = tblock_ff.router, tblock_ff.Wcombined, tblock_ff.Wout, tblock_ff.W_dense_combined, tblock_ff.W_dense_out, tblock_ff.router_bias
+        tblock_rms1 = tblock_rmsnorm1.gamma
+        tblock_rms2 = tblock_rmsnorm2.gamma
+        
+        params = (self.Wproj, self.rmsnorm1.gamma, self.rmsnorm2.gamma, attn_params, ff_params ,tblock_rms1 ,tblock_rms2)
+        configs = tblock_attn.configs, tblock_ff.configs
+
+        quants = self.scale, self.bias , ((tblock_attn.scales + tblock_attn.biases), (tblock_ff.scales + tblock_ff.biases))
+
+        return params, configs, quants, causal_mask, epsilon
+
+    def set_gradient(self, **kwargs):
+        self.dWproj += kwargs["dwproj"]
+        self.rmsnorm1.d_gamma += kwargs["d_gamma1"]
+        self.rmsnorm2.d_gamma += kwargs["d_gamma2"]
+        self.transformer_block.set_gradient(**kwargs)

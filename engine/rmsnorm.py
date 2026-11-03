@@ -12,6 +12,9 @@ class RMSNorm:
 
     def zeroes_gradient(self):
         self.d_gamma = nx.zeros_like(self.d_gamma, dtype=nx.float32)
+
+    def set_gradient(self, dgamma):
+        self.d_gamma += dgamma
     
     @staticmethod
     def _forward(x:nx.ArrayLike, gamma:nx.ArrayLike, epsilon:Any) -> tuple[nx.ArrayLike, tuple[Any,...]]:

@@ -152,3 +152,9 @@ class TransformerBlock:
         self.attention.quantize()
         self.ff.quantize()
 
+    def set_gradient(self,**kwargs):#*, dWout, dWcombined, d_router,dW_dense_combined, dW_dense_out, dWqkv,dWo, d_gamma1, d_gamma2, Q_norm_d_gamma, K_norm_d_gamma):
+        self.attention.set_gradient(kwargs["dwqkv"], kwargs["dwo"], kwargs["q_d_gamma"], kwargs["k_d_gamma"])
+        self.rmsnorm1.set_gradient(kwargs["tblock_d_gamma1"])
+        self.rmsnorm2.set_gradient(kwargs["tblock_d_gamma2"])
+        self.ff.set_gradient(dWcombined=kwargs["dwcombined"], dWout=kwargs["dwout"], d_router=kwargs["d_router"], dW_dense_combined=kwargs["dw_dense_combined"],dW_dense_out=kwargs["dw_dense_out"])
+

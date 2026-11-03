@@ -8,6 +8,7 @@ from helper.singleton import sleep
 
 C = nx.array(1e-4)
 
+
 class FFN:
     def __init__(self, capacity_factor, top_k, n_experts, embed_dim, hidden_width, dense_hidden_width, n_dense=2,jitter_eps=0.02,gamma=1e-3, dtype:Any=nx.float16, initializer:Callable=initializer.glorot_uniform, quantized:bool|str=False, *, init=True) -> None:
         self.hidden_width = hidden_width
@@ -81,6 +82,14 @@ class FFN:
             self.dW_dense_combined = None
             self.dW_dense_out = None
 
+        self.quant_map = {
+            "Wcombined": 0,
+            "Wout": 1,
+            "W_dense_combined": 2,
+            "W_dense_out": 3,
+        }
+
+
     def zeroes_gradient(self):
         if self.n_experts > 0:
             self.dWcombined = nx.zeros_like(self.dWcombined)
@@ -90,6 +99,16 @@ class FFN:
         if self.n_dense > 0:
             self.dW_dense_combined = nx.zeros_like(self.dW_dense_combined)
             self.dW_dense_out = nx.zeros_like(self.dW_dense_out)
+
+    def set_gradient(self,*, dWcombined, dWout, d_router, dW_dense_combined, dW_dense_out):
+        if self.n_experts > 0:
+            self.dWcombined += dWcombined
+            self.dWout += dWout
+            self.d_router += d_router
+
+        if self.n_dense > 0:
+            self.dW_dense_combined += dW_dense_combined
+            self.dW_dense_out += dW_dense_out
 
     def count_params(self):
         total = 0
@@ -149,6 +168,18 @@ class FFN:
         ideal = 1 / self.n_experts
         self.router_bias = self.router_bias + self.bias_gamma * (ideal - n_routed_tokens)
 
+    def get_quants(self, name):
+        return self.scales[self.quant_map[name]], self.biases[self.quant_map[name]]
+
+    def set_quants(self, name, scale, bias):
+        scale_list = list(self.scales)
+        scale_list[self.quant_map[name]] = scale
+        self.scales = tuple(scale_list)
+
+        bias_list = list(self.biases)
+        bias_list[self.quant_map[name]] = bias
+        self.biases = tuple(bias_list)
+
     @staticmethod
     def forward(x:nx.ArrayLike, ff_configs, ff_params, quantization:tuple[Any,...]|None=None, *, recompute_activation:bool=True, is_training=True):
         #routing
@@ -156,7 +187,7 @@ class FFN:
         B, T, D = x.shape
         N = B * T
         _, _, n_experts, capacity_factor, top_k, _, n_dense,jitter_eps = ff_configs
-        Wcombined, Wout, router, W_dense_combined, W_dense_out,router_bias  = ff_params
+        router,Wcombined, Wout,  W_dense_combined, W_dense_out,router_bias  = ff_params
 
         wcombined_scale, wout_scale, dense_combined_scale, dense_out_scale, wcombined_bias, wout_bias, dense_combined_bias,  dense_out_bias = quantization  #type:ignore
         flatten_x = x.reshape(-1, D)
@@ -269,7 +300,7 @@ class FFN:
         
         wcombined_scale, wout_scale,dense_expert_scale,dense_expert_out_scale, wcombined_bias, wout_bias, dense_expert_bias,  dense_expert_out_bias = quantization  #type:ignore
 
-        router, Wout, Wcombined, W_dense_combined, W_dense_out, _ = ff_params
+        router, Wcombined, Wout,  W_dense_combined, W_dense_out, _ = ff_params
 
         hidden_width, D, n_experts, capacity_factor, top_k,dense_hidden_width, n_dense, _ = moe_configs
 

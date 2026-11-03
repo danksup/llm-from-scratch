@@ -1,5 +1,5 @@
 import copy
-from typing import Any, Literal, overload
+from typing import Any
 
 import engine.attention as attn
 from engine.ffn import FFN
@@ -15,7 +15,6 @@ from engine.transformer_block import TransformerBlock
 from helper.logger import Logger
 from helper.validate_and_raise import validate_choice
 from helper.singleton import sleep
-import time
 
 optimizers = optim.Adam | optim.AdamW | optim.SGD
 
@@ -229,10 +228,25 @@ class Transformer:
         total_dense += self.rmsnorm_final.gamma.size
         return total, total_dense
 
-    def forward(self, inputs:Any, doc_id:Any=None,*, return_cache= True, is_training=True) -> Any:
-        '''
-        inputs = list of inputs
-        '''
+    @staticmethod
+    def compute_mask(attn_str, block, T):
+        if attn_str == "chunked":
+            chunk_size = block.attention.chunk_size
+            chunk_size = min(chunk_size, T-1)
+            remainder = (chunk_size - (T % chunk_size)) % chunk_size
+            n_chunk = (T + remainder) // chunk_size
+            if block.causal_mask is None or block.causal_mask.shape != (n_chunk, chunk_size, 2 * chunk_size):
+                block.causal_mask = block.attention.compute_mask(chunk_size,T)
+        elif attn_str == "full":
+            if block.causal_mask is None or block.causal_mask.shape != (T, T):
+                block.causal_mask = block.attention.compute_mask(T)
+        elif attn_str == "swa":
+            W = block.attention.W
+            W = min(W, T-1)
+            if block.causal_mask is None or block.causal_mask.shape != (T, W + 1):
+                block.causal_mask = block.attention.compute_mask(T)
+
+    def forward(self, inputs:Any, doc_id:Any=None,*, is_training=True) -> Any:
         output = inputs.astype(self.dtype)
         all_masks = []
         all_caches = []
@@ -240,35 +254,21 @@ class Transformer:
         histograms = [None for _ in range(len(self.blocks))]
         for idx, block in enumerate(self.blocks):
             try:
-                output = output.astype(self.dtype)
                 B,T,_ = output.shape
                 epsilon = block.rmsnorm1.epsilon
                 gamma1 = block.rmsnorm1.gamma
                 gamma2 = block.rmsnorm2.gamma
 
                 P = nx.array(0.1, dtype=self.dtype)
+
                 attn_str = block.attention.self_type()
 
-                if attn_str == "chunked":
-                    chunk_size = block.attention.chunk_size
-                    chunk_size = min(chunk_size, T-1)
-                    remainder = (chunk_size - (T % chunk_size)) % chunk_size
-                    n_chunk = (T + remainder) // chunk_size
-                    if block.causal_mask is None or block.causal_mask.shape != (n_chunk, chunk_size, 2 * chunk_size):
-                        block.causal_mask = block.attention.compute_mask(T)
-                elif attn_str == "full":
-                    if block.causal_mask is None or block.causal_mask.shape != (T, T):
-                        block.causal_mask = block.attention.compute_mask(T)
-                elif attn_str == "swa":
-                    W = block.attention.W
-                    W = min(W, T-1)
-                    if block.causal_mask is None or block.causal_mask.shape != (T, W + 1):
-                        block.causal_mask = block.attention.compute_mask(T)
+                self.compute_mask(attn_str, block, T)
 
                 attn_params = block.attention.Wqkv, block.attention.Wo, block.attention.Q_norm.gamma, block.attention.K_norm.gamma
-                ff_params = block.ff.Wcombined, block.ff.Wout, block.ff.router, block.ff.W_dense_combined, block.ff.W_dense_out, block.ff.router_bias
-                scales = (block.attention.scales + block.attention.biases, block.ff.scales + block.ff.biases)
-                ff_out ,masks, caches, z_loss, normalized_histogram = block._forward(output, block.causal_mask,doc_id, attn_str ,block.attention.configs, attn_params, block.ff.configs, ff_params, epsilon, gamma1, gamma2, P, is_training, scales, recompute_activation=self.recompute_activation)
+                ff_params = block.ff.router, block.ff.Wcombined, block.ff.Wout, block.ff.W_dense_combined, block.ff.W_dense_out, block.ff.router_bias
+                quants = (block.attention.scales + block.attention.biases, block.ff.scales + block.ff.biases)
+                ff_out ,masks, caches, z_loss, normalized_histogram = block._forward(output, block.causal_mask,doc_id, attn_str ,block.attention.configs, attn_params, block.ff.configs, ff_params, epsilon, gamma1, gamma2, P, is_training, quants, recompute_activation=self.recompute_activation)
                 total_z_loss += z_loss
                 output = ff_out
                 all_masks.append(masks)
@@ -290,19 +290,16 @@ class Transformer:
         else:
             scores = rmsnorm_out.astype(self.dtype) @ self.embedding.lookup_table.T # B,T,V
 
-        if return_cache:
-            all_caches += rms_cache,
-            return scores, rmsnorm_out, all_masks, all_caches, total_z_loss, histograms
-        return scores, total_z_loss
+        # if return_cache:
+        all_caches += rms_cache,
+        return scores, rmsnorm_out, all_masks, all_caches, total_z_loss, histograms, last_output
+        # return scores, total_z_loss
 
-    def backward(self, err_signal:Any,  all_masks, all_caches:list, doc_id) -> Any:
-        '''
-        Args:
-            traces error contribution and then optimize
-        '''
+    def backward(self, err_signal:Any,  all_masks, all_caches:list, doc_id, total_dh) -> Any:
         current_grad = err_signal
         rmsnorm_final_cache = all_caches.pop()
         current_grad, rmsnorm_final_d_gamma = self.rmsnorm_final._backward(current_grad, rmsnorm_final_cache, self.rmsnorm_final.gamma)
+        current_grad[:,:-1] += total_dh
         self.rmsnorm_final.d_gamma = rmsnorm_final_d_gamma if getattr(self.rmsnorm_final, "d_gamma", None) is None else self.rmsnorm_final.d_gamma + rmsnorm_final_d_gamma
         for block, masks,caches in zip(self.blocks[::-1], all_masks[::-1],all_caches[::-1]):
             current_grad = current_grad.astype(self.dtype)
@@ -312,7 +309,7 @@ class Transformer:
             ff_configs = block.ff.configs
             P = nx.array(0.1, dtype=self.dtype)
 
-            ff_params = (block.ff.router, block.ff.Wout, block.ff.Wcombined, block.ff.W_dense_combined, block.ff.W_dense_out, block.ff.router_bias)
+            ff_params = (block.ff.router,block.ff.Wcombined, block.ff.Wout,  block.ff.W_dense_combined, block.ff.W_dense_out, block.ff.router_bias)
             attn_str = block.attention.self_type()
             attn_configs = block.attention.configs
             attn_params = block.attention.Wqkv, block.attention.Wo, block.attention.Q_norm.gamma, block.attention.K_norm.gamma
@@ -342,20 +339,44 @@ class Transformer:
 
         return current_grad
 
+    def mtp_forward(self, input, next_tokens, doc_id, *, is_training=True):
+        output = input.astype(self.dtype)
+        all_caches = []
+        B,T,D = input.shape
+        for mtp in self.mtp_blocks:
+            attn_type = mtp.transformer_block.attention.self_type()
+            self.compute_mask(attn_type, mtp.transformer_block, T)
+            params, configs, quants, causal_mask, epsilon = mtp.get_things()
+            rmsnorm2_out, caches = MTPBlock.forward(output, next_tokens, params, configs, attn_type, causal_mask, doc_id, epsilon, quants, is_training=is_training, recompute_activation=self.recompute_activation)
+            output = rmsnorm2_out
+            all_caches.append(caches)
+        return output, all_caches
+
+    def mtp_backward(self, gradient, all_caches):
+        dh = gradient
+        de = None
+        for mtp,caches in zip(self.mtp_blocks[::-1], all_caches[::-1]):
+            attn_type = mtp.transformer_block.attention.self_type()
+            params, configs, quants, causal_mask, epsilon = mtp.get_things()
+            dh, de, dWproj, d_gamma1, d_gamma2, tblock_grads = MTPBlock.backward(dh, caches, params, configs, attn_type, self.gradient_scale, quants, recompute_activation=self.recompute_activation)
+            mtp.set_gradient(dwproj = dWproj, d_gamma1=d_gamma1, d_gamma2=d_gamma2, **tblock_grads)
+
+        return dh,de
+        
     def eval_networks(self, others:list|None = None, include_gradients:bool=True, optimizer:optimizers|None=None):
         to_eval = []
         if others is not None:
             to_eval.extend(others)
 
-        for layer_obj, param_name, _ in self.get_weights():
-            weight_obj = getattr(layer_obj, param_name)
+        for layer_obj, w_param_name, dw_param_name, _, _ in self.get_parameters():
+            weight_obj = getattr(layer_obj, w_param_name)
             to_eval.append(weight_obj)
+            if include_gradients:
+                if dw_param_name is not None:
+                    dweight_obj = getattr(layer_obj, dw_param_name)
+                    to_eval.append(dweight_obj)
 
-        if include_gradients:
-            for layer_obj, param_name,_ in self.get_gradients():
-                dweight_obj = getattr(layer_obj, param_name)
-                to_eval.append(dweight_obj)
-        else:
+        if not include_gradients:
             if optimizer is not None:
                 to_eval.append(optimizer.lr)
                 if hasattr(optimizer, "state"):
@@ -370,89 +391,79 @@ class Transformer:
         for i, block in enumerate(iterable):
             prefix_ = i if prefix is None else prefix
             for layer_i, layer in enumerate(layers):
-                layer_obj = getattr(block, layer)
-                for param_name in params[layer_i]:
-                    if isinstance(param_name, list):
-                        attr, param_name_list = param_name
-                        layer_obj_list = getattr(layer_obj, attr, None)
-                        if layer_obj_list is not None:
-                            if getattr(layer_obj_list, param_name_list, None) is not None:
-                                yield layer_obj_list, param_name_list, f"{prefix_}.{layer}.{attr}.{param_name_list}"
-                    else:
-                        if getattr(layer_obj, param_name, None) is not None:
-                                yield layer_obj, param_name, f"{prefix_}.{layer}.{param_name}"
+                layer_obj = getattr(block, layer, None)
+                if layer_obj is not None:
+                    for param_name in params[layer_i]:
+                        if len(param_name) == 2:
+                            w,dw = param_name 
+                            w_ = getattr(layer_obj, w, None)
+                            dw_full_str = None if dw is None else f"{prefix_}.{layer}.{dw}"
+                            if w_ is not None:
+                                yield layer_obj, w, dw,f"{prefix_}.{layer}.{w}", dw_full_str
 
-    def get_mtp_things(self, get_gradient=False):
+                        elif len(param_name) == 3:
+                            sublayer, w, dw = param_name
+                            subobj = getattr(layer_obj, sublayer, None)
+                            if subobj is not None:
+                                w_ = getattr(subobj, w, None)
+                                dw_full_str = None if dw is None else f"{prefix_}.{layer}.{sublayer}.{dw}"
+                                if w_ is not None:
+                                    yield subobj, w, dw, f"{prefix_}.{layer}.{sublayer}.{w}", dw_full_str
+                  
+    def get_mtp_things(self):
         upper = [None, None, None , "transformer_block"]
         middle = [None, "rmsnorm1", "rmsnorm2", ["ff", "attention", "rmsnorm1", "rmsnorm2"]]
-        if not get_gradient:
-            lower = ["Wproj", "gamma", "gamma",[["router","router_bias", "Wcombined", "Wout", "W_dense_combined", "W_dense_out"],[ "Wqkv", "Wo", ["Q_norm", "gamma"], ["K_norm", "gamma"]],[ "gamma"],[ "gamma"]]]
-        else:
-            lower = ["dWproj", "d_gamma", "d_gamma",[["d_router", "dWcombined","dWout", "dW_dense_combined", "dW_dense_out"], ["dWo", "dWqkv", ["K_norm", "d_gamma"], ["Q_norm", "d_gamma"]],[ "d_gamma"],["d_gamma"]]]
+        lower = [("Wproj", "dWproj"), ("gamma", "d_gamma"), ("gamma", "d_gamma"), [[("router", "d_router"), ("router_bias", None), ("Wcombined", "dWcombined"), ("Wout", "dWout"), ("W_dense_combined", "dW_dense_combined"), ("W_dense_out", "dW_dense_out")], [("Wqkv", "dWqkv"), ("Wo", "dWo"), ("Q_norm", "gamma", "d_gamma"), ("K_norm", "gamma", "d_gamma")], [("gamma", "d_gamma")], [("gamma", "d_gamma")]]]
 
         for i, mtp in enumerate(self.mtp_blocks):
             for idx, thing in enumerate(upper):
                 layer = middle[idx]
                 param = lower[idx]
                 if thing is None:
+                    param_w = param[0]
+                    param_dw = param[1]
                     if layer is None:
-                        param_ = getattr(mtp, param, None)
+                        param_ = getattr(mtp, param_w, None)
                         if param_ is not None:
-                            yield mtp, param, f"mtp.{i}.{param}"
-
+                            yield mtp, param_w, param_dw, f"mtp.{i}.{param_w}", f"mtp.{i}.{param_dw}"
                     else:
                         layer_ = getattr(mtp, layer, None)
                         if layer_ is not None:
-                            param_ = getattr(layer_, param, None)
+                            param_ = getattr(layer_, param_w, None)
                             if param_ is not None:
-                                yield layer_, param, f"mtp.{i}.{layer}.{param}"
+                                yield layer_, param_w, param_dw, f"mtp.{i}.{layer}.{param_w}", f"mtp.{i}.{layer}.{param_dw}"
                 else:
-                    for a,b,c in self.get_block_weights(layer, param, [mtp.transformer_block], f"mtp.{i}.transformer_block"):
-                        yield a,b,c
+                    for a,b,c,d,e in self.get_block_weights(layer, param, iterable=[mtp.transformer_block], prefix=f"mtp.{i}.transformer_block"):
+                        yield a,b,c,d,e
                 
 
-    def get_weights(self, *, block_only:bool=False, include_mtp=True):
+    def get_parameters(self, *, block_only:bool=False, include_mtp=True):
         if not block_only:
             if getattr(self.embedding, "lookup_table", None) is not None:
-                yield self.embedding, "lookup_table", "embedding.lookup_table"
+                yield self.embedding, "lookup_table", "d_lookup_table", "embedding.lookup_table", "embedding.d_lookup_table"
 
             if getattr(self.rmsnorm_final, "gamma", None) is not None:
-                yield self.rmsnorm_final, "gamma", "rmsnorm_final.gamma"
+                yield self.rmsnorm_final, "gamma","d_gamma", "rmsnorm_final.gamma","rmsnorm_final.d_gamma"
 
         layers = ["ff", "attention", "rmsnorm1", "rmsnorm2"]
-        weights = [["router","router_bias", "Wcombined", "Wout", "W_dense_combined", "W_dense_out"],[ "Wqkv", "Wo", ["Q_norm", "gamma"], ["K_norm", "gamma"]],[ "gamma"],[ "gamma"]]
-        for a,b,c in self.get_block_weights(layers, weights):
-            yield a,b,c
+        params = [[("router", "d_router"),("router_bias", None),("Wcombined", "dWcombined"),("Wout", "dWout"),("W_dense_combined", "dW_dense_combined"),("W_dense_out", "dW_dense_out"),],[("Wqkv", "dWqkv"),("Wo", "dWo"),("Q_norm", "gamma", "d_gamma"),("K_norm", "gamma", "d_gamma"),],[("gamma", "d_gamma"),],[("gamma", "d_gamma"),],]
+        for a,b,c,d,e in self.get_block_weights(layers, params):
+            yield a,b,c,d,e
 
         if include_mtp:
-            for a,b,c in self.get_mtp_things():
-                yield a,b,c
-
-    def get_gradients(self, include_mtp=True):
-        if getattr(self.embedding, "d_lookup_table", None) is not None:
-            yield self.embedding, "d_lookup_table", "embedding.d_lookup_table"
-
-        if getattr(self.rmsnorm_final, "d_gamma", None) is not None:
-            yield self.rmsnorm_final, "d_gamma", "rmsnorm_final.d_gamma"
-
-        layers = ["ff", "attention", "rmsnorm1", "rmsnorm2"]
-        dweights = [["d_router", "dWcombined","dWout", "dW_dense_combined", "dW_dense_out"], ["dWo", "dWqkv", ["K_norm", "d_gamma"], ["Q_norm", "d_gamma"]],[ "d_gamma"],["d_gamma"]]
-        for a,b,c in self.get_block_weights(layers, dweights): 
-            yield a,b,c
-
-        if include_mtp:
-            for a,b,c in self.get_mtp_things(get_gradient=True):
-                yield a,b,c
+            for a,b,c,d,e in self.get_mtp_things():
+                yield a,b,c,d,e
 
     def gradient_clipping_factor(self, microbatch_size, max_norm=nx.float_32(0.5)):
         summed = nx.array(0, nx.float32)
 
-        for layer, param_name, _ in self.get_gradients(): 
-            param = getattr(layer, param_name) 
-            if param_name == "d_lookup_table":
-                summed += nx.sum(nx.square(param.astype(nx.float32) / microbatch_size))
-            else:
-                summed += nx.sum(nx.square(param.astype(nx.float32) / self.gradient_scale / microbatch_size))
+        for layer, _, dw, _,_ in self.get_parameters(): 
+            if dw is not None:
+                param = getattr(layer, dw) 
+                if dw == "d_lookup_table":
+                    summed += nx.sum(nx.square(param.astype(nx.float32) / microbatch_size))
+                else:
+                    summed += nx.sum(nx.square(param.astype(nx.float32) / self.gradient_scale / microbatch_size))
 
         l2_norm = nx.sqrt(summed)
         raw_scale = max_norm / (l2_norm + nx.float_32(1e-6))
@@ -478,33 +489,40 @@ class Transformer:
                         failures["-"].append(f"{weight}")
                         non_finite = True
 
-        weights = self.get_weights()
-        for layer_obj, param_name, name in weights:
-            weight = getattr(layer_obj, param_name)
-            if not nx.isfinite(weight).all():
-                non_finite = True
-                block_i = name.split(".")[0]
-                try:
-                    block_i = int(block_i)
-                    failures[block_i].append(name)
-                except ValueError:
-                    failures["-"].append(name)
+        parameters = self.get_parameters()
+        for layer_obj, w_param_name, d_param_name, w_name, dw_name in parameters:
+            weight = getattr(layer_obj, w_param_name)
+            if d_param_name is not None:
+                d_weight = getattr(layer_obj, d_param_name)
 
-        gradients = self.get_gradients()
-        for layer_obj, param_name,name  in gradients:
-            gradient = getattr(layer_obj, param_name)
-            if not nx.isfinite(gradient).all():
-                non_finite = True
-                block_i = name.split(".")[0]
-                try:
-                    block_i = int(block_i)
-                    failures[block_i].append(name)
-                except ValueError:
-                    failures["-"].append(name)
+                is_w_finite = nx.isfinite(weight).all()
+                is_d_finite = nx.isfinite(d_weight).all() #im confused cus it could be none (from routerbias)
+                if not is_w_finite or not is_d_finite:
+                    non_finite = True
+                    block_i = w_name.split(".")[0]
+                    try:
+                        block_i = int(block_i)
+                        failures[block_i].append(w_name)
+                        if not is_d_finite:
+                            failures[block_i].append(dw_name)
+                    except ValueError:
+                        failures["-"].append(w_name)
+                        if not is_d_finite:
+                            failures["-"].append(dw_name)
 
         for key, val in failures.items():
             texts += f"block_{key}: {val}"
         return non_finite, texts
+
+    def zeroes_gradient(self):
+        for block in self.blocks:
+            block.zeroes_gradient()
+
+        for mtp in self.mtp_blocks:
+            mtp.zeroes_gradient()
+
+        self.rmsnorm_final.zeroes_gradient()
+        self.embedding.zeroes_gradient()
 
     def train(self, dataloader:DataLoader, optimizer:optimizers, total_epoch:int, max_step:int=50000, eval_every:int=5, microbatch_size:int=16):
         total_loss = nx.float_32(0.0)
@@ -539,7 +557,29 @@ class Transformer:
                 break
 
             embedded = self.embedding.forward(contexts)  # shape (batch, context_size, embed_dim)
-            batch_scores, last_output, all_masks, all_caches, total_aux_loss, histograms = self.forward(embedded, doc_id)
+            batch_scores, last_output, all_masks, all_caches, total_z_loss, histograms, unnormalized_output = self.forward(embedded, doc_id)
+
+            next_tokens_embedded = self.embedding.forward(next_tokens[:, :-1])
+            
+            doc_id_sliced = doc_id[:, :-1] if doc_id is not None else doc_id
+
+            mtp_loss = 0
+            total_dh = 0
+            
+            if self.mtp_blocks:
+                lookup_table = self.embedding.lookup_table
+
+                mtp_output, mtp_caches  = self.mtp_forward(unnormalized_output[:, :-1], next_tokens_embedded, doc_id_sliced, is_training=True)
+                output_projected = nx.mul(mtp_output, lookup_table, scales=self.embedding.table_scale, biases=self.embedding.bias, transpose=True, quantized=self.quantized)
+                mtp_loss = cross_entropy(output_projected, next_tokens[:, 1:])
+                mtp_batch_gradient= cross_entropy_gradient(output_projected, next_tokens[:, 1:])
+                scale_factor = nx.array(self.gradient_scale / (mtp_batch_gradient.shape[0] * mtp_batch_gradient.shape[1]), self.dtype)
+                scaled_batch_gradient = mtp_batch_gradient * scale_factor
+                mtp_batch_gradient= scaled_batch_gradient.astype(self.dtype)
+                mtp_block_gradient = nx.mul(mtp_batch_gradient, lookup_table, scales=self.embedding.table_scale, biases=self.embedding.bias, quantized=self.quantized)
+                dh,de = self.mtp_backward(mtp_block_gradient, mtp_caches)
+                total_dh += dh
+                self.embedding.d_lookup_table = nx.add_at(self.embedding.d_lookup_table, next_tokens[:, :-1], de/self.gradient_scale)
 
             if total_histograms is None:
                 total_histograms = histograms
@@ -549,7 +589,7 @@ class Transformer:
                         total_histograms[i] += histograms[i]
 
             loss = cross_entropy(batch_scores, next_tokens)
-            loss = nx.mean(loss)  + total_aux_loss
+            loss = nx.mean(loss)  + total_z_loss + nx.mean(mtp_loss)
 
             batch_gradient = cross_entropy_gradient(batch_scores, next_tokens)
             scale_factor = nx.array(self.gradient_scale / (batch_gradient.shape[0] * batch_gradient.shape[1]), nx.float16)
@@ -571,7 +611,7 @@ class Transformer:
             d_table = batch_gradient.reshape(-1, self.vocab_size).T @ last_output.reshape(-1, self.embed_dim)
             d_table = d_table.astype(nx.float32) / self.gradient_scale
 
-            current_grad = self.backward(block_gradient, all_masks, all_caches, doc_id)
+            current_grad = self.backward(block_gradient, all_masks, all_caches, doc_id, total_dh)
             current_grad = current_grad.astype(nx.float32) / self.gradient_scale
 
             embedding_gradient = nx.zeros_like(lookup_table, dtype=nx.float32)
@@ -620,144 +660,46 @@ class Transformer:
                 all_network_params = []
                 gscale = self.gradient_clipping_factor(microbatch_size)
 
-                for i,block in enumerate(self.blocks):
-                    
-                    dWqkv = block.attention.dWqkv.astype(nx.float32) / self.gradient_scale / microbatch_size * gscale
-                    dWo = block.attention.dWo.astype(nx.float32) / self.gradient_scale / microbatch_size * gscale
-                    Q_norm_d_gamma = block.attention.Q_norm.d_gamma.astype(nx.float32) / self.gradient_scale / microbatch_size * gscale
-                    K_norm_d_gamma = block.attention.K_norm.d_gamma.astype(nx.float32) / self.gradient_scale / microbatch_size * gscale
-                    d_gamma1 = block.rmsnorm1.d_gamma.astype(nx.float32) / self.gradient_scale / microbatch_size* gscale
-                    d_gamma2 = block.rmsnorm2.d_gamma.astype(nx.float32) / self.gradient_scale / microbatch_size* gscale
+                for obj, w, dw, full_w_name, _ in self.get_parameters():
+                    if dw is not None:
+                        w_ = getattr(obj, w)
+                        if w == "lookup_table":
+                            dw_ = getattr(obj, dw).astype(nx.float32) /  microbatch_size * gscale
+                        else:
+                            dw_ = getattr(obj, dw).astype(nx.float32) / self.gradient_scale / microbatch_size * gscale
 
-                    if self.quantized:
-                        Wqkv = nx.dequantize(block.attention.Wqkv, block.attention.scales[0], block.attention.biases[0], )
-                        Wo = nx.dequantize(block.attention.Wo, block.attention.scales[1], block.attention.biases[1])
+                        decay = True
+                        if w in ["lookup_table", "gamma", "router"]:
+                            decay = False
 
-                        if block.ff.n_experts > 0:                   
-                            Wcombined = nx.dequantize(block.ff.Wcombined, block.ff.scales[0], block.ff.biases[0])
-                            Wout = nx.dequantize(block.ff.Wout, block.ff.scales[1], block.ff.biases[1])
+                        if self.quantized and w not in ["gamma", "router"]:
+                            quants = obj.get_quants(name=w) #type:ignore
+                            w_ = nx.dequantize(w_, scales=quants[0], biases=quants[1])
 
-                        if block.ff.n_dense > 0:
-                            W_dense_combined = nx.dequantize(block.ff.W_dense_combined, block.ff.scales[2], block.ff.biases[2])
-                            W_dense_out  = nx.dequantize(block.ff.W_dense_out, block.ff.scales[3], block.ff.biases[3])
-                    else:
-                        Wqkv = block.attention.Wqkv.astype(nx.float32)
-                        Wo = block.attention.Wo.astype(nx.float32)
-
-                    all_network_params.extend(
-                        [(f"Wqkv_{i}", Wqkv, dWqkv, True),
-                        (f"Wo_{i}", Wo, dWo, True),
-                        (f"Q_norm_gamma_{i}", block.attention.Q_norm.gamma, Q_norm_d_gamma, False),
-                        (f"K_norm_gamma_{i}", block.attention.K_norm.gamma, K_norm_d_gamma, False),
-                        (f"rmsnorm1_gamma_{i}", block.rmsnorm1.gamma.astype(nx.float32), d_gamma1, False),
-                        (f"rmsnorm2_gamma_{i}", block.rmsnorm2.gamma.astype(nx.float32), d_gamma2, False)])
-                    
-                    if block.ff.n_experts > 0:
-                        dWcombined = block.ff.dWcombined.astype(nx.float32) / self.gradient_scale / microbatch_size * gscale
-                        dWout = block.ff.dWout.astype(nx.float32) / self.gradient_scale / microbatch_size * gscale
-                        d_router = block.ff.d_router.astype(nx.float32) / self.gradient_scale / microbatch_size * gscale
-                        
-                        Wcombined = block.ff.Wcombined.astype(nx.float32)
-                        Wout = block.ff.Wout.astype(nx.float32)
-                        all_network_params.extend(
-                        [(f"ff_wcombined_{i}", Wcombined,dWcombined, True),
-                        (f"ff_wout_{i}", Wout, dWout, True),
-                        (f"ff_router_{i}", block.ff.router.astype(nx.float32), d_router, True),])
-
-                        del  Wcombined, Wout, dWcombined, dWout, d_router
-                    
-                    if block.ff.n_dense > 0:
-                        dW_dense_combined = block.ff.dW_dense_combined.astype(nx.float32) / self.gradient_scale / microbatch_size * gscale
-                        dW_dense_out = block.ff.dW_dense_out.astype(nx.float32) / self.gradient_scale / microbatch_size * gscale
-                        W_dense_combined = block.ff.W_dense_combined.astype(nx.float32)
-                        W_dense_out = block.ff.W_dense_out.astype(nx.float32)
-                        all_network_params.extend(
-                        [(f"ff_W_dense_combined_{i}", W_dense_combined, dW_dense_combined, True),
-                        (f"ff_W_dense_out_{i}", W_dense_out, dW_dense_out, True)])
-
-                        del W_dense_combined, W_dense_out, dW_dense_combined, dW_dense_out
-
-                    del Wqkv, Wo
-                    del dWqkv, dWo,  d_gamma1, d_gamma2
-                    block.zeroes_gradient()
-
-                if self.quantized:
-                    lookup_table = nx.dequantize(lookup_table, self.embedding.table_scale, self.embedding.bias)
-                else:
-                    lookup_table = self.embedding.lookup_table.astype(nx.float32)
-                all_network_params.extend([("embedding",lookup_table, self.embedding.d_lookup_table / microbatch_size * gscale, False)])
-                del lookup_table
-                self.embedding.zeroes_gradient()
-
-                if getattr(self.rmsnorm_final, "d_gamma", None) is not None:
-                    d_gamma = self.rmsnorm_final.d_gamma.astype(nx.float32) / self.gradient_scale / microbatch_size * gscale #type:ignore
-                    all_network_params.extend([("rmsnorm_final", self.rmsnorm_final.gamma.astype(nx.float32), d_gamma, False)])
-                    del d_gamma
-                    self.rmsnorm_final.zeroes_gradient()
+                        all_network_params.append((full_w_name, w_.astype(nx.float32), dw_, decay)) #type:ignore
 
                 optimized = optimizer.step_many(all_network_params, max_step, total_epoch)
                 del all_network_params
 
-                for i,block in enumerate(self.blocks):
-                    if self.quantized:
-                        Wqkv = optimized[f"Wqkv_{i}"]
-                        block.attention.Wqkv, wqkv_scale, wqkv_bias = nx.quantize(Wqkv)
-                        Wo = optimized[f"Wo_{i}"]
-                        block.attention.Wo, wo_scale, wo_bias = nx.quantize(Wo)
-                        block.attention.scales = (wqkv_scale, wo_scale)
-                        block.attention.biases = (wqkv_bias, wo_bias)
+                for obj, w, dw, full_w_name, _ in self.get_parameters():
+                    if dw is not None:
+                        new_param = optimized[full_w_name]
 
-                        if block.ff.n_experts > 0:
-                            Wcombined = optimized[f"ff_wcombined_{i}"]
-                            block.ff.Wcombined, wcombined_scale, wcombined_bias = nx.quantize(Wcombined)
-
-                            Wout = optimized[f"ff_wout_{i}"]
-                            block.ff.Wout, wout_scale, wout_bias = nx.quantize(Wout)
-
-                            block.ff.scales = (wcombined_scale, wout_scale, block.ff.scales[2], block.ff.scales[3])
-                            block.ff.biases = (wcombined_bias, wout_bias, block.ff.biases[2], block.ff.biases[3])
-                            del wout_scale,wout_bias,
-                        if block.ff.n_dense > 0:
-                            W_dense_combined = optimized[f"ff_W_dense_combined_{i}"]
-                            block.ff.W_dense_combined, W_dense_combined_scale, W_dense_combined_bias = nx.quantize(W_dense_combined)
-
-                            W_dense_out = optimized[f"ff_W_dense_out_{i}"]
-                            block.ff.W_dense_out, W_dense_out_scale, W_dense_out_bias = nx.quantize(W_dense_out)
-                            
-                            block.ff.scales = (block.ff.scales[0], block.ff.scales[1], W_dense_combined_scale, W_dense_out_scale)
-                            block.ff.biases = (block.ff.biases[0], block.ff.biases[1], W_dense_combined_bias, W_dense_out_bias)
-
-                        del Wqkv,Wo,wqkv_scale,wqkv_bias,wo_scale,wo_bias
-                    else:
-                        block.attention.Wqkv = optimized[f"Wqkv_{i}"].astype(self.dtype)
-                        block.attention.Wo = optimized[f"Wo_{i}"].astype(self.dtype)
-
-                        if block.ff.n_experts > 0:
-                            block.ff.router = optimized[f"ff_router_{i}"]
-                            block.ff.Wcombined = optimized[f"ff_wcombined_{i}"].astype(self.dtype)
-                            block.ff.Wout = optimized[f"ff_wout_{i}"].astype(self.dtype)
-
-                        if block.ff.n_dense > 0:
-                            block.ff.W_dense_combined = optimized[f"ff_W_dense_combined_{i}"].astype(self.dtype)
-                            block.ff.W_dense_out = optimized[f"ff_W_dense_out_{i}"].astype(self.dtype)
-
-                    block.rmsnorm1.gamma = optimized[f"rmsnorm1_gamma_{i}"]
-                    block.rmsnorm2.gamma = optimized[f"rmsnorm2_gamma_{i}"]
-                    block.attention.Q_norm.gamma = optimized[f"Q_norm_gamma_{i}"]
-                    block.attention.K_norm.gamma = optimized[f"K_norm_gamma_{i}"]
-
-                if self.quantized:
-                    embedding = optimized[f"embedding"]
-                    self.embedding.lookup_table, self.embedding.table_scale, self.embedding.bias = nx.quantize(embedding)
-                    del embedding
-                else:
-                    self.embedding.lookup_table = optimized["embedding"].astype(self.dtype)
-
-                self.rmsnorm_final.gamma = optimized["rmsnorm_final"]
+                        exc = ["router", "gamma"]
+                        if self.quantized and w not in exc:
+                            new_param, new_scale, new_bias = nx.quantize(new_param)
+                            obj.set_quants(scale=new_scale, bias=new_bias, name=w) #type:ignore
+                            setattr(obj, w, new_param)
+                        else:
+                            if w in exc:
+                                setattr(obj, w, new_param.astype(nx.float32))
+                            else:
+                                setattr(obj, w, new_param.astype(dtype=self.dtype))
+                
                 del optimized
+                self.zeroes_gradient()
                 step += 1
 
-                #TODO: fix this hardcoding
                 clean_step += 1
                 if clean_step > 0 and clean_step % 1000 == 0:
                     self.gradient_scale = min(self.gradient_scale * 2, self.max_gradient_scale)
@@ -789,7 +731,7 @@ class Transformer:
 
             doc_id = nx.cumsum(contexts == 2, axis=-1) if self.doc_id else None #B,T
 
-            batch_validation_scores, total_z_loss = self.forward(embedded,doc_id=doc_id, return_cache=False, is_training=False)
+            batch_validation_scores, _, _, _, total_z_loss, _, _ = self.forward(embedded,doc_id=doc_id, is_training=False)
 
             val_loss = cross_entropy(batch_validation_scores, next_tokens)
             val_loss = nx.mean(val_loss)  + total_z_loss
@@ -867,8 +809,8 @@ class Transformer:
 
     def get_all_weights(self) ->  dict[str,nx.ArrayLike]:
         all_weights = {}
-        weights = self.get_weights(block_only=True)
-        for layer_obj, param_name, name in weights:
+        weights = self.get_parameters(block_only=True)
+        for layer_obj, param_name,_, name, _ in weights:
             weight = getattr(layer_obj, param_name)
             all_weights[name] = weight
 
@@ -887,7 +829,6 @@ class Transformer:
 
             for mtpblock in self.mtp_blocks:
                 mtpblock.quantize()
-
 
     def get_quant_params(self):
         quant_params = {}

@@ -44,7 +44,10 @@ class AttentionChunked:
         self.Q_norm = Q_norm
         self.K_norm = K_norm
 
-
+        self.quant_map = {
+            "Wqkv": 0,
+            "Wo": 1,
+        }
         if init:
             self.Wqkv = initializer(wqkv_shape, dtype=dtype)
             assert nx.isfinite(self.Wqkv).all(), f"non-finite detected when initializing attentipn.Wqkv."
@@ -65,6 +68,26 @@ class AttentionChunked:
     def zeroes_gradient(self):
         self.dWqkv = nx.zeros_like(self.dWqkv)
         self.dWo = nx.zeros_like(self.dWo)
+        self.Q_norm.zeroes_gradient()
+        self.K_norm.zeroes_gradient()
+
+    def set_gradient(self, dwqkv, dwo, Q_d_gamma, K_d_gamma):
+        self.dWqkv += dwqkv
+        self.dWo += dwo
+        self.Q_norm.set_gradient(Q_d_gamma)
+        self.K_norm.set_gradient(K_d_gamma)
+
+    def get_quants(self, name):
+        return self.scales[self.quant_map[name]], self.biases[self.quant_map[name]]
+    
+    def set_quants(self, name, scale, bias):
+        scale_list = list(self.scales)
+        scale_list[self.quant_map[name]] = scale
+        self.scales = tuple(scale_list)
+
+        bias_list = list(self.biases)
+        bias_list[self.quant_map[name]] = bias
+        self.biases = tuple(bias_list)
 
     @staticmethod
     def self_type() -> str:
@@ -320,8 +343,7 @@ class AttentionChunked:
 
         return output_projected, cached_k, cached_v
 
-    def compute_mask(self, T, dtype=nx.float16):
-        chunk_size = self.chunk_size
+    def compute_mask(self, chunk_size, T, dtype=nx.float16):
         remainder = (chunk_size - (T % chunk_size)) % chunk_size
         n_chunk = (T + remainder) // chunk_size
         mask_shape = n_chunk, chunk_size, 2 * chunk_size

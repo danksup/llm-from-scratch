@@ -72,10 +72,9 @@ logs:
 - lr warmup oct 29 2026
 - doc boundary masking oct 31 2026
 - moe aux loss free balancing nov 1 2026
+- multi token prediction nov 5 2026
   
 ## Ongoing:
-- multi token prediction
-- moe cleanup
 - optimizing/cleanup/docs
 
 ## TODO (not in order):

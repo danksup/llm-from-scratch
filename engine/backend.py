@@ -436,9 +436,11 @@ def random_choice(a:ArrayLike, *, p=None) -> Any:
     return rng.choice(a, p=p)
 
 def copy(a:Any) -> Any:
-    if backend == "MLX":
-        return array(a)
-    return a.copy()
+    if a is not None:
+        if backend == "MLX":
+            return array(a)
+        return a.copy()
+    return None
 
 def eval( *args):
     if backend == "MLX":
@@ -657,6 +659,11 @@ def mul(x,w,/, scales, biases, transpose:bool|tuple=False, quantized=False):
                 return x @ w.transpose(transpose)
         else:
             return x @ w
+
+def empty(shape):
+    if backend == 'NumPy':
+        return _nx.empty(shape)
+    return _nx.zeros(shape)
 
 def save_safetensors(file:Path, arrays:dict[str,ArrayLike], metadata:dict[str,str]|None=None):
     if backend == "MLX":

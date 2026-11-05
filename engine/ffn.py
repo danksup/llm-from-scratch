@@ -65,6 +65,15 @@ class FFN:
                     self.W_dense_out, dense_out_scale, dense_out_bias = nx.quantize(self.W_dense_out)
                     self.scales = (self.scales[0], self.scales[1], dense_combined_scale, dense_out_scale)
                     self.biases = (self.biases[0], self.biases[1], dense_combined_bias, dense_out_bias)
+        else:
+            if self.n_experts > 0:
+                self.router_bias = nx.empty(n_experts)
+                self.router = nx.empty(router_shape)
+                self.Wcombined = nx.empty(wcombined_shape)
+                self.Wout = nx.empty(wout_shape)
+            if n_dense > 0:
+                self.W_dense_combined = nx.empty(dense_combined_shape)
+                self.W_dense_out = nx.empty(dense_out_shape)
 
         if n_experts > 0:
             self.dWcombined = nx.zeros(wcombined_shape)
@@ -533,41 +542,20 @@ class FFN:
 
         return final_output
 
-    @classmethod
-    def from_weight(cls, configs, weights, quants, dtype) -> "FFN":
-        hidden_width, embed_dim, n_experts, capacity_factor, top_k, dense_hidden_width, n_dense_experts, jitter_eps = configs
-        router,router_bias, wcombined, wout,W_dense_combined,W_dense_out = weights
-
-        moe = cls(capacity_factor, top_k, n_experts, embed_dim, hidden_width, dense_hidden_width, n_dense_experts,jitter_eps, dtype, init=False)
-        moe.router = router
-        moe.router_bias = router_bias
-        moe.Wcombined = wcombined
-        moe.Wout = wout
-        moe.W_dense_combined = W_dense_combined
-        moe.W_dense_out = W_dense_out
-
-        if quants is not None:
-            scales, biases = quants
-            moe.scales = scales
-            moe.biases = biases
-
-        return moe
-
     def copy(self):
         moe_copy = FFN(self.cf, self.top_k, self.n_experts, self.embed_dim, self.hidden_width, self.dense_hidden_width, self.n_dense, self.jitter_eps,self.bias_gamma, dtype=self.dtype, quantized=self.quantized, init=False)
 
         if self.n_experts > 0:
             moe_copy.router = nx.copy(self.router)
-            moe_copy.router_bias = nx.copy(self.router_bias)
-            moe_copy.Wcombined = nx.copy(self.Wcombined)
+            moe_copy.router_bias = nx.copy(self.router_bias) 
+            moe_copy.Wcombined = nx.copy(self.Wcombined) 
             moe_copy.Wout = nx.copy(self.Wout)
             if self.quantized:
                 moe_copy.scales = (nx.copy(self.scales[0]), nx.copy(self.scales[1]), self.scales[2], self.scales[3])
                 moe_copy.biases = (nx.copy(self.biases[0]), nx.copy(self.biases[1]), self.biases[2], self.biases[3])
 
-
         if self.n_dense > 0:
-            moe_copy.W_dense_combined = nx.copy(self.W_dense_combined)
+            moe_copy.W_dense_combined = nx.copy(self.W_dense_combined) 
             moe_copy.W_dense_out = nx.copy(self.W_dense_out)
             if self.quantized:
                 moe_copy.scales = (self.scales[0], self.scales[1], nx.copy(self.scales[2]), nx.copy(self.scales[3]))

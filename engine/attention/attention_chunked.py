@@ -60,6 +60,9 @@ class AttentionChunked:
                 self.Wo, wo_scale, wo_bias = nx.quantize(self.Wo)
                 self.scales = (wqkv_scale, wo_scale)
                 self.biases = (wqkv_bias, wo_bias)
+        else:
+            self.Wqkv = nx.empty(wqkv_shape)
+            self.Wo = nx.empty(wo_shape)
 
 
         self.dWqkv = nx.zeros(wqkv_shape)
@@ -339,7 +342,7 @@ class AttentionChunked:
         if wo_scale is not None:
             output_projected = nx.quantized_matmul(output_concat, self.Wo, wo_scale, wo_bias) #BTD
         else:
-            output_projected = output_concat @ self.Wo
+            output_projected = output_concat @ self.Wo #type:ignore
 
         return output_projected, cached_k, cached_v
 
@@ -356,27 +359,6 @@ class AttentionChunked:
     @staticmethod
     def compute_mask_inference(T):
         return nx.triu(nx.ones((T, T), dtype=nx.bool_), k=1)
-
-    @classmethod
-    def from_weight(cls, configs, weights, quants,attn_QK_gamma, dtype) -> "AttentionChunked":
-        embed_dim, n_kv_heads, n_heads, _, _,chunk_size = configs
-        wqkv, wo = weights
-
-        Q_norm_gamma,Q_norm_configs, K_norm_gamma, K_norm_configs = attn_QK_gamma
-        Q_norm = RMSNorm.from_weight(Q_norm_configs, Q_norm_gamma)
-        K_norm = RMSNorm.from_weight(K_norm_configs, K_norm_gamma)
-
-
-        attn = cls(embed_dim, n_heads, Q_norm, K_norm, n_kv_heads,chunk_size,dtype, init=False)
-        attn.Wqkv = wqkv
-        attn.Wo = wo
-
-        if quants is not None:
-            scales, biases = quants
-            attn.scales = scales
-            attn.biases = biases
-
-        return attn
 
     def copy(self):
         Q_norm_copy = self.Q_norm.copy()

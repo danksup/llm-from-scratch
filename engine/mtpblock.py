@@ -22,6 +22,8 @@ class MTPBlock:
                 self.Wproj, proj_scale, proj_bias = nx.quantize(self.Wproj)
                 self.scale = proj_scale
                 self.bias = proj_bias
+        else:
+            self.Wproj = nx.empty(projection_shape)
 
         self.dWproj = nx.zeros(projection_shape, dtype=dtype)
 

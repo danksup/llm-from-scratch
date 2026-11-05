@@ -40,20 +40,21 @@ ATTN_TYPE = {
     "full": {"attn":attn.AttentionFull,},
 }
 
-ATTN_VARIANT = {
-    "gqa": {"attn_n_kv_heads":default_block_configs["attn_n_heads"]//2},
-    "mqa":{},
-    "mha":{}
-}
+ATTN_VARIANT = ["mqa", "gqa", "mha"]
 
 INITIALIZERS = {
     "glorot_normal": init.glorot_normal,
     "glorot_uniform": init.glorot_uniform
 }
 
+attn_extra = {
+    "chunked": {"chunk_size":256},
+    "full":{}
+}
+
 class Transformer:
     #TODO: bug when config isnt in dict
-    def __init__(self, configs: dict[str, Any] | None = None, blocks:list|None=None,mtp_blocks:list|None=None, *, embedding:bool|Embedding=False, rmsfinal:bool|RMSNorm=False):
+    def __init__(self, configs: dict[str, Any] | None = None, blocks:list|None=None,mtp_blocks:list|None=None, *, init=True):
         self.blocks = []
         self.mtp_blocks = []
         configs =  {} if configs is None else configs
@@ -73,22 +74,13 @@ class Transformer:
         self.quantized = configs.get("quantized", False)
         self.recompute_activation = configs.get("recompute_activation", True)
         self.doc_id = configs.get("doc_id", True)
-
+        self.mtp_lambda = configs.get("mtp_lambda", .5)
 
         self.check_non_finite = configs.get("check_non_finite", True)
         
-        if not isinstance(embedding, Embedding):
-            self.embedding = Embedding(self.vocab_size, self.embed_dim, self.dtype, self.quantized)
-        else:
-            self.embedding = embedding
-        if not isinstance(self.embedding, Embedding):
-            raise ValueError(",")
+        self.embedding = Embedding(self.vocab_size, self.embed_dim, self.dtype, self.quantized, init=init)
+        self.rmsnorm_final = RMSNorm(self.embed_dim, init=init)
 
-        if not isinstance(rmsfinal, RMSNorm):
-            self.rmsnorm_final = RMSNorm(self.embed_dim)
-        else:
-            self.rmsnorm_final = rmsfinal
-        
         self.gradient_scale = configs.get("gradient_scale", 4096)
         self.max_gradient_scale = self.gradient_scale
 
@@ -117,17 +109,12 @@ class Transformer:
                 attn_type_str = overrided["attn_type"]
                 validate_choice(attn_type_str, "attn_type", ATTN_TYPE)
 
-                overrided = overrided | ATTN_TYPE[overrided["attn_type"]] | ATTN_VARIANT[overrided["attn_variant"]] | this  | override
+                overrided = overrided | ATTN_TYPE[overrided["attn_type"]] | this  | override
                 overrided.pop('attn')
-
-                attn_type = ATTN_TYPE[attn_type_str]["attn"]
 
                 validate_choice(overrided["attn_init"], "attn_init", INITIALIZERS)
                 validate_choice(overrided["ff_init"], "ff_init", INITIALIZERS)
 
-                check = default_block_configs | ATTN_TYPE[this["attn_type"]] | ATTN_VARIANT[this["attn_variant"]] | ATTN_TYPE[overrided["attn_type"]] | ATTN_VARIANT[overrided["attn_variant"]]
-                for config in overrided:
-                    validate_choice(config, "block_overrides", check, f"[block {i}]")
                 self.individual_block_configs.append(overrided)
 
                 D = self.embed_dim
@@ -145,52 +132,42 @@ class Transformer:
                 if "attn_chunk_size" in override and override.get("attn_type", None) == "full":
                     raise ValueError(f"[block {i}] attention type of {attn_type_str} doesn't accept \"attn_chunk_size\"")
                 n_heads = overrided["attn_n_heads"]
-                attn = None
                 chunk_size = overrided.get("attn_chunk_size", None)
 
                 head_dim = D // n_heads
                 Q_norm = RMSNorm(head_dim)
                 K_norm = RMSNorm(head_dim)
-                match (attn_type_str, attn_variant):
-                    case ("chunked", "gqa"):
-                        n_kv_heads = overrided["attn_n_kv_heads"]
-                        attn = attn_type(embed_dim=D, n_heads=n_heads, Q_norm=Q_norm, K_norm=K_norm, n_kv_heads=n_kv_heads, chunk_size=chunk_size, dtype=self.dtype, initializer=attn_init, quantized=self.quantized)
-                    case ("chunked", "mha"):
-                        attn = attn_type.multihead(D, n_heads,chunk_size , self.dtype, attn_init, quantized=self.quantized, Q_norm=Q_norm, K_norm=K_norm,)
-                    case ("chunked", "mqa"):
-                        attn = attn_type.multiquery(D, n_heads, chunk_size, self.dtype, attn_init,quantized=self.quantized, Q_norm=Q_norm, K_norm=K_norm,)
-                    case ("chunked", invalid):
-                        raise ValueError(f"[block {i}] invalid variant of \"{invalid}\". valid variants: {", ".join(ATTN_VARIANT)}")
-                    case ("full", "gqa"):
-                        n_kv_heads = overrided["attn_n_kv_heads"]
-                        attn = attn_type(embed_dim=D, n_heads=n_heads, n_kv_heads=n_kv_heads,  dtype=self.dtype, initializer=attn_init,quantized=self.quantized, Q_norm=Q_norm, K_norm=K_norm,)
-                    case ("full", "mha"):
-                        attn = attn_type.multihead(embed_dim=D, n_heads=n_heads,  dtype=self.dtype, initializer=attn_init,quantized=self.quantized, Q_norm=Q_norm, K_norm=K_norm,)
-                    case ("full", "mqa"):
-                        attn = attn_type.multiquery(embed_dim=D, n_heads=n_heads,  dtype=self.dtype, initializer=attn_init,quantized=self.quantized, Q_norm=Q_norm, K_norm=K_norm,)
-                    case ("full", invalid):
-                        raise ValueError(f"[block {i}] invalid variant of \"{invalid}\". valid variants: {", ".join(ATTN_VARIANT)}")
-                    case _:
-                        raise ValueError(f"[block {i}] invalid variant of \"{attn_variant}\". valid variants: {", ".join(ATTN_VARIANT)}")
 
-                ff = FFN(CF, topk, E, D, H, ff_dense_hidden_width, ff_n_dense,ff_jitter_eps,ff_bias_gamma, dtype=self.dtype, initializer=ff_init, quantized=self.quantized)
-                rmsnorm1 = RMSNorm(D)
-                rmsnorm2 = RMSNorm(D)
+                if attn_variant == "mha":
+                    n_kv_heads = n_heads
+                elif attn_variant == "mqa":
+                    n_kv_heads = 1
+                else:
+                    n_kv_heads = overrided["attn_n_kv_heads"]
+
+                attn_type = ATTN_TYPE[attn_type_str]["attn"]
+
+                a = copy.deepcopy(attn_extra)
+                if attn_type_str == "chunked":
+                    a["chunked"]["chunk_size"] = chunk_size
+
+                attn = attn_type(embed_dim=D, n_heads=n_heads, Q_norm = Q_norm, K_norm=K_norm, n_kv_heads=n_kv_heads, dtype=self.dtype, initializer=attn_init, quantized=self.quantized, init=init, **a[attn_type_str])
+                ff = FFN(CF, topk, E, D, H, ff_dense_hidden_width, ff_n_dense,ff_jitter_eps,ff_bias_gamma, dtype=self.dtype, initializer=ff_init, quantized=self.quantized, init=init)
+                rmsnorm1 = RMSNorm(D, init=init)
+                rmsnorm2 = RMSNorm(D, init=init)
                 transformer_block = TransformerBlock(attn, ff, rmsnorm1, rmsnorm2)
                
                 self.blocks.append(transformer_block)
         else:
             self.blocks = blocks
-            if not self.blocks:
-                raise ValueError("this transformer doesnt have any block.")
 
         if mtp_blocks is None:
             n_mtp = configs.get("n_mtp", 1)
             for i in range(n_mtp):
                 last_block = self.blocks[-1].copy()
-                rmsnorm1 = RMSNorm(self.embed_dim)
-                rmsnorm2 = RMSNorm(self.embed_dim)
-                mtp = MTPBlock(self.embed_dim, last_block, rmsnorm1, rmsnorm2, dtype=self.dtype, quantized=self.quantized, init=True)
+                rmsnorm1 = RMSNorm(self.embed_dim, init=init)
+                rmsnorm2 = RMSNorm(self.embed_dim, init=init)
+                mtp = MTPBlock(self.embed_dim, last_block, rmsnorm1, rmsnorm2, dtype=self.dtype, quantized=self.quantized, init=init)
                 self.mtp_blocks.append(mtp)
         else:
             self.mtp_blocks = mtp_blocks
@@ -559,15 +536,12 @@ class Transformer:
             embedded = self.embedding.forward(contexts)  # shape (batch, context_size, embed_dim)
             batch_scores, last_output, all_masks, all_caches, total_z_loss, histograms, unnormalized_output = self.forward(embedded, doc_id)
 
-            next_tokens_embedded = self.embedding.forward(next_tokens[:, :-1])
-            
-            doc_id_sliced = doc_id[:, :-1] if doc_id is not None else doc_id
-
-            mtp_loss = 0
-            total_dh = 0
-            
+            mtp_loss = nx.array(0, nx.float32)
+            total_dh = nx.array(0, nx.float32)
             if self.mtp_blocks:
+                next_tokens_embedded = self.embedding.forward(next_tokens[:, :-1])
                 lookup_table = self.embedding.lookup_table
+                doc_id_sliced = doc_id[:, :-1] if doc_id is not None else doc_id
 
                 mtp_output, mtp_caches  = self.mtp_forward(unnormalized_output[:, :-1], next_tokens_embedded, doc_id_sliced, is_training=True)
                 output_projected = nx.mul(mtp_output, lookup_table, scales=self.embedding.table_scale, biases=self.embedding.bias, transpose=True, quantized=self.quantized)
@@ -589,7 +563,7 @@ class Transformer:
                         total_histograms[i] += histograms[i]
 
             loss = cross_entropy(batch_scores, next_tokens)
-            loss = nx.mean(loss)  + total_z_loss + nx.mean(mtp_loss)
+            loss = nx.mean(loss)  + total_z_loss + (nx.mean(mtp_loss) * self.mtp_lambda)
 
             batch_gradient = cross_entropy_gradient(batch_scores, next_tokens)
             scale_factor = nx.array(self.gradient_scale / (batch_gradient.shape[0] * batch_gradient.shape[1]), nx.float16)
@@ -715,11 +689,12 @@ class Transformer:
 
     def validate(self, dataloader:DataLoader, val_step:int|None=None):
         total_loss = nx.float_32(0.0)
+        total_mtp_loss = nx.float_32(0.0)
         count = 0
         step_counter = 0
 
         if not dataloader.validation_files:
-            return None
+            return None, None
 
         for contexts, next_tokens in dataloader.stream_batches(dataloader.validation_files):
             if isinstance(val_step, int) and step_counter >= val_step:
@@ -731,21 +706,32 @@ class Transformer:
 
             doc_id = nx.cumsum(contexts == 2, axis=-1) if self.doc_id else None #B,T
 
-            batch_validation_scores, _, _, _, total_z_loss, _, _ = self.forward(embedded,doc_id=doc_id, is_training=False)
-
+            batch_validation_scores, _, _, _, total_z_loss, _, unnormalized_output = self.forward(embedded,doc_id=doc_id, is_training=False)
             val_loss = cross_entropy(batch_validation_scores, next_tokens)
-            val_loss = nx.mean(val_loss)  + total_z_loss
+
+            mtp_loss = nx.array(0, nx.float32)
+            if self.mtp_blocks:
+                next_tokens_embedded = self.embedding.forward(next_tokens[:, :-1])
+                lookup_table = self.embedding.lookup_table
+                doc_id_sliced = doc_id[:, :-1] if doc_id is not None else doc_id
+                mtp_output, _  = self.mtp_forward(unnormalized_output[:, :-1], next_tokens_embedded, doc_id_sliced, is_training=False)
+                output_projected = nx.mul(mtp_output, lookup_table, scales=self.embedding.table_scale, biases=self.embedding.bias, transpose=True, quantized=self.quantized)
+                mtp_loss = cross_entropy(output_projected, next_tokens[:, 1:])
+
+            val_loss = nx.mean(val_loss)  + total_z_loss 
             total_loss += val_loss * next_tokens.size
+            total_mtp_loss += nx.mean(mtp_loss) * next_tokens.size
             count += next_tokens.size
             step_counter += 1
 
-            nx.eval(*[val_loss, total_loss])
+            nx.eval(*[val_loss, total_loss, total_mtp_loss])
 
         if count == 0:
-            return None
+            return None, None
 
         final_loss = total_loss / count
-        return final_loss.item()
+        final_mtp_loss = total_mtp_loss / count
+        return final_loss.item(), final_mtp_loss.item()
 
     def inference(self, context:Any, max_cache_len, all_caches = None,  position = 0) -> Any:
         if all_caches is None:
@@ -779,6 +765,7 @@ class Transformer:
         configs["quantized"] =  self.quantized
         configs["gradient_scale"] = self.gradient_scale
         configs["recompute_activation"] = self.recompute_activation
+        configs["n_mtp_block"] = len(self.mtp_blocks)
         return configs
 
     def get_configs_str(self):
@@ -807,9 +794,9 @@ class Transformer:
             configs += "None\n"
         return configs
 
-    def get_all_weights(self) ->  dict[str,nx.ArrayLike]:
+    def get_all_weights(self) -> dict[str,nx.ArrayLike]:
         all_weights = {}
-        weights = self.get_parameters(block_only=True)
+        weights = self.get_parameters()
         for layer_obj, param_name,_, name, _ in weights:
             weight = getattr(layer_obj, param_name)
             all_weights[name] = weight
@@ -832,17 +819,14 @@ class Transformer:
 
     def get_quant_params(self):
         quant_params = {}
-        layers = ["ff", "attention"]
-        weights = [["Wcombined", "Wout","W_dense_combined", "W_dense_out"],[ "Wqkv", "Wo"]]
-        quants = ["scales", "biases"]
-
-        for idx, block in enumerate(self.blocks):
-            for layer_i, layer in enumerate(layers):
-                layer_ = getattr(block, layer)
-                for quant in quants:
-                    quant_attr = getattr(layer_, quant)
-                    for attr_i, attr in enumerate(quant_attr):
-                        quant_params[f"{idx}.{layer}.{weights[layer_i][attr_i]}.{quant}"] = attr
+        
+        for obj, d, _, wfull, _ in self.get_parameters():
+            if d not in ["gamma", "router_bias", "router"]:
+                scales, biases = obj.get_quants(name=d) #type:ignore
+                sname = wfull +".scales"
+                bname = wfull +".biases"
+                quant_params[sname] = scales
+                quant_params[bname] = biases
 
         return quant_params
 
@@ -852,6 +836,10 @@ class Transformer:
             configs[idx] = block.get_configs()
 
         return configs
+
+    def discard_mtp(self):
+        self.mtp_blocks = []
+        self.configs["n_mtp"] = 0
 
     def copy(self) -> "Transformer":
         configs = copy.deepcopy(self.configs)
@@ -865,6 +853,8 @@ class Transformer:
 
         embedding_copy = self.embedding.copy()
         rmsfinal_copy = self.rmsnorm_final.copy()
-        transformer_copy = Transformer(configs, block_copy,mtp_copy, embedding=embedding_copy, rmsfinal=rmsfinal_copy)
+        transformer_copy = Transformer(configs, block_copy,mtp_copy, init=False)
+        transformer_copy.embedding = embedding_copy
+        transformer_copy.rmsnorm_final = rmsfinal_copy
 
         return transformer_copy

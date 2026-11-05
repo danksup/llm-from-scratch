@@ -4,9 +4,13 @@ import engine.backend as nx
 
 class RMSNorm:
     def __init__(self, size:int, epsilon:float=1e-5, *, init=True) -> None:
+        self.size = size
         self.epsilon = nx.float_32(epsilon)
         if init:
             self.gamma = nx.ones((size,), dtype=nx.float32)
+        else:
+            self.gamma = nx.empty((size,))
+
         self.d_gamma = nx.zeros((size,))
         self.configs = size, epsilon
 
@@ -54,17 +58,9 @@ class RMSNorm:
 
         return rmsnorm
 
-    @classmethod
-    def from_weight(cls, configs, gamma):
-        size, epsilon = configs
-        rms = cls(size, epsilon, init=False)
-        rms.gamma = gamma
-
-        return rms
-
     def copy(self):
         gamma_copy = nx.copy(self.gamma)
-        embed_dim = gamma_copy.shape[0] 
+        embed_dim = self.size
         rmscopy = RMSNorm(embed_dim, init=False)
         rmscopy.gamma = gamma_copy
 

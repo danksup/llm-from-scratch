@@ -41,7 +41,8 @@ DEFAULT_CONFIGS = {
     "create_checkpoint":False,
     "checkpoint_every":1000,
     "weights_only": True,
-    "logger":True
+    "logger":True,
+    "discard_mtp":False
 }
 
 OPTIMIZERS = {
@@ -299,7 +300,7 @@ class Session:
                     flag_to_check_if_validate_checkpoint_crash_with_regular_checkpoint = False
 
                     if ema is None:
-                        ema = min_ema = prev_train_loss = loss / count
+                        ema = min_ema  = loss / count
                     else:
                         train_loss = loss / count
                         if ema > min_ema * ema_tol:
@@ -312,12 +313,11 @@ class Session:
                         ema = .9 * ema + (1-.9) * (loss / count)
                         if ema < min_ema:
                             min_ema = ema
-                        prev_train_loss = train_loss
 
                     if dataloader.validation_files and validate_every > 0 and step_counter >= next_validate_step:
                         next_validate_step += validate_every
                         print(f"step: {step_counter} validating\033[K",                                                                                   end="\r")
-                        val_loss = self.transformer.validate(dataloader, self.configs["max_val_step"])
+                        val_loss, val_mtp_loss = self.transformer.validate(dataloader, self.configs["max_val_step"]) #type:ignore
                        
                         if val_loss is not None and val_loss < best_val_loss:
                             best_val_loss = val_loss
@@ -433,17 +433,13 @@ class Session:
             self.logger.error(msg_res, hist_res, e)
 
     def save(self, filename:str="test123", *, save_tokenizer:bool=False):
+        if self.configs["discard_mtp"]:
+            self.transformer.discard_mtp()
+
         weights = self.transformer.get_all_weights() 
         quants = self.transformer.get_quant_params()
 
-        if self.transformer.quantized:
-            embedding = {"embedding":self.transformer.embedding.lookup_table, "embedding_scale":self.transformer.embedding.table_scale,  "embedding_bias":self.transformer.embedding.bias}
-            tensors = weights | quants | embedding
-        else:
-            embedding = {"embedding":self.transformer.embedding.lookup_table}
-            tensors = weights | embedding
-
-        tensors |= {"rmsnorm_final":self.transformer.rmsnorm_final.gamma}
+        tensors = weights | (quants if self.transformer.quantized else {})
 
         metadata = {
             "tokenizer_id": str(self.tokenizer.tokenizer_id),
@@ -468,59 +464,22 @@ class Session:
         if tokenizer_id != str(tokenizer.tokenizer_id):
             raise ValueError(f"input tokenizer of id {tokenizer.tokenizer_id} doesnt match the session's tokenizer of id {tokenizer_id}")
 
-        blocks = []
-        n_block = transformer_configs["n_blocks"]
-        quantized = transformer_configs["quantized"]
-        dtype = nx.str_to_dtype[transformer_configs["dtype"]]
-        
-        embedding_lookuptable = session["embedding"] #type:ignore
-        embedding_quants = None
-    
-        if quantized:
-            embedding_quants = session["embedding_scale"],session["embedding_bias"] #type:ignore
+        quantized = transformer_configs.get("quantized", False)
 
-        rmsfinal_gamma = session["rmsnorm_final"] #type:ignore
-        rmsfinal_config = ast.literal_eval(metadata["rmsnorm_final_configs"]) #type:ignore
-
-        for i in range(n_block):
-            configs = block_configs[i]
-
-            attn_type = configs["attn_type"]
-            attn_configs = configs["attention"]
-            attn_quants = None #type:ignore
-
-            ff_configs = configs["ff"]
-            ff_quants = None #type:ignore
-
-            rmsnorm1_configs = configs["rmsnorm1"]
-            rmsnorm1_gamma = session[f"{i}.rmsnorm1.gamma"] #type:ignore
-            rmsnorm2_configs = configs["rmsnorm2"]
-            rmsnorm2_gamma = session[f"{i}.rmsnorm2.gamma"] #type:ignore
-
-            Q_norm_configs = configs["attention_Q_norm"]
-            Q_norm_gamma = session[f"{i}.attention.Q_norm.gamma"] #type:ignore
-            K_norm_configs = configs["attention_K_norm"]
-            K_norm_gamma = session[f"{i}.attention.K_norm.gamma"] #type:ignore
-            attn_QK_norm = Q_norm_gamma,Q_norm_configs, K_norm_gamma,K_norm_configs
-
+        transformer = Transformer(transformer_configs, init=False)
+        for a,b,_,c,_ in transformer.get_parameters():
+            setattr(a, b, session[c]) #type:ignore
             if quantized:
-                attn_quants = ((session[f"{i}.attention.Wqkv.scales"],session[f"{i}.attention.Wo.scales"]), (session[f"{i}.attention.Wqkv.biases"],session[f"{i}.attention.Wo.biases"])) #type:ignore
-                ff_quants = ((session[f"{i}.ff.Wcombined.scales"],session[f"{i}.ff.Wout.scales"],session[f"{i}.ff.W_dense_combined.scales"],session[f"{i}.ff.W_dense_out.scales"]), (session[f"{i}.ff.Wcombined.biases"],session[f"{i}.ff.Wout.biases"],session[f"{i}.ff.W_dense_combined.biases"],session[f"{i}.ff.W_dense_out.biases"])) #type:ignore
-                attn_params = (session[f"{i}.attention.Wqkv"], session[f"{i}.attention.Wo"]) #type:ignore
-                ff_params = (session.get(f"{i}.ff.router", None), session.get(f"{i}.ff.router_bias", None),session.get(f"{i}.ff.Wcombined", None), session.get(f"{i}.ff.Wout", None), session.get(f"{i}.ff.W_dense_combined",None), session.get(f"{i}.ff.W_dense_out", None)) #type:ignore
-            else:
-                attn_params = (session[f"{i}.attention.Wqkv"], session[f"{i}.attention.Wo"]) #type:ignore
-                ff_params = (session.get(f"{i}.ff.router", None), session.get(f"{i}.ff.router_bias", None),session.get(f"{i}.ff.Wcombined", None), session.get(f"{i}.ff.Wout", None), session.get(f"{i}.ff.W_dense_combined",None), session.get(f"{i}.ff.W_dense_out", None)) #type:ignore
-
-            block = TransformerBlock.from_weights(attn_type=attn_type, attn_configs=attn_configs, attn_weights=attn_params,attn_quants=attn_quants,attn_QK_gamma=attn_QK_norm, ff_configs=ff_configs, ff_weights=ff_params,ff_quants=ff_quants, rmsnorm1_configs=rmsnorm1_configs, rmsnorm2_configs=rmsnorm2_configs, gamma1=rmsnorm1_gamma, gamma2=rmsnorm2_gamma, dtype=dtype)
-            blocks.append(block)
-
-        embedding = Embedding.from_weights(lookuptable=embedding_lookuptable, quants=embedding_quants, dtype=dtype)
-        rmsnorm_final = RMSNorm.from_weight(rmsfinal_config, rmsfinal_gamma)
-        transformer = Transformer(transformer_configs, blocks, embedding=embedding, rmsfinal=rmsnorm_final)
+                sname = c + ".scales" 
+                bname = c + ".biases"
+                scales = session.get(sname, None) #type:ignore 
+                biases = session.get(bname, None) #type:ignore 
+                if scales is not None:
+                    a.set_quants(name=b, scale=session[sname], bias=biases) #type:ignore
 
         session_id = session_configs["session_id"]
         session = cls(transformer=transformer, tokenizer=tokenizer, init_optimizer=False, session_id=session_id)
+       
         return session  
 
     @classmethod

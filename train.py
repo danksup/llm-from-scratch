@@ -15,17 +15,17 @@ from engine.transformer import Transformer
 nx.set_seed(12345)
 
 EPOCHS = 1
-EMBED_DIM = 2048
-CONTEXT_SIZE = 8192
-BATCH_SIZE = 1
-BASE_WIDTH = 3 * EMBED_DIM
-N_HEADS = 16
+EMBED_DIM = 256
+CONTEXT_SIZE = 2048
+BATCH_SIZE = 2
+BASE_WIDTH = 4 * EMBED_DIM
+N_HEADS = 8
 N_KV_HEADS = max(1, N_HEADS // 4)
 N_EXPERTS = 8
 CF = 1.25
 VAL = 1
 TOP_K = 2
-MAX_STEP = 50000
+MAX_STEP = 50
 
 CORPUS_PATH = "artifacts/dataloader/2025_26"
 TOKENIZER_PATH = "artifacts/tokenizer/tokenizer32768_1624612680len.tokenizer"
@@ -43,14 +43,14 @@ session_configs = {
     "microbatch_size":16,
     "optimizer":"adamw",
     "optimizer_args":{
-        "lr": 5e-4,
+        "lr": 1e-3,
         "use_master": True,
         "scheduler": "cosine_decay",
         "min_lr": 5e-5,
         "t_warmup": int(MAX_STEP * 0.015)
     },
     "save":True,
-    "logger":False,
+    "logger":True,
     "error_save":True,
     "create_checkpoint":True,
     "checkpoint_every":100,
@@ -62,7 +62,10 @@ session_configs = {
 }
 
 model_configs = {
-    "n_blocks":32,
+    "n_blocks":8,
+    "n_mtp":0,
+    "discard_mtp":False,
+    "mtp_lambda":0.5,
     "embed_dim":EMBED_DIM,
     "dtype": "float16",
     "gradient_scale":32768,
@@ -82,7 +85,7 @@ model_configs = {
         "ff_jitter_eps":0.02,
         "ff_bias_gamma": 1e-3,
         "attn_type":"chunked",
-        "attn_chunk_size":CONTEXT_SIZE//16,
+        "attn_chunk_size":CONTEXT_SIZE//8,
         "attn_variant":"gqa",
         "attn_n_heads":N_HEADS,
         "attn_n_kv_heads":N_KV_HEADS,

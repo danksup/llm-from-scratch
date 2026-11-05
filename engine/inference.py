@@ -32,48 +32,102 @@ class Inference:
         self.penalty_mem_size = configs["penalty_mem_size"]
         self.penalty = configs["penalty"]
 
-        self.all_caches = None
+        self.trunk_all_caches = None
         self.position = 0
         self.penalty_memory = []
 
+        self.mtp_all_caches = None
+
+        self.mtp_acceptance = 0
+
     def infer(self, context:Any) -> Any:
+        T = context.shape[1]
         if self.temp < 0:
             warnings.warn(colorize("temp < 0 = greedy (like temp = 0)", "yellow"))
 
-        logits, self.all_caches = self.transformer.inference(context,self.session_configs["context_size"], self.all_caches, self.position)
-        self.position += context.shape[1]
+        logits, self.trunk_all_caches, output = self.transformer.inference(context,self.session_configs["context_size"], self.trunk_all_caches, self.position)
 
         penalty_mem = nx.array(self.penalty_memory, nx.uint32)
         raw_token = self._sample(logits, penalty_mem,  self.temp, self.top_k, self.top_p, self.penalty)
         token = raw_token.item()
-        self.penalty_memory.append(token)
         decoded = self.tokenizer.decode([token])
         print(decoded,end="",flush=True)
         if any(token in decoded for token in ("<EOT>", "<|endofdoc|>")):
             return
 
-        next_token = nx.array([[token]], dtype=nx.int32)
+        confirmed = token
+        n_generated = 1
 
-        for _ in range(self.n-1):
-            logits, self.all_caches = self.transformer.inference(next_token,self.session_configs["context_size"], self.all_caches, self.position)
-            self.position += 1
-            penalty_mem = nx.array(self.penalty_memory, nx.uint32)
-            raw_token = self._sample(logits, penalty_mem,  self.temp, self.top_k, self.top_p, self.penalty)
+        penalty_mem = self.update_penalty_mem(token)
+        tokens = [confirmed]
+        draft = None
+        if self.transformer.mtp_blocks:
+            draft = self.make_draft(output, raw_token, self.position + T - 1, penalty_mem)
+            tokens.append(draft)
 
+        self.position += context.shape[1]
+
+        while n_generated < self.n: 
+            tokens_array = nx.array(tokens, nx.uint32).reshape(1, -1)
+            logits, self.trunk_all_caches, output =  self.transformer.inference(tokens_array,self.session_configs["context_size"], self.trunk_all_caches, self.position)
+            s = self._sample(logits[:,:1], penalty_mem, self.temp, self.top_k, self.top_p, self.penalty)
+            s_item = s.item()
+            penalty_mem = self.update_penalty_mem(s_item)
+
+            if s_item == draft:
+                decoded = self.tokenizer.decode([draft]) #type:ignore
+                print(decoded,end="",flush=True)
+                if any(token in decoded for token in ("<EOT>", "<|endofdoc|>")):
+                    return
+
+                next_confirmed = logits[:, 1:]
+                next_s = self._sample(next_confirmed, penalty_mem, self.temp, self.top_k, self.top_p, self.penalty)
+                confirmed = next_s.item()
+                decoded = self.tokenizer.decode([confirmed]) #type:ignore
+                print(decoded,end="",flush=True)
+                if any(token in decoded for token in ("<EOT>", "<|endofdoc|>")):
+                    return
+
+                penalty_mem = self.update_penalty_mem(confirmed)
+
+                draft = self.make_draft(output[:, 1:, :], confirmed, self.position + 1, penalty_mem)
+                tokens = [confirmed, draft]
+                self.mtp_acceptance += 1
+                self.position += 2
+                n_generated += 2
+                
+   
+            else:
+                decoded = self.tokenizer.decode([s_item])
+                print(decoded,end="",flush=True)
+                if any(token in decoded for token in ("<EOT>", "<|endofdoc|>")):
+                    return
+
+                tokens = [s_item]
+
+                if self.transformer.mtp_blocks:
+                    draft = self.make_draft(output[:, :1, :], s_item, self.position, penalty_mem)
+                    tokens.append(draft)
+
+                self.position += 1
+                n_generated += 1
+                
             if len(self.penalty_memory) >= self.penalty_mem_size:
-                self.penalty_memory =  self.penalty_memory[1:]
-
-            token = raw_token.item()
-            self.penalty_memory.append(token)
-
-            decoded = self.tokenizer.decode([token])
-            print(decoded,end="",flush=True)
-            if any(token in decoded for token in ("<EOT>", "<|endofdoc|>")):
-                break
-            next_token = nx.array([[token]], dtype=nx.int32)
+                overfill = len(self.penalty_memory) - self.penalty_mem_size
+                self.penalty_memory =  self.penalty_memory[1+overfill:]
     
+    def make_draft(self, output, token, pos, penalty_mem):
+        mtp_logits, self.mtp_all_caches = self.transformer.mtp_inference(output, token, self.session_configs["context_size"], self.mtp_all_caches, pos)
+        raw_mtp_token = self._sample(mtp_logits, penalty_mem, self.temp, self.top_k, self.top_p, 0)
+        unverified_token = raw_mtp_token.item()
+        return unverified_token
+
+    def update_penalty_mem(self, token):
+        self.penalty_memory.append(token)
+        penalty_mem = nx.array(self.penalty_memory, nx.uint32)
+        return penalty_mem
+
     @staticmethod
-    # @nx.compile
     def _sample(logits, memory, temperature=0.8, top_k=3, top_p=0.9, penalty=0.05):
         if memory.size > 0:
             memory = nx.array(memory, dtype=nx.int32)

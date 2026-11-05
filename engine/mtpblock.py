@@ -106,6 +106,18 @@ class MTPBlock:
 
         return dh, de, dWproj, d_gamma1, d_gamma2, tblock_grads
 
+    def inference_forward(self, h, next_token_embed, max_cache_len, cached_k, cached_v, position):
+        z = nx.concatenate([h, next_token_embed], axis=-1) #B,T,2D
+        projected = nx.mul(z, self.Wproj, scales= self.scale, biases=self.bias, quantized=self.quantized)
+        projected = projected.astype(nx.float32) #type:ignore
+        rms1_out, _ = self.rmsnorm1._forward(projected, self.rmsnorm1.gamma, self.rmsnorm1.epsilon)
+        rms1_out = rms1_out.astype(self.dtype)
+        tblock_out, cached_k, cached_v= self.transformer_block.inference_forward(rms1_out, max_cache_len, cached_k, cached_v, position)
+        tblock_out = tblock_out.astype(nx.float32)
+        rms2_out,_ = self.rmsnorm2._forward(tblock_out, self.rmsnorm2.gamma, self.rmsnorm2.epsilon)
+
+        return rms2_out, cached_k, cached_v
+
     def quantize(self):
         if not self.quantized:
             self.quantized = True

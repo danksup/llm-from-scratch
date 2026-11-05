@@ -22,10 +22,10 @@ tokenizer1 = Tokenizer.load(TOKENIZER_PATH)
 session_configs = {
     "epochs":5,
     "max_step":21,
-    "train_split": 1,
-    "max_val_step":1,
+    "train_split": .9,
+    "max_val_step":21,
     "eval_every":1, 
-    "validate_every":0,
+    "validate_every":7,
     "context_size": 32,
     "batch_size": 1,
     "microbatch_size":1,
@@ -41,11 +41,14 @@ session_configs = {
     "create_checkpoint":True,
     "checkpoint_every":1000,
     "weights_only": True,
-    "logger":False
+    "logger":False,
+    "discard_mtp":False
 }
 
 model_configs = {
     "n_blocks":5,
+    "n_mtp":1,
+    "mtp_lambda":0.5,
     "embed_dim":128,
     "dtype": "float16",
     "gradient_scale":32768,

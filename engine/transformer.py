@@ -736,10 +736,10 @@ class Transformer:
     def inference(self, context:Any, max_cache_len, all_caches = None,  position = 0) -> Any:
         if all_caches is None:
             all_caches = []
-            for idx, block in enumerate(self.blocks):
+            for _, block in enumerate(self.blocks):
                 n_kv = block.attention.n_kv_heads
                 head_dim = block.attention.head_dim
-                kv_chace_shape = (context.shape[0], n_kv,max_cache_len, head_dim)
+                kv_chace_shape = (context.shape[0], n_kv ,max_cache_len, head_dim)
                 all_caches.append((nx.zeros(kv_chace_shape, dtype=self.dtype), nx.zeros(kv_chace_shape, dtype=self.dtype)))
 
         output = self.embedding.forward(context)
@@ -755,8 +755,28 @@ class Transformer:
         else:
             scores = rmsfinal_out @ self.embedding.lookup_table.T
 
-        return scores, all_caches
+        return scores, all_caches, output
 
+    def mtp_inference(self, h, next_tokens,max_cache_len, all_caches, position):
+        next_token = nx.array([[next_tokens]], dtype=nx.int32).reshape(1, 1)
+        if all_caches is None:
+            all_caches = []
+            for _, mtp in enumerate(self.mtp_blocks):
+                n_kv = mtp.transformer_block.attention.n_kv_heads
+                head_dim = mtp.transformer_block.attention.head_dim
+                kv_cache_shape = (next_token.shape[0], n_kv, max_cache_len, head_dim)
+                all_caches.append((nx.zeros(kv_cache_shape, dtype=self.dtype), nx.zeros(kv_cache_shape, dtype=self.dtype)))
+
+        next_token_embed = self.embedding.forward(next_token)
+        output = None
+        for idx, mtp in enumerate(self.mtp_blocks):
+            cached_k, cached_v = all_caches[idx]
+            output, cached_k, cached_v = mtp.inference_forward(h[:, -1:, :] ,next_token_embed, max_cache_len,cached_k, cached_v, position)
+            all_caches[idx] = (cached_k, cached_v)
+
+        scores = nx.mul(output, self.embedding.lookup_table, self.embedding.table_scale, self.embedding.bias, transpose=True, quantized=self.quantized)
+        return scores, all_caches
+    
     def get_configs(self):
         configs = {}
         configs["vocab_size"] = self.vocab_size

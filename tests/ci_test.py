@@ -53,7 +53,7 @@ model_configs = {
     "dtype": "float16",
     "gradient_scale":32768,
     "vocab_size": len(tokenizer1.vocab),
-    "quantized":False, #here can be True, "symmetric", False
+    "quantized":False, 
     "check_non_finite":True,
     "recompute_activation":True,
     "block_configs":{

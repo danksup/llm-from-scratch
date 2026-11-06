@@ -11,20 +11,20 @@ import random
 nx.set_seed(random.randrange(0,99999))
 
 tokenizer = Tokenizer.load("artifacts/tokenizer/tokenizer32768_1624612680len.tokenizer")
-session = Session.load("artifacts/sessions/session_10B.safetensors", tokenizer)
+session = Session.load("artifacts/sessions/session_checkpoint_best_e2bc0d80-85de-466b-b3bb-f5916c1c0e5d.safetensors", tokenizer)
 
 configs = {
     "seed":12345,
-    "n":128,
+    "n":256,
     "top_k": 50,
-    "temp":.7,
+    "temp":.8,
     "top_p":0.9,
     "penalty_mem_size":128,
     "penalty":.75
 }
 
 inference = Inference(session, **configs)
-context = "Chemical"
+context = "Artificial intelligence"
 print(configs)
 print(f"input: {context}")
 
@@ -32,3 +32,4 @@ context = nx.array(tokenizer.encode(context), nx.uint32)
 context = context.reshape(-1, context.shape[0])
 
 inference.infer(context)
+print(inference.mtp_acceptance)

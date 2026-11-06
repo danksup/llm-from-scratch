@@ -75,6 +75,7 @@ logs:
 - multi token prediction nov 5 2026
   
 ## Ongoing:
+- ram usage optimization
 - optimizing/cleanup/docs
 
 ## TODO (not in order):

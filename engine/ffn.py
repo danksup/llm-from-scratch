@@ -291,9 +291,9 @@ class FFN:
             final_output += dense_output
 
             if recompute_activation:
-                dense_cache = (dense_projected, dense_hidden)
-            else:
                 dense_cache = (None, None)
+            else:
+                dense_cache = (dense_projected, dense_hidden)
         else:
             dense_cache = (None, None)
 

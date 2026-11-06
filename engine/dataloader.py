@@ -7,6 +7,11 @@ import uuid
 import array
 import random
 
+typecode = {
+    "I":4,
+    "H":2
+}
+
 class DataLoader:
     def __init__(self, filepath:str|Path, tokenizer:Tokenizer,  context_size:int=1024, batch_size:int=10, train_split:float=0.9) -> None:
         self.train_split = train_split
@@ -139,6 +144,21 @@ class DataLoader:
                     yield context_batches,target_batches
                     context_batches = array.array(self.type_code)
                     target_batches = array.array(self.type_code)
+
+    def token_count(self, split:Literal['all', 'train', 'val']="all"):
+        if split == "val":
+            a = self.validation_files
+        elif split == "train":
+            a = self.train_files
+        else:
+            a = self.validation_files + self.train_files
+
+        total = 0
+        for i in a:
+            total += i.stat().st_size - 29
+
+        return total // typecode[self.type_code]
+
 
             
                 

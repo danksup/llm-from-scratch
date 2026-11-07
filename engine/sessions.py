@@ -77,7 +77,8 @@ DEFAULT_OPTIMIZER_ARGS = {
         "use_master":False,
         "scheduler":None,
         "min_lr":None,
-        "t_warmup": max(1,int(DEFAULT_CONFIGS["max_step"] * 0.015))
+        "t_warmup": max(1,int(DEFAULT_CONFIGS["max_step"] * 0.015)),
+        "eight_bit":False
         },
     "adamw":{
         "lr":1e-3,
@@ -88,7 +89,8 @@ DEFAULT_OPTIMIZER_ARGS = {
         "use_master":False,
         "scheduler":None,
         "min_lr":None,
-        "t_warmup": max(1,int(DEFAULT_CONFIGS["max_step"] * 0.015))
+        "t_warmup": max(1,int(DEFAULT_CONFIGS["max_step"] * 0.015)),
+        "eight_bit":False
         },
     "rmsprop": {
         "lr":1e-3,

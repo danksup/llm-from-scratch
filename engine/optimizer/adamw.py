@@ -2,7 +2,7 @@ import engine.backend as nx
 from typing import Any, Callable
 
 class AdamW:
-    def __init__(self, lr=1e-3, beta1:float=0.9, beta2:float=0.999, epsilon:float=1e-8, weight_decay:float=0.01, use_master:bool=True, scheduler:None|Callable=None, min_lr:None | float= None, t_warmup:None|int=None, *, _all_not_decayed:bool=False) -> None:
+    def __init__(self, lr=1e-3, beta1:float=0.9, beta2:float=0.999, epsilon:float=1e-8, weight_decay:float=0.01, use_master:bool=True, scheduler:None|Callable=None, min_lr:None | float= None, t_warmup:None|int=None, *, _all_not_decayed:bool=False, eight_bit=False) -> None:
         assert lr >= 0, "lr must be non-negative"
         assert beta1 >= 0 and beta1 < 1, "allowed beta1 range: [0,1)"
         assert beta2 >= 0 and beta2 < 1, "allowed beta2 range: [0,1)"
@@ -15,6 +15,8 @@ class AdamW:
         self.min_lr = min_lr
         self.scheduler = scheduler
         self.t_warmup = t_warmup
+        self.eight_bit = eight_bit
+
         if scheduler:
             self.schedule = scheduler(self.init_lr, min_lr)
             if min_lr is not None:
@@ -64,6 +66,8 @@ class AdamW:
         name_param_gradient_decay.clear()        
 
         optimized = {}
+        m_dtype = nx.float32 if not self.eight_bit else nx.int8
+        v_dtype = nx.float32 if not self.eight_bit else nx.uint8
         for group_tuple, thing in group.items():
             _, should_decay = group_tuple
             names = [i[0] for i in thing]
@@ -73,29 +77,31 @@ class AdamW:
                 params = nx.stack([i[1] for i in thing])
                 self.state[group_tuple] = {
                     "names": names.copy() ,
-                    "m": nx.zeros_like(params, nx.float32),
-                    "v": nx.zeros_like(params,  nx.float32),
-                }
-    
+                    "m": nx.zeros_like(params, m_dtype),
+                    "v": nx.zeros_like(params,  v_dtype),
+                    "m_scales": None,
+                    "v_scales": None,
+                } 
             else:
                 if self.use_master:
                     params = self.state[group_tuple]["master"]
-                    # assert self.state[group_tuple]["names"] == names
                 else:
                     params = nx.stack([i[1] for i in thing])
 
             state_shape = self.state[group_tuple]   
             thing.clear()
 
-            m_v_t = (state_shape["m"], state_shape["v"], self.state["t"])
+            m_v_t = (state_shape["m"], state_shape["v"], self.state["t"], state_shape["m_scales"], state_shape["v_scales"],)
 
             weight_decay = self.weight_decay if should_decay else nx.float_32(0.0)
 
-            new_params, m,v,_ = self.__step(m_v_t,params,gradients,self.lr,  self.epsilon, self.beta1, self.beta2, weight_decay)
-            nx.eval(new_params, m, v)
+            new_params, m,v, m_scales, v_scales = self.__step(m_v_t,params,gradients,self.lr,  self.epsilon, self.beta1, self.beta2, weight_decay, self.eight_bit)
             del params, gradients
 
-            self.state[group_tuple] = {"m":m, "v":v}
+            nx.eval(new_params, m, v, m_scales, v_scales)
+            
+            self.state[group_tuple] = {"m":m, "v":v, "m_scales":m_scales, "v_scales":v_scales}
+
             if self.use_master:
                 self.state[group_tuple]["master"] = new_params
 
@@ -113,8 +119,16 @@ class AdamW:
     
     @staticmethod
     @nx.compile
-    def __step(m_v_t, params:Any, grads:Any, lr:Any, epsilon:float, beta1:float, beta2:float, weight_decay:float) -> tuple[Any,...]: 
-        m,v,t = m_v_t       
+    def __step(m_v_t, params:Any, grads:Any, lr:Any, epsilon:float, beta1:float, beta2:float, weight_decay:float, eight_bit) -> tuple[Any,...]: 
+        m,v,t,m_scales,v_scales = m_v_t    
+        if m_scales is not None:
+            m = nx.linear_dequantize(m, m_scales)  
+        else:
+            m = m.astype(nx.float32)
+        if v_scales is not None:
+            v = nx.log_dequantize(v, v_scales, epsilon)  
+        else:
+            v = v.astype(nx.float32)
         norm = nx.sqrt(nx.sum(grads**2, axis=tuple(range(1, grads.ndim)), keepdims=True, dtype=nx.float32), dtype=nx.float32)
         grads = nx.where(norm > 1.0, grads * (1.0 / (norm + epsilon)), grads)
         m = beta1 * m + (1.0 - beta1) * grads
@@ -123,7 +137,11 @@ class AdamW:
         v_hat = v / (1.0 - beta2 ** t)
         params = params * (1 - lr * weight_decay)
         params = params - lr * m_hat / (nx.sqrt(v_hat) + epsilon)
-        return params, m, v, t
+
+        if eight_bit:
+            m,m_scales = nx.linear_quantize(m)
+            v,v_scales = nx.log_quantize(v, epsilon)
+        return params, m, v, m_scales, v_scales
     
     def to_dict(self, config_only:bool=True) -> dict[Any, Any]:
         adamw = {}

@@ -73,14 +73,15 @@ logs:
 - doc boundary masking oct 31 2026
 - moe aux loss free balancing nov 1 2026
 - multi token prediction nov 5 2026
-  
+- 8bit adam nov 7 2026
+
 ## Ongoing:
-- 8bit adam
 - ram usage optimization
 - optimizing/cleanup/docs
 
 ## TODO (not in order):
 - fill in the middle transformer
+- fix optimizer states saving to safetensors
 - support exporting and importing other model(like gguf or huggingfacemodel or llama or etc)
 - parallelizing tokenizer word frequency counting
   

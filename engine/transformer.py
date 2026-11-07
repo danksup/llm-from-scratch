@@ -15,6 +15,7 @@ from engine.transformer_block import TransformerBlock
 from helper.logger import Logger
 from helper.validate_and_raise import validate_choice
 from helper.singleton import sleep
+import warnings
 
 optimizers = optim.Adam | optim.AdamW | optim.SGD
 
@@ -177,6 +178,20 @@ class Transformer:
     def __call__(self, *args: Any, **kwds: Any) -> Any:
         self.logger:Logger = kwds["logger"]
         return self
+    
+    def warn_logger(self, msg, category, log_msg=""):
+        if hasattr(self, "logger"):
+            self.logger.warn(msg, log_msg, category)
+        else:
+            msg = msg + "\n" + log_msg
+            warnings.warn(message=msg, category=category)
+
+    def error_logger(self, msg,  category, log_msg=""):
+        if hasattr(self, "logger"):
+            self.logger.error(msg, log_msg, category)
+        else:
+            msg = msg + "\n" + log_msg
+            raise category(msg)
         
     def __str__(self) -> str:
         return self.get_configs_str()
@@ -586,7 +601,7 @@ class Transformer:
                     gradient_mean = nx.mean(current_grad)
                     if not nx.isfinite(loss).item() or not nx.isfinite(gradient_mean).item():
                         if self.gradient_scale <= 1:
-                            self.logger.error("non-finite :(", category=FloatingPointError)
+                            self.error_logger(msg="non-finite :(", log_msg="", category=FloatingPointError)
                         
                         forward_nan = nx.isnan(loss)
                         forward_inf = nx.isinf(loss)
@@ -596,7 +611,8 @@ class Transformer:
                         backward_inf = nx.isinf(gradient_mean)
 
                         reset_and_halve_grad_scale()
-                        self.logger.warn(f"[NON-FINITE step: {step}] non finite loss at microstep {microstep}. isnan forward/backward: {forward_nan}/{backward_nan} | isinf forward/backward: {forward_inf}/{backward_inf}\ngradient_scale is halved: {self.gradient_scale}", f"\n non-finite weights:\n{nan_weights}", category= UserWarning)
+                        
+                        self.warn_logger(msg=f"[NON-FINITE step: {step}] non finite loss at microstep {microstep}. isnan forward/backward: {forward_nan}/{backward_nan} | isinf forward/backward: {forward_inf}/{backward_inf}\ngradient_scale is halved: {self.gradient_scale}", log_msg=f"\n non-finite weights:\n{nan_weights}", category= UserWarning)
                         continue                        
 
             if microstep == microbatch_size:
@@ -604,7 +620,7 @@ class Transformer:
                     check = self.network_non_finite_check()
                     if check[0]:
                         reset_and_halve_grad_scale()
-                        self.logger.warn(f"[NON-FINITE step: {step}] non finite loss at microstep {microstep}. \ngradient_scale is halved: {self.gradient_scale}", f"\n non-finite weights:\n{check[1]}")
+                        self.warn_logger(msg=f"[NON-FINITE step: {step}] non finite loss at microstep {microstep}. \ngradient_scale is halved: {self.gradient_scale}", log_msg=f"\n non-finite weights:\n{check[1]}", category= UserWarning)
                         continue         
                     
                 all_network_params = []

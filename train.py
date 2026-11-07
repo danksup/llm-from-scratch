@@ -47,7 +47,8 @@ session_configs = {
         "use_master": True,
         "scheduler": "cosine_decay",
         "min_lr": 5e-5,
-        "t_warmup": int(MAX_STEP * 0.015)
+        "t_warmup": int(MAX_STEP * 0.015),
+        "eight_bit":True
     },
     "save":True,
     "logger":True,

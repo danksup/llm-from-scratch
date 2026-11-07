@@ -690,4 +690,41 @@ def tril(a, k=0):
 #         return _nx.linalg.svd(a, compute_uv=compute_uv, stream=_nx.cpu)
 #     return _nx.linalg.svd(a, compute_uv=compute_uv)
 
+def linear_quantize(w) -> tuple[Any,...]:
+    info = _nx.iinfo(int8)
+    q_min = info.min
+    q_max = info.max
+
+    max_abs = _nx.maximum(_nx.max(_nx.abs(w), axis=-1,keepdims=True), 1e-9)
+    scale = max_abs / q_max
+
+    quantized_w = _nx.round(w / scale)
+    quantized_w = _nx.clip(quantized_w, q_min, q_max).astype(int8)
+
+    return quantized_w, scale
+
+def linear_dequantize(w,/,scales, dtype:Any=float32):
+    q_float = w.astype(dtype)
+    return q_float  * scales
+
+def log_quantize(v, epsilon):
+    floor_epsilon = epsilon ** 2
+    v_save = maximum(v, floor_epsilon)
+    y = log(v_save,float32)
+    ymin = log(floor_epsilon)
+    ymax = max(y)
+
+    scale = (ymax - ymin)/255
+    q = _nx.round((y-ymin)/scale)
+    q = _nx.clip(q, 0, 255).astype(uint8)
+
+    return q,scale
+
+def log_dequantize(q,scale, epsilon, dtype:Any=float32):
+    v = q.astype(dtype)
+    ymin  = log(epsilon ** 2)
+    rec = v * scale + ymin
+    vreq = where(q == 0, 0.0, exp(rec))
+    return vreq
+
 set_seed(seed)

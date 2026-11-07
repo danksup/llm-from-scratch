@@ -557,7 +557,7 @@ class Transformer:
                 lookup_table = nx.dequantize(lookup_table, self.embedding.table_scale,biases=self.embedding.bias, dtype=self.dtype)
 
             mtp_loss = nx.array(0, nx.float32)
-            total_dh = nx.array(0, nx.float32)
+            total_dh = None
             if self.mtp_blocks:
                 next_tokens_embedded = self.embedding.forward(next_tokens[:, :-1])
                 doc_id_sliced = doc_id[:, :-1] if doc_id is not None else doc_id
@@ -565,7 +565,10 @@ class Transformer:
                 mtp_output, mtp_caches  = self.mtp_forward(unnormalized_output[:, :-1], next_tokens_embedded, doc_id_sliced, is_training=True)
                 mtp_loss, mtp_block_gradient, mtp_d_table = fused_cross_entropy(mtp_output, lookup_table, next_tokens[:, 1:], gradient_scale=self.gradient_scale, chunk_size=self.cross_entropy_chunk_size)
                 dh,de = self.mtp_backward(mtp_block_gradient, mtp_caches)
-                total_dh += dh
+                if total_dh is None:
+                    total_dh = dh
+                else:
+                    total_dh += dh
                 self.embedding.d_lookup_table = nx.add_at(self.embedding.d_lookup_table, next_tokens[:, :-1], de/self.gradient_scale)
                 self.embedding.d_lookup_table += mtp_d_table * self.mtp_lambda
 

@@ -22,8 +22,8 @@ from helper.validate_and_raise import validate_choice, validate_match
 from helper.logger import Logger
 
 
-optimizers = Union[optim.Adam, optim.AdamW, optim.SGD]
-OPTIMIZER_TYPES = (optim.Adam,optim.AdamW,optim.SGD,)
+optimizers = Union[optim.Adam, optim.AdamW, optim.SGD, optim.RMSProp]
+OPTIMIZER_TYPES = (optim.Adam,optim.AdamW,optim.SGD, optim.RMSProp)
 
 DEFAULT_CONFIGS = {
     "epochs": 1,
@@ -67,7 +67,8 @@ DEFAULT_OPTIMIZER_ARGS = {
         "use_master":False,
         "scheduler":None,
         "min_lr":None,
-        "t_warmup": max(1,int(DEFAULT_CONFIGS["max_step"] * 0.015))
+        "t_warmup": max(1,int(DEFAULT_CONFIGS["max_step"] * 0.015)),
+        "foreach":False
         },
     "adam": {
         "lr":1e-3,
@@ -78,7 +79,8 @@ DEFAULT_OPTIMIZER_ARGS = {
         "scheduler":None,
         "min_lr":None,
         "t_warmup": max(1,int(DEFAULT_CONFIGS["max_step"] * 0.015)),
-        "eight_bit":False
+        "eight_bit":False,
+        "foreach":False
         },
     "adamw":{
         "lr":1e-3,
@@ -90,18 +92,20 @@ DEFAULT_OPTIMIZER_ARGS = {
         "scheduler":None,
         "min_lr":None,
         "t_warmup": max(1,int(DEFAULT_CONFIGS["max_step"] * 0.015)),
-        "eight_bit":False
+        "eight_bit":False,
+        "foreach":False
         },
     "rmsprop": {
         "lr":1e-3,
-        "beta1":0.9,
         "beta2":0.999,
         "momentum":0,
         "weight_decay":1e-4,
         "use_master":False,
         "scheduler":None,
         "min_lr":None,
-        "t_warmup": max(1,int(DEFAULT_CONFIGS["max_step"] * 0.015))
+        "t_warmup": max(1,int(DEFAULT_CONFIGS["max_step"] * 0.015)),
+        "foreach":False,
+        "epsilon":1e-8,
         },
 }
 
@@ -488,6 +492,6 @@ class Session:
     def create_checkpoint(cls, to_checkpoint:"Session",) -> "Session":
         transformer_checkpoint = Transformer.copy(to_checkpoint.transformer)
         tokenizer_checkpoint = Tokenizer.from_dict(to_checkpoint.tokenizer.to_dict())
-        optimizer = None if to_checkpoint.optimizer is None else to_checkpoint.optimizer.from_dict(to_checkpoint.optimizer.to_dict(to_checkpoint.configs["weights_only"]))
-        checkpoint = cls(transformer=transformer_checkpoint, tokenizer = tokenizer_checkpoint, init_optimizer=optimizer)
+        # optimizer = None if to_checkpoint.optimizer is None else to_checkpoint.optimizer.from_dict(to_checkpoint.optimizer.to_dict(to_checkpoint.configs["weights_only"]))
+        checkpoint = cls(transformer=transformer_checkpoint, tokenizer = tokenizer_checkpoint, init_optimizer=None)
         return checkpoint

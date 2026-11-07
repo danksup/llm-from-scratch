@@ -80,16 +80,18 @@ logs:
 - optimizing/cleanup/docs
 
 ## TODO (not in order):
+- yarn (rope)
 - fill in the middle transformer
 - fix optimizer states saving to safetensors
-- support exporting and importing other model(like gguf or huggingfacemodel or llama or etc)
 - parallelizing tokenizer word frequency counting
   
 #### Maybe:
+- muon
 - LoRA
 - GaLoRA
 - conversation memory
 - autograd
+- support exporting and importing other model(like gguf or huggingfacemodel or llama or etc)
 
 ## Bugs:
 ### Fixed
@@ -135,14 +137,15 @@ block configs: {'ff_hidden_width': 2048, 'ff_n_experts': 12, 'ff_topk': 2, 'ff_c
 individual block configs (only difference is shown): block 2: ff_n_experts: 6 | block 3: ff_n_experts: 6 | block 4: ff_n_experts: 6 | block 5: ff_n_experts: 6 | block 6: ff_n_experts: 6 | block 7: ff_n_experts: 3 | block 8: ff_n_experts: 3 | block 9: ff_n_experts: 3 
 - avg loss: 7.732100963592529 | val: 6.184670448303223 | best val loss: 6.184670448303223 | lr: 0.001 | time: 1461.225281s
   
-#### Date: 2026-11-07
+#### 
 param: 989,993,704 (dense: 376,470,144) \
 context_size: 512 | batch_size: 1 | embed_dim: 1024 | n_blocks: 12 | n_mtp: 1 \
 precision: mixed precision (mlx.core.float16) | model quantization: affine 8-bit (quantized=True) \
 optimizer: 8-bit adamw (eight_bit=True) | optimizer_args: {'lr': 0.001, 'beta1': 0.9, 'beta2': 0.999, 'epsilon': 1e-08, 'weight_decay': 0.01, 'use_master': False} \
 block configs: {'ff_hidden_width': 2560, 'ff_n_experts': 8, 'ff_topk': 2, 'ff_cf': 1.25, 'ff_init': 'glorot_uniform', 'ff_dense_hidden_width': 2560, 'ff_n_dense': 1, 'attn_type': 'chunked', 'attn_chunk_size': 256, 'attn_variant': 'gqa', 'attn_n_heads': 16, 'attn_n_kv_heads': 4} \
 recompute_activation: True | chunked_cross_entropy: chunk_size=512 
-- 3 steps completed in 107.96s (steady-state avg: 33.89s/step) |avg loss step 1: 15.6918 -> step 3: 14.6999 | peak ram: ~17.62GB (virtual swap: ~4.74GB) | active ram: ~3.80GB 
+- Date: 2026-11-07 3 steps completed in 107.96s (steady-state avg: 33.89s/step) |avg loss step 1: 15.6918 -> step 3: 14.6999 | peak ram: ~17.62GB (virtual swap: ~4.74GB) | active ram: ~3.80GB 
+- Date: 2026-11-08 10 steps completed in 72.42s (steady-state avg: 3.10s/step) | avg loss step 1: 15.6936 -> step 10: 13.9250 | peak ram: ~10.96GB (virtual swap: ~4.15GB) | active ram: ~7.33GB | optimizer foreach = False
 
 ### Tokenizer
 - 11296590 corpus len | 2048 | fitting finished in 1614.249 py 

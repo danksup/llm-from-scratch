@@ -17,7 +17,7 @@ from helper.validate_and_raise import validate_choice
 from helper.singleton import sleep
 import warnings
 
-optimizers = optim.Adam | optim.AdamW | optim.SGD
+optimizers = optim.Adam | optim.AdamW | optim.SGD | optim.RMSProp
 
 default_block_configs = {
     "ff_hidden_width": 1024,
@@ -356,26 +356,29 @@ class Transformer:
 
         return dh,de
         
-    def eval_networks(self, others:list|None = None, include_gradients:bool=True, optimizer:optimizers|None=None):
+    def eval_networks(self, optimizer:optimizers|None=None):
         to_eval = []
-        if others is not None:
-            to_eval.extend(others)
+        for a,b,c,_,_ in self.get_parameters():
+            w = getattr(a,b,None)
+            if w is not None:
+                to_eval.append(w)
 
-        for layer_obj, w_param_name, dw_param_name, _, _ in self.get_parameters():
-            weight_obj = getattr(layer_obj, w_param_name)
-            to_eval.append(weight_obj)
-            if include_gradients:
-                if dw_param_name is not None:
-                    dweight_obj = getattr(layer_obj, dw_param_name)
-                    to_eval.append(dweight_obj)
+            if c is not None:
+                dw = getattr(a, c, None)
+                if dw is not None:
+                    to_eval.append(dw)
 
-        if not include_gradients:
-            if optimizer is not None:
-                to_eval.append(optimizer.lr)
-                if hasattr(optimizer, "state"):
-                    to_eval.append(optimizer.state)
-                if hasattr(optimizer, "masters"):
-                    to_eval.append(optimizer.masters) #type:ignore
+        if optimizer is not None:
+            to_eval.append(optimizer.lr)
+            if hasattr(optimizer, "t"):
+                to_eval.append(optimizer.t) #type:ignore
+            if hasattr(optimizer, "state"):
+                to_eval.append(optimizer.state)
+                t=optimizer.state.get("t", None)
+                if t is not None:
+                    to_eval.append(t)
+            if hasattr(optimizer, "masters"):
+                to_eval.append(optimizer.masters) #type:ignore
 
         nx.eval(*to_eval)
 
@@ -597,8 +600,7 @@ class Transformer:
             microstep += 1
 
             if microstep % eval_every == 0 or microstep == microbatch_size:
-                to_eval = [total_loss, self.embedding.lookup_table, self.embedding.d_lookup_table, self.rmsnorm_final.gamma, self.rmsnorm_final.d_gamma, total_histograms]
-                self.eval_networks(to_eval)
+                self.eval_networks()
 
                 if self.check_non_finite:
                     gradient_mean = nx.mean(current_grad)
@@ -626,54 +628,89 @@ class Transformer:
                         self.warn_logger(msg=f"[NON-FINITE step: {step}] non finite loss at microstep {microstep}. \ngradient_scale is halved: {self.gradient_scale}", log_msg=f"\n non-finite weights:\n{check[1]}", category= UserWarning)
                         continue         
                     
-                all_network_params = []
                 gscale = self.gradient_clipping_factor(microbatch_size)
 
-                for obj, w, dw, full_w_name, _ in self.get_parameters():
-                    if dw is not None:
-                        w_ = getattr(obj, w)
-                        if w == "lookup_table":
-                            dw_ = getattr(obj, dw).astype(nx.float32) /  microbatch_size * gscale
-                        else:
-                            dw_ = getattr(obj, dw).astype(nx.float32) / self.gradient_scale / microbatch_size * gscale
+                optimizer.calculate_lr(max_step, total_epoch)
 
-                        decay = True
-                        if w in ["lookup_table", "gamma", "router"]:
-                            decay = False
-
-                        if self.quantized and w not in ["gamma", "router"]:
-                            quants = obj.get_quants(name=w) #type:ignore
-                            w_ = nx.dequantize(w_, scales=quants[0], biases=quants[1])
-
-                        all_network_params.append((full_w_name, w_.astype(nx.float32), dw_, decay)) #type:ignore
-
-                optimized = optimizer.step_many(all_network_params, max_step, total_epoch)
-                del all_network_params
-
-                for obj, w, dw, full_w_name, _ in self.get_parameters():
-                    if dw is not None:
-                        new_param = optimized[full_w_name]
-
-                        exc = ["router", "gamma"]
-                        if self.quantized and w not in exc:
-                            new_param, new_scale, new_bias = nx.quantize(new_param)
-                            obj.set_quants(scale=new_scale, bias=new_bias, name=w) #type:ignore
-                            setattr(obj, w, new_param)
-                        else:
-                            if w in exc:
-                                setattr(obj, w, new_param.astype(nx.float32))
+                if not optimizer.foreach:
+                    for obj, w, dw, full_w_name, _ in self.get_parameters():
+                        if dw is not None:
+                            w_ = getattr(obj, w)
+                            if w == "lookup_table":
+                                dw_ = getattr(obj, dw).astype(nx.float32) /  microbatch_size * gscale
                             else:
-                                setattr(obj, w, new_param.astype(dtype=self.dtype))
-                
-                del optimized
+                                dw_ = getattr(obj, dw).astype(nx.float32) / self.gradient_scale / microbatch_size * gscale
+
+                            decay = True
+                            if w in ["lookup_table", "gamma", "router"]:
+                                decay = False
+
+                            exc = ["router", "gamma"]
+
+                            if self.quantized and w not in exc:
+                                quants = obj.get_quants(name=w) #type:ignore
+                                w_ = nx.dequantize(w_, scales=quants[0], biases=quants[1])
+
+                            new_param = optimizer.step((full_w_name, w_.astype(nx.float32), dw_, decay)) #type:ignore
+
+                            if self.quantized and w not in exc:
+                                new_param, new_scale, new_bias = nx.quantize(new_param)
+                                obj.set_quants(scale=new_scale, bias=new_bias, name=w) #type:ignore
+                                setattr(obj, w, new_param)
+                            else:
+                                if w in exc:
+                                    setattr(obj, w, new_param.astype(nx.float32))
+                                else:
+                                    setattr(obj, w, new_param.astype(dtype=self.dtype))
+
+                else:
+                    all_network_params = []
+                    for obj, w, dw, full_w_name, _ in self.get_parameters():
+                        if dw is not None:
+                            w_ = getattr(obj, w)
+                            if w == "lookup_table":
+                                dw_ = getattr(obj, dw).astype(nx.float32) /  microbatch_size * gscale
+                            else:
+                                dw_ = getattr(obj, dw).astype(nx.float32) / self.gradient_scale / microbatch_size * gscale
+
+                            decay = True
+                            if w in ["lookup_table", "gamma", "router"]:
+                                decay = False
+
+                            if self.quantized and w not in ["gamma", "router"]:
+                                quants = obj.get_quants(name=w) #type:ignore
+                                w_ = nx.dequantize(w_, scales=quants[0], biases=quants[1])
+
+                            all_network_params.append((full_w_name, w_.astype(nx.float32), dw_, decay)) #type:ignore
+
+                    optimized = optimizer.step_many(all_network_params)
+                    del all_network_params
+
+                    for obj, w, dw, full_w_name, _ in self.get_parameters():
+                        if dw is not None:
+                            new_param = optimized[full_w_name]
+
+                            exc = ["router", "gamma"]
+                            if self.quantized and w not in exc:
+                                new_param, new_scale, new_bias = nx.quantize(new_param)
+                                obj.set_quants(scale=new_scale, bias=new_bias, name=w) #type:ignore
+                                setattr(obj, w, new_param)
+                            else:
+                                if w in exc:
+                                    setattr(obj, w, new_param.astype(nx.float32))
+                                else:
+                                    setattr(obj, w, new_param.astype(dtype=self.dtype))
+                    
+                    del optimized
                 self.zeroes_gradient()
                 step += 1
+                optimizer.increment_t()
 
                 clean_step += 1
                 if clean_step > 0 and clean_step % 1000 == 0:
                     self.gradient_scale = min(self.gradient_scale * 2, self.max_gradient_scale)
 
-                self.eval_networks([self.rmsnorm_final.gamma], include_gradients=False, optimizer=optimizer)
+                self.eval_networks(optimizer=optimizer)
 
                 yield total_loss.item(), count, total_histograms, step
                 total_loss = nx.float_32(0)

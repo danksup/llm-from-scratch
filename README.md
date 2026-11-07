@@ -75,6 +75,7 @@ logs:
 - multi token prediction nov 5 2026
   
 ## Ongoing:
+- 8bit adam
 - ram usage optimization
 - optimizing/cleanup/docs
 

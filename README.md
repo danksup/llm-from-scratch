@@ -110,7 +110,7 @@ logs:
 - None
   
 # Performance Logs
-Apple M1 Pro \
+## all done using Apple M1 Pro (16 GB Unified Memory, MLX)
 param: 72512 | epochs: 1 | context_size: 64 | batch_size: 256 | embed_dim: 64 \
 ff_width: 256 | optimizer: adamw | train_split: 0.9 | n_heads: 8 \
 optimizer_args: {'lr': 0.001, 'beta': 0.9, 'beta2': 0.999, 'epsilon': 1e-08, 'weight_decay': 0.01} \
@@ -126,7 +126,6 @@ dataset: 5 files | using: MLX | block_size: 1 | corpus char len: 3417355
 
 
 #### Date 2026-08-02: 
-Apple M1 Pro (MLX) \
 param: 213_165_568 \
 context_size: 256 | batch_size: 64 | optimizer: adamw | train_split: 0.9 | dataloader_strides: 256 \
 optimizer_args: {'lr': 0.001, 'beta1': 0.9, 'beta2': 0.999, 'epsilon': 1e-08, 'weight_decay': 0.01, 'use_master': False, 'scheduler': None,'min_lr': None} \
@@ -136,16 +135,14 @@ block configs: {'ff_hidden_width': 2048, 'ff_n_experts': 12, 'ff_topk': 2, 'ff_c
 individual block configs (only difference is shown): block 2: ff_n_experts: 6 | block 3: ff_n_experts: 6 | block 4: ff_n_experts: 6 | block 5: ff_n_experts: 6 | block 6: ff_n_experts: 6 | block 7: ff_n_experts: 3 | block 8: ff_n_experts: 3 | block 9: ff_n_experts: 3 
 - avg loss: 7.732100963592529 | val: 6.184670448303223 | best val loss: 6.184670448303223 | lr: 0.001 | time: 1461.225281s
   
-#### Date: 2026-08-04:
-Apple M1 Pro (MLX) \
-param: 35_438_848 \
-context_size: 256 | batch_size: 64 | optimizer: adamw | train_split: 0.9 | dataloader_strides: 256 \
-optimizer_args: {'lr': 0.001, 'beta1': 0.9, 'beta2': 0.999, 'epsilon': 1e-08, 'weight_decay': 0.01, 'use_master': False, 'scheduler': None, 'min_lr': None} \
-dataset: 6 files | block_size: 7 | corpus char len: 4609144 -> BPE compression (16384 vocab size): 1102771. ratio = 76.074% \
-max step: 61 (256 strides) | embed_dim: 256 | gradient_scale: 2048 | precision: mixed precision (mlx.core.float16) \
-block configs: {'ff_hidden_width': 768, 'ff_n_experts': 12, 'ff_topk': 2, 'ff_cf': 1.25, 'ff_init': 'glorot_uniform', 'attn_type': 'full', 'attn_variant': 'gqa', 'attn_n_heads': 16, 'attn_init': 'glorot_uniform', 'attn_n_kv_heads': 4} \
-individual block configs (only difference is shown): block 2: ff_n_experts: 6 | block 3: ff_n_experts: 6 | block 4: ff_n_experts: 6 | block 5: ff_n_experts: 6 | block 6: ff_n_experts: 3 |
-- avg loss: 7.254411220550537 | val: 6.278104305267334 | best val loss: 6.278104305267334 | lr: 0.001 | time: 73.973663s
+#### Date: 2026-11-07
+param: 989,993,704 (dense: 376,470,144) \
+context_size: 512 | batch_size: 1 | embed_dim: 1024 | n_blocks: 12 | n_mtp: 1 \
+precision: mixed precision (mlx.core.float16) | model quantization: affine 8-bit (quantized=True) \
+optimizer: 8-bit adamw (eight_bit=True) | optimizer_args: {'lr': 0.001, 'beta1': 0.9, 'beta2': 0.999, 'epsilon': 1e-08, 'weight_decay': 0.01, 'use_master': False} \
+block configs: {'ff_hidden_width': 2560, 'ff_n_experts': 8, 'ff_topk': 2, 'ff_cf': 1.25, 'ff_init': 'glorot_uniform', 'ff_dense_hidden_width': 2560, 'ff_n_dense': 1, 'attn_type': 'chunked', 'attn_chunk_size': 256, 'attn_variant': 'gqa', 'attn_n_heads': 16, 'attn_n_kv_heads': 4} \
+recompute_activation: True | chunked_cross_entropy: chunk_size=512 
+- 3 steps completed in 107.96s (steady-state avg: 33.89s/step) |avg loss step 1: 15.6918 -> step 3: 14.6999 | peak ram: ~17.62GB (virtual swap: ~4.74GB) | active ram: ~3.80GB 
 
 ### Tokenizer
 - 11296590 corpus len | 2048 | fitting finished in 1614.249 py 
@@ -156,3 +153,4 @@ individual block configs (only difference is shown): block 2: ff_n_experts: 6 | 
 - 195_605_563 corpus len | 16384 |fitting finished in 283.527 (5 jul 2026)
 - 1_351_277_738 corpus len | 24000 | fitting finished in 1437.236 (6 aug 2026)
 - 1_351_277_738 corpus len | 48000 | fitting finished in 3883.186 (6 aug 2026)
+

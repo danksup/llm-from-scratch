@@ -31,7 +31,7 @@ def fused_cross_entropy(input:Any, embedding:Any, target_logits:Any, chunk_size=
             d_table = probs.reshape(-1, vocab_size).T @ flatten_input[i:i+chunk_size,...]
             d_table = d_table.astype(nx.float32) / gradient_scale
             total_d_table += d_table
-            nx.eval(*[total_block_gradient, total_d_table])
+            nx.eval(*[total_block_gradient[-1], total_d_table])
 
     if is_training:
         return total_loss / N, nx.concatenate(total_block_gradient, 0).reshape(B,T,D), total_d_table

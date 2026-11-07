@@ -1,11 +1,9 @@
 import engine.backend as nx
-from engine.activations import softmax_derivative
 from engine.rope import rope_forward, rope_inverse
 from typing import Any, Callable
 import engine.initializers as initializer
 from engine.rope import precompute_freqs
 from engine.rmsnorm import RMSNorm
-import time
 
 #TODO: do the thing
 class AttentionChunked:
@@ -233,7 +231,10 @@ class AttentionChunked:
         d_chunked_V = weights_softmax_6d.transpose(0,1,2,3,5,4) @ d_output_chunked
         d_chunked_V = nx.sum(d_chunked_V, 2)
 
-        d_scores = softmax_derivative(weights_softmax, d_weights.astype(nx.float32))  / nx.sqrt(head_dim, dtype=nx.float32) #(B, n_heads, n_chunk, chunk_size, 2W) #type:ignore
+        scale = 1.0 / nx.sqrt(head_dim, dtype=nx.float32)
+        P = d_weights * scale * weights_softmax
+        P_sum = nx.sum(P, axis=-1, keepdims=True)
+        d_scores = P - weights_softmax * P_sum
         d_scores = d_scores.astype(gradient.dtype)
 
         d_chunked_K = d_scores.transpose(0,1,2,3,5,4) @ Q

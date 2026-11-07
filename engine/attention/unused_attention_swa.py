@@ -288,27 +288,6 @@ class AttentionSWA_OLD:
         padded_position = time_idx + window_idx
         return padded_position < W
 
-    @classmethod
-    def from_weight(cls, configs, weights, quants,attn_QK_gamma, dtype) -> "AttentionSWA_OLD":
-        embed_dim, n_kv_heads, n_heads, _, _,W = configs
-        wqkv, wo = weights
-
-        Q_norm_gamma,Q_norm_configs, K_norm_gamma, K_norm_configs = attn_QK_gamma
-        Q_norm = RMSNorm.from_weight(Q_norm_configs, Q_norm_gamma)
-        K_norm = RMSNorm.from_weight(K_norm_configs, K_norm_gamma)
-
-
-        attn = cls(embed_dim, n_heads, Q_norm, K_norm, n_kv_heads,W,dtype, init=False)
-        attn.Wqkv = wqkv
-        attn.Wo = wo
-
-        if quants is not None:
-            scales, biases = quants
-            attn.scales = scales
-            attn.biases = biases
-
-        return attn
-
     def copy(self):
         Q_norm_copy = self.Q_norm.copy()
         K_norm_copy = self.K_norm.copy()

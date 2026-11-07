@@ -1,0 +1,1 @@
+- recomputing raw_output in ffn is worse (both ram usage and latency per step)

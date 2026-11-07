@@ -108,7 +108,7 @@ class MTPBlock:
 
     def inference_forward(self, h, next_token_embed, max_cache_len, cached_k, cached_v, position):
         z = nx.concatenate([h, next_token_embed], axis=-1) #B,T,2D
-        projected = nx.mul(z, self.Wproj, scales= self.scale, biases=self.bias, quantized=self.quantized)
+        projected = nx.mul(z, self.Wproj, scales= self.scale, biases=self.bias)
         projected = projected.astype(nx.float32) #type:ignore
         rms1_out, _ = self.rmsnorm1._forward(projected, self.rmsnorm1.gamma, self.rmsnorm1.epsilon)
         rms1_out = rms1_out.astype(self.dtype)

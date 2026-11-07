@@ -567,11 +567,8 @@ class Transformer:
             current_grad = self.backward(block_gradient, all_masks, all_caches, doc_id, total_dh)
             current_grad = current_grad.astype(nx.float32) / self.gradient_scale
 
-            embedding_gradient = nx.zeros_like(lookup_table, dtype=nx.float32)
-            embedding_gradient = nx.add_at(embedding_gradient, contexts, current_grad)
-
-            total_embedding_gradient = embedding_gradient + d_table
-            self.embedding.d_lookup_table += total_embedding_gradient
+            self.embedding.d_lookup_table = nx.add_at(self.embedding.d_lookup_table, contexts, current_grad) 
+            self.embedding.d_lookup_table += d_table
 
             total_loss += loss * next_tokens.size
             count += next_tokens.size
@@ -754,7 +751,7 @@ class Transformer:
             output, cached_k, cached_v = mtp.inference_forward(h[:, -1:, :] ,next_token_embed, max_cache_len,cached_k, cached_v, position)
             all_caches[idx] = (cached_k, cached_v)
 
-        scores = nx.mul(output, self.embedding.lookup_table, self.embedding.table_scale, self.embedding.bias, transpose=True, quantized=self.quantized)
+        scores = nx.mul(output, self.embedding.lookup_table, self.embedding.table_scale, self.embedding.bias, transpose=True)
         return scores, all_caches
     
     def get_configs(self):

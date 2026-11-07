@@ -648,8 +648,8 @@ def quantized_matmul(x,w,/, scales, biases, transpose:bool|tuple=False):
             return x @ dequant_q.transpose(transpose)
     return x @ dequant_q
 
-def mul(x,w,/, scales, biases, transpose:bool|tuple=False, quantized=False):
-    if quantized:
+def mul(x,w,/, scales, biases, transpose:bool|tuple=False):
+    if scales is not None:
         return quantized_matmul(x, w, scales=scales, biases=biases, transpose=transpose)
     else:
         if transpose:

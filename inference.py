@@ -11,7 +11,7 @@ import random
 nx.set_seed(random.randrange(0,99999))
 
 tokenizer = Tokenizer.load("artifacts/tokenizer/tokenizer32768_1624612680len.tokenizer")
-session = Session.load("artifacts/sessions/session_checkpoint_best_e2bc0d80-85de-466b-b3bb-f5916c1c0e5d.safetensors", tokenizer)
+session = Session.load("artifacts/sessions/session_checkpoint_latest_e2bc0d80-85de-466b-b3bb-f5916c1c0e5d.safetensors", tokenizer)
 
 configs = {
     "seed":12345,
@@ -24,7 +24,7 @@ configs = {
 }
 
 inference = Inference(session, **configs)
-context = "Artificial intelligence"
+context = "i hate you."
 print(configs)
 print(f"input: {context}")
 
@@ -32,4 +32,4 @@ context = nx.array(tokenizer.encode(context), nx.uint32)
 context = context.reshape(-1, context.shape[0])
 
 inference.infer(context)
-print(inference.mtp_acceptance)
+# print(inference.mtp_acceptance)

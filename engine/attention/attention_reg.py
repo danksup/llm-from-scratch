@@ -90,18 +90,6 @@ class AttentionFull:
     def self_type() -> str:
         return "full"
 
-    @classmethod
-    def multihead(cls, embed_dim, n_heads, dtype, initializer, quantized, Q_norm, K_norm):
-        if quantized:
-            pass
-        mha = cls(embed_dim, n_heads=n_heads,Q_norm=Q_norm, K_norm=K_norm, n_kv_heads=n_heads, dtype=dtype, initializer=initializer, quantized=quantized)
-        return mha
-
-    @classmethod
-    def multiquery(cls, embed_dim, n_heads, dtype, initializer, quantized, Q_norm, K_norm):
-        mqa = cls(embed_dim, n_heads=n_heads,Q_norm=Q_norm, K_norm=K_norm,  n_kv_heads=1, dtype=dtype, initializer=initializer, quantized=quantized)
-        return mqa
-
     @staticmethod
     def compute_weights(causal_mask, head_dim, Q, K, dtype):
         scores = nx.einsum("bkrQh,bkKh->bkrQK",Q, K) #(B, n_kv_heads, n_rep, Tq, Tk)
@@ -147,9 +135,11 @@ class AttentionFull:
 
         if doc_id is not None:
             combined_mask = causal_mask | (doc_id[:,None,None,:] != doc_id[:,None,:,None])
+            combined_mask = combined_mask[:,:,None,:,:]
         else:
             combined_mask = causal_mask
-        weights = AttentionFull.compute_weights(combined_mask[:,:,None,:,:], head_dim, Q, K, x.dtype)
+
+        weights = AttentionFull.compute_weights(combined_mask, head_dim, Q, K, x.dtype)
 
         output = nx.einsum("bkrQK,bkKh->bkrQh",weights, V) #(B, n_kv_heads, n_rep, Tq, Dh)
 
@@ -180,7 +170,7 @@ class AttentionFull:
         else:
             x, Q,Q_norm_caches, K,K_norm_caches, V, output_concat, combined_mask = caches
 
-            weights = AttentionFull.compute_weights(combined_mask[:,:,None,:,:],head_dim, Q, K, x.dtype)
+            weights = AttentionFull.compute_weights(combined_mask,head_dim, Q, K, x.dtype)
 
         B, T, _ = x.shape
 

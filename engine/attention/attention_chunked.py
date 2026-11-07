@@ -96,19 +96,9 @@ class AttentionChunked:
     def self_type() -> str:
         return "chunked"
 
-    @classmethod
-    def multihead(cls,embed_dim, n_heads, chunk_size, dtype, initializer, Q_norm:RMSNorm, K_norm:RMSNorm):
-        mha = cls(embed_dim, n_heads=n_heads, n_kv_heads=n_heads, chunk_size=chunk_size, dtype=dtype, initializer=initializer, Q_norm=Q_norm, K_norm=K_norm)
-        return mha
-    @classmethod
-    def multiquery(cls,embed_dim, n_heads, chunk_size, dtype, initializer, Q_norm:RMSNorm, K_norm:RMSNorm):
-        mqa = cls(embed_dim, n_heads=n_heads, n_kv_heads=1, chunk_size=chunk_size, dtype=dtype, initializer=initializer, Q_norm=Q_norm, K_norm=K_norm)
-        return mqa
-
     @staticmethod
-    def compute_weights_softmax(causal_mask, head_dim, Q, K_chunked, n_repeats):
-        K_chunked_repeat = nx.repeat(K_chunked, n_repeats, axis=1)  #(B, n_heads, n_chunk, 2W, head_dim)
-        scores = Q @ K_chunked_repeat.transpose(0,1,2,4,3) #(B, n_heads, n_chunk, WQ, 2WK)
+    def compute_weights_softmax(causal_mask, head_dim, Q, K_chunked):
+        scores = Q @ K_chunked.transpose(0,1,2,3,5,4) #(B, n_kv_heads, n_rep, n_chunk, WQ, 2WK)
         scores = scores.astype(nx.float32) /  nx.sqrt(head_dim, dtype=nx.float32)
         scores = nx.where(causal_mask == 0, -1e9, scores)
         weights_softmax = nx.softmax(scores)
@@ -149,7 +139,7 @@ class AttentionChunked:
         V = nx.pad(V, pad) # (B, n_kv_heads, T + remainder, Dh)
 
         n_chunk = Q.shape[2] // chunk_size
-        Q = Q.reshape(B, n_heads, n_chunk, chunk_size, head_dim)
+        Q = Q.reshape(B, n_kv_heads, n_rep, n_chunk, chunk_size, head_dim)
         K = K.reshape(B, n_kv_heads, n_chunk, chunk_size, head_dim)
         V = V.reshape(B, n_kv_heads, n_chunk, chunk_size, head_dim)
 
@@ -165,8 +155,6 @@ class AttentionChunked:
         K_chunked = K_chunked.astype(x.dtype)
         V_chunked = V_chunked.astype(x.dtype)
 
-        V_chunked_repeat = nx.repeat(V_chunked, n_rep, axis=1)  #(B, n_heads, n_chunk, 2W, head_dim)
-
         if doc_id is not None:
             doc_id = nx.pad(doc_id,[(0,0), (0,remainder)]) #B, T+remainder
             doc_id = doc_id.reshape(B, n_chunk, chunk_size) #B, n_chunk, 1,chunk_size
@@ -176,13 +164,16 @@ class AttentionChunked:
             preprendix = nx.concatenate([doc_pad, doc_id[:,:-1,:, :]], axis=1) 
             doc_id_k = nx.concatenate([preprendix, doc_id], axis=-1) #B, n_chunk, 1, 2c
             doc_mask = doc_id_k == doc_id_q
-            combined_mask = causal_mask & (doc_mask[:,None,:,:])
+            combined_mask = causal_mask & (doc_mask[:,None,None,:,:])
         else:
             combined_mask = causal_mask
-        weights_softmax = AttentionChunked.compute_weights_softmax(combined_mask, head_dim, Q, K_chunked, n_rep)
-        weights = weights_softmax.astype(x.dtype) #(B, n_heads, n_chunk, WQ, 2WK)
 
-        output = weights @ V_chunked_repeat #(B, n_heads, n_chunk, chunk_size, Dh)
+        K_chunked = K_chunked[:,:,None,...] #(B, n_kv_heads,1, n_chunk, 2W, head_dim)
+        weights_softmax = AttentionChunked.compute_weights_softmax(combined_mask, head_dim, Q, K_chunked)
+        weights = weights_softmax.astype(x.dtype) #(B, n_kv_heads, n_rep, n_chunk, WQ, 2WK)
+
+        V_chunked = V_chunked[:,:,None,...]  #(B, n_kv_heads, 1, n_chunk, 2W, head_dim)
+        output = weights @ V_chunked #(B, n_kv_heads, n_rep, n_chunk, chunk_size, Dh)
         output_unchunked = output.reshape(B,n_heads,-1,head_dim) #(B, n_heads, n_chunk * 2WQ, Dh)
         output_unchunked = output_unchunked[:,:,:T,:] #(B, n_heads, T, Dh)
         output_unchunked = output_unchunked.transpose(0,2,1,3).reshape(B,T,-1)
@@ -203,21 +194,20 @@ class AttentionChunked:
     def _backward(gradient:nx.ArrayLike, caches:tuple[Any,...], attn_configs:tuple[Any,...], attn_params: tuple[Any,...], quantization, *, recompute_activation=True) :#-> tuple[nx.ArrayLike,...]:
         embed_dim, n_kv_heads, n_heads, n_rep, head_dim, chunk_size, freqs = attn_configs
         Wqkv, Wo, Q_norm_gamma, K_norm_gamma = attn_params
+        B, T, D = gradient.shape
 
         if not recompute_activation:
             x, Q, K_chunked, V_chunked, Q_norm_caches,K_norm_caches, weights_softmax, output_unchunked = caches
         else:
             x, Q, K_chunked, V_chunked, Q_norm_caches,K_norm_caches, output_unchunked, combined_mask = caches
 
-            weights_softmax = AttentionChunked.compute_weights_softmax(combined_mask, head_dim, Q, K_chunked, n_rep)
-
+            weights_softmax = AttentionChunked.compute_weights_softmax(combined_mask, head_dim, Q, K_chunked)
 
         wqkv_scale, wo_scale, wqkv_bias, wo_bias = quantization
 
         if wqkv_scale is not None :
             Wqkv = nx.dequantize(Wqkv, wqkv_scale,wqkv_bias, x.dtype)
 
-        B, T, D = x.shape
         chunk_size = min(chunk_size, T-1)
         remainder = (chunk_size - (T % chunk_size)) % chunk_size
 
@@ -236,22 +226,21 @@ class AttentionChunked:
 
         d_output_chunked = d_output_chunked.reshape(B, n_kv_heads, n_rep,n_chunk, chunk_size, head_dim)
 
-        d_weights = nx.einsum("bkrcwd,bkcxd->bkrcwx", d_output_chunked, V_chunked)
+        d_weights = d_output_chunked @ V_chunked.transpose(0,1,2,3,5,4)
+        # d_weights = nx.einsum("bkrcwd,bkcxd->bkrcwx", d_output_chunked, V_chunked)
 
         weights_softmax_6d = weights_softmax.astype(gradient.dtype).reshape(B, n_kv_heads,n_rep, n_chunk, chunk_size, 2*chunk_size)
         d_chunked_V = weights_softmax_6d.transpose(0,1,2,3,5,4) @ d_output_chunked
         d_chunked_V = nx.sum(d_chunked_V, 2)
 
-        d_scores = softmax_derivative(weights_softmax, d_weights.reshape(B, -1, n_chunk, chunk_size, 2*chunk_size).astype(nx.float32))  / nx.sqrt(head_dim, dtype=nx.float32) #(B, n_heads, n_chunk, chunk_size, 2W) #type:ignore
+        d_scores = softmax_derivative(weights_softmax, d_weights.astype(nx.float32))  / nx.sqrt(head_dim, dtype=nx.float32) #(B, n_heads, n_chunk, chunk_size, 2W) #type:ignore
         d_scores = d_scores.astype(gradient.dtype)
-        d_scores = d_scores.reshape(B,n_kv_heads,n_rep,n_chunk,chunk_size,2*chunk_size)
 
-        dQ = nx.einsum("bkrcwx,bkcxd->bkrcwd", d_scores, K_chunked).reshape(B, n_heads, -1, head_dim) #B, n_heads, T + remainder, head_dim
-
-        Q = Q.reshape(B, n_kv_heads, n_rep, n_chunk, chunk_size, head_dim)
         d_chunked_K = d_scores.transpose(0,1,2,3,5,4) @ Q
         d_chunked_K = nx.sum(d_chunked_K, 2)
 
+        dQ = d_scores @ K_chunked #B, n_kv_head, n_rep, n_chunk, chunk_size, head_dim
+        dQ = dQ.reshape(B, n_heads, T+remainder, head_dim)
         dQ = dQ[:,:,:T,:] #B, n_heads, T, head_dim
         dQ = rope_inverse(dQ, freqs)
         dQ,Q_norm_d_gamma = RMSNorm._backward(dQ, Q_norm_caches, Q_norm_gamma)

@@ -1,7 +1,7 @@
 from typing import Any
 import engine.backend as nx
 
-def cross_entropy(input:Any, embedding:Any, target_logits:Any, chunk_size=512, is_training=True, gradient_scale=1):
+def fused_cross_entropy(input:Any, embedding:Any, target_logits:Any, chunk_size=512, is_training=True, gradient_scale=1):
     B,T,D = input.shape
     N= B*T
     input = input.astype(nx.float32)

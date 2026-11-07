@@ -10,7 +10,7 @@ from engine.rmsnorm import RMSNorm
 from engine.dataloader import DataLoader
 from engine.embedding import Embedding
 from engine.mtpblock import MTPBlock
-from engine.losses import cross_entropy
+from engine.losses import fused_cross_entropy
 from engine.transformer_block import TransformerBlock
 from helper.logger import Logger
 from helper.validate_and_raise import validate_choice
@@ -548,7 +548,7 @@ class Transformer:
                 doc_id_sliced = doc_id[:, :-1] if doc_id is not None else doc_id
 
                 mtp_output, mtp_caches  = self.mtp_forward(unnormalized_output[:, :-1], next_tokens_embedded, doc_id_sliced, is_training=True)
-                mtp_loss, mtp_block_gradient, mtp_d_table = cross_entropy(mtp_output, lookup_table, next_tokens[:, 1:], gradient_scale=self.gradient_scale, chunk_size=self.cross_entropy_chunk_size)
+                mtp_loss, mtp_block_gradient, mtp_d_table = fused_cross_entropy(mtp_output, lookup_table, next_tokens[:, 1:], gradient_scale=self.gradient_scale, chunk_size=self.cross_entropy_chunk_size)
                 dh,de = self.mtp_backward(mtp_block_gradient, mtp_caches)
                 total_dh += dh
                 self.embedding.d_lookup_table = nx.add_at(self.embedding.d_lookup_table, next_tokens[:, :-1], de/self.gradient_scale)
@@ -561,7 +561,7 @@ class Transformer:
                     if histograms[i] is not None:
                         total_histograms[i] += histograms[i]
 
-            loss, block_gradient, d_table = cross_entropy(last_output, lookup_table, next_tokens, gradient_scale=self.gradient_scale, chunk_size=self.cross_entropy_chunk_size)
+            loss, block_gradient, d_table = fused_cross_entropy(last_output, lookup_table, next_tokens, gradient_scale=self.gradient_scale, chunk_size=self.cross_entropy_chunk_size)
             loss = loss  + total_z_loss + (nx.mean(mtp_loss) * self.mtp_lambda)
 
             current_grad = self.backward(block_gradient, all_masks, all_caches, doc_id, total_dh)
@@ -689,14 +689,14 @@ class Transformer:
             if self.quantized:
                 lookup_table = nx.dequantize(lookup_table, self.embedding.table_scale, self.embedding.bias, self.dtype)
             output, _, _, total_z_loss, _, unnormalized_output = self.forward(embedded,doc_id=doc_id, is_training=False)
-            val_loss = cross_entropy(output, lookup_table, next_tokens, is_training=False, gradient_scale=self.gradient_scale, chunk_size=self.cross_entropy_chunk_size)
+            val_loss = fused_cross_entropy(output, lookup_table, next_tokens, is_training=False, gradient_scale=self.gradient_scale, chunk_size=self.cross_entropy_chunk_size)
 
             mtp_loss = nx.array(0, nx.float32)
             if self.mtp_blocks:
                 next_tokens_embedded = self.embedding.forward(next_tokens[:, :-1])
                 doc_id_sliced = doc_id[:, :-1] if doc_id is not None else doc_id
                 mtp_output, _  = self.mtp_forward(unnormalized_output[:, :-1], next_tokens_embedded, doc_id_sliced, is_training=False)
-                mtp_loss = cross_entropy(mtp_output,lookup_table, next_tokens[:, 1:], gradient_scale=self.gradient_scale, is_training=False, chunk_size=self.cross_entropy_chunk_size)
+                mtp_loss = fused_cross_entropy(mtp_output,lookup_table, next_tokens[:, 1:], gradient_scale=self.gradient_scale, is_training=False, chunk_size=self.cross_entropy_chunk_size)
 
             val_loss = nx.mean(val_loss)  + total_z_loss 
             total_loss += val_loss * next_tokens.size

@@ -32,6 +32,9 @@ class Inference:
         self.penalty_mem_size = configs["penalty_mem_size"]
         self.penalty = configs["penalty"]
 
+        self.attn_rope_scale = configs["attn_rope_scale"]
+        self.transformer.set_rope_scale(self.attn_rope_scale)
+
         self.trunk_all_caches = None
         self.position = 0
         self.penalty_memory = []
@@ -41,11 +44,12 @@ class Inference:
         self.mtp_acceptance = 0
 
     def infer(self, context:Any) -> Any:
+        max_cache_len = self.session_configs["context_size"] * self.attn_rope_scale
         T = context.shape[1]
         if self.temp < 0:
             warnings.warn(colorize("temp < 0 = greedy (like temp = 0)", "yellow"))
 
-        logits, self.trunk_all_caches, output = self.transformer.inference(context,self.session_configs["context_size"], self.trunk_all_caches, self.position)
+        logits, self.trunk_all_caches, output = self.transformer.inference(context,max_cache_len, self.trunk_all_caches, self.position)
 
         penalty_mem = nx.array(self.penalty_memory, nx.uint32)
         raw_token = self._sample(logits, penalty_mem,  self.temp, self.top_k, self.top_p, self.penalty)
@@ -62,14 +66,14 @@ class Inference:
         tokens = [confirmed]
         draft = None
         if self.transformer.mtp_blocks:
-            draft = self.make_draft(output, raw_token, self.position + T - 1, penalty_mem)
+            draft = self.make_draft(max_cache_len, output, raw_token, self.position + T - 1, penalty_mem)
             tokens.append(draft)
 
         self.position += context.shape[1]
 
-        while n_generated < self.n: 
+        while n_generated < self.n:
             tokens_array = nx.array(tokens, nx.uint32).reshape(1, -1)
-            logits, self.trunk_all_caches, output =  self.transformer.inference(tokens_array,self.session_configs["context_size"], self.trunk_all_caches, self.position)
+            logits, self.trunk_all_caches, output =  self.transformer.inference(tokens_array,max_cache_len, self.trunk_all_caches, self.position)
             s = self._sample(logits[:,:1], penalty_mem, self.temp, self.top_k, self.top_p, self.penalty)
             s_item = s.item()
             penalty_mem = self.update_penalty_mem(s_item)
@@ -90,13 +94,13 @@ class Inference:
 
                 penalty_mem = self.update_penalty_mem(confirmed)
 
-                draft = self.make_draft(output[:, 1:, :], confirmed, self.position + 1, penalty_mem)
+                draft = self.make_draft(max_cache_len, output[:, 1:, :], confirmed, self.position + 1, penalty_mem)
                 tokens = [confirmed, draft]
                 self.mtp_acceptance += 1
                 self.position += 2
                 n_generated += 2
-                
-   
+
+
             else:
                 decoded = self.tokenizer.decode([s_item])
                 print(decoded,end="",flush=True)
@@ -106,18 +110,18 @@ class Inference:
                 tokens = [s_item]
 
                 if self.transformer.mtp_blocks:
-                    draft = self.make_draft(output[:, :1, :], s_item, self.position, penalty_mem)
+                    draft = self.make_draft(max_cache_len, output[:, :1, :], s_item, self.position, penalty_mem)
                     tokens.append(draft)
 
                 self.position += 1
                 n_generated += 1
-                
+
             if len(self.penalty_memory) >= self.penalty_mem_size:
                 overfill = len(self.penalty_memory) - self.penalty_mem_size
                 self.penalty_memory =  self.penalty_memory[1+overfill:]
-    
-    def make_draft(self, output, token, pos, penalty_mem):
-        mtp_logits, self.mtp_all_caches = self.transformer.mtp_inference(output, token, self.session_configs["context_size"], self.mtp_all_caches, pos)
+
+    def make_draft(self, max_cache_len, output, token, pos, penalty_mem):
+        mtp_logits, self.mtp_all_caches = self.transformer.mtp_inference(output, token, max_cache_len, self.mtp_all_caches, pos)
         raw_mtp_token = self._sample(mtp_logits, penalty_mem, self.temp, self.top_k, self.top_p, 0)
         unverified_token = raw_mtp_token.item()
         return unverified_token

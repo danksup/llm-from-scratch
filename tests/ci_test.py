@@ -81,7 +81,6 @@ if __name__ == "__main__":
 
     session_configs["block_size"] = len(transformer.blocks)
 
-    print("loading dataloader ", end="\r")
     dataloader = DataLoader("data/test", tokenizer1, session_configs["context_size"], session_configs["batch_size"], session_configs["train_split"])
 
     session1 = Session(transformer, tokenizer1, True, session_configs)

@@ -20,7 +20,8 @@ configs = {
     "temp":.8,
     "top_p":0.9,
     "penalty_mem_size":128,
-    "penalty":.75
+    "penalty":.75,
+    "attn_rope_scale":2
 }
 
 inference = Inference(session, **configs)

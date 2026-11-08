@@ -25,7 +25,7 @@ default_block_configs = {
     "ff_topk":2,
     "ff_cf":1.25,
     "ff_init":"glorot_uniform",
-    "ff_dense_hidden_width":1024, 
+    "ff_dense_hidden_width":1024,
     "ff_n_dense":2,
     "ff_jitter_eps":0.02,
     "ff_bias_gamma":1e-3,
@@ -34,7 +34,11 @@ default_block_configs = {
     "attn_variant":"gqa",
     "attn_n_heads":16,
     "attn_init":"glorot_uniform",
-    "attn_rope_theta":10000
+    "attn_rope_theta":10000,
+    "attn_rope_scale": 1.0,
+    "attn_rope_orig_ctx": None,
+    "attn_rope_alpha": 1.0,
+    "attn_rope_beta": 32.0
 }
 
 ATTN_TYPE = {
@@ -80,7 +84,7 @@ class Transformer:
         self.mtp_lambda = configs.get("mtp_lambda", .5)
 
         self.check_non_finite = configs.get("check_non_finite", True)
-        
+
         self.embedding = Embedding(self.vocab_size, self.embed_dim, self.dtype, self.quantized, init=init)
         self.rmsnorm_final = RMSNorm(self.embed_dim, init=init)
 
@@ -150,17 +154,21 @@ class Transformer:
 
                 attn_type = ATTN_TYPE[attn_type_str]["attn"]
                 attn_rope_theta = overrided["attn_rope_theta"]
+                attn_rope_scale= overrided["attn_rope_scale"]
+                attn_rope_orig_ctx= overrided["attn_rope_orig_ctx"]
+                attn_rope_alpha= overrided["attn_rope_alpha"]
+                attn_rope_beta = overrided["attn_rope_beta"]
 
                 a = copy.deepcopy(attn_extra)
                 if attn_type_str == "chunked":
                     a["chunked"]["chunk_size"] = chunk_size
 
-                attn = attn_type(embed_dim=D, n_heads=n_heads, Q_norm = Q_norm, K_norm=K_norm, n_kv_heads=n_kv_heads,theta=attn_rope_theta, dtype=self.dtype, initializer=attn_init, quantized=self.quantized, init=init, **a[attn_type_str])
+                attn = attn_type(embed_dim=D, n_heads=n_heads, Q_norm = Q_norm, K_norm=K_norm, n_kv_heads=n_kv_heads,theta=attn_rope_theta,s=attn_rope_scale, ori_T=attn_rope_orig_ctx, alpha=attn_rope_alpha, beta=attn_rope_beta, dtype=self.dtype, initializer=attn_init, quantized=self.quantized, init=init, **a[attn_type_str])
                 ff = FFN(CF, topk, E, D, H, ff_dense_hidden_width, ff_n_dense,ff_jitter_eps,ff_bias_gamma, dtype=self.dtype, initializer=ff_init, quantized=self.quantized, init=init)
                 rmsnorm1 = RMSNorm(D, init=init)
                 rmsnorm2 = RMSNorm(D, init=init)
                 transformer_block = TransformerBlock(attn, ff, rmsnorm1, rmsnorm2)
-               
+
                 self.blocks.append(transformer_block)
         else:
             self.blocks = blocks
@@ -175,12 +183,12 @@ class Transformer:
                 self.mtp_blocks.append(mtp)
         else:
             self.mtp_blocks = mtp_blocks
-                
-            
+
+
     def __call__(self, *args: Any, **kwds: Any) -> Any:
         self.logger:Logger = kwds["logger"]
         return self
-    
+
     def warn_logger(self, msg, category, log_msg=""):
         if hasattr(self, "logger"):
             self.logger.warn(msg, log_msg, category)
@@ -194,7 +202,7 @@ class Transformer:
         else:
             msg = msg + "\n" + log_msg
             raise category(msg)
-        
+
     def __str__(self) -> str:
         return self.get_configs_str()
 
@@ -359,7 +367,7 @@ class Transformer:
             mtp.set_gradient(dwproj = dWproj, d_gamma1=d_gamma1, d_gamma2=d_gamma2, **tblock_grads)
 
         return dh,de
-        
+
     def eval_networks(self, optimizer:optimizers|None=None):
         to_eval = []
         for a,b,c,_,_ in self.get_parameters():
@@ -395,7 +403,7 @@ class Transformer:
                 if layer_obj is not None:
                     for param_name in params[layer_i]:
                         if len(param_name) == 2:
-                            w,dw = param_name 
+                            w,dw = param_name
                             w_ = getattr(layer_obj, w, None)
                             dw_full_str = None if dw is None else f"{prefix_}.{layer}.{dw}"
                             if w_ is not None:
@@ -409,7 +417,7 @@ class Transformer:
                                 dw_full_str = None if dw is None else f"{prefix_}.{layer}.{sublayer}.{dw}"
                                 if w_ is not None:
                                     yield subobj, w, dw, f"{prefix_}.{layer}.{sublayer}.{w}", dw_full_str
-                  
+
     def get_mtp_things(self):
         upper = [None, None, None , "transformer_block"]
         middle = [None, "rmsnorm1", "rmsnorm2", ["ff", "attention", "rmsnorm1", "rmsnorm2"]]
@@ -435,7 +443,7 @@ class Transformer:
                 else:
                     for a,b,c,d,e in self.get_block_weights(layer, param, iterable=[mtp.transformer_block], prefix=f"mtp.{i}.transformer_block"):
                         yield a,b,c,d,e
-                
+
 
     def get_parameters(self, *, block_only:bool=False, include_mtp=True):
         if not block_only:
@@ -457,9 +465,9 @@ class Transformer:
     def gradient_clipping_factor(self, microbatch_size, max_norm=nx.float_32(0.5)):
         summed = nx.array(0, nx.float32)
 
-        for layer, _, dw, _,_ in self.get_parameters(): 
+        for layer, _, dw, _,_ in self.get_parameters():
             if dw is not None:
-                param = getattr(layer, dw) 
+                param = getattr(layer, dw)
                 if dw == "d_lookup_table":
                     summed += nx.sum(nx.square(param.astype(nx.float32) / microbatch_size))
                 else:
@@ -496,7 +504,7 @@ class Transformer:
                 d_weight = getattr(layer_obj, d_param_name)
 
                 is_w_finite = nx.isfinite(weight).all()
-                is_d_finite = nx.isfinite(d_weight).all() 
+                is_d_finite = nx.isfinite(d_weight).all()
                 if not is_w_finite or not is_d_finite:
                     non_finite = True
                     block_i = w_name.split(".")[0]
@@ -592,7 +600,7 @@ class Transformer:
             current_grad = self.backward(block_gradient, all_masks, all_caches, doc_id, total_dh)
             current_grad = current_grad.astype(nx.float32) / self.gradient_scale
 
-            self.embedding.d_lookup_table = nx.add_at(self.embedding.d_lookup_table, contexts, current_grad) 
+            self.embedding.d_lookup_table = nx.add_at(self.embedding.d_lookup_table, contexts, current_grad)
             self.embedding.d_lookup_table += d_table
 
             total_loss += loss * next_tokens.size
@@ -611,7 +619,7 @@ class Transformer:
                     if not nx.isfinite(loss).item() or not nx.isfinite(gradient_mean).item():
                         if self.gradient_scale <= 1:
                             self.error_logger(msg="non-finite :(", log_msg="", category=FloatingPointError)
-                        
+
                         forward_nan = nx.isnan(loss)
                         forward_inf = nx.isinf(loss)
                         nan_weights = self.network_non_finite_check()[1]
@@ -620,9 +628,9 @@ class Transformer:
                         backward_inf = nx.isinf(gradient_mean)
 
                         reset_and_halve_grad_scale()
-                        
+
                         self.warn_logger(msg=f"[NON-FINITE step: {step}] non finite loss at microstep {microstep}. isnan forward/backward: {forward_nan}/{backward_nan} | isinf forward/backward: {forward_inf}/{backward_inf}\ngradient_scale is halved: {self.gradient_scale}", log_msg=f"\n non-finite weights:\n{nan_weights}", category= UserWarning)
-                        continue                        
+                        continue
 
             if microstep == microbatch_size:
                 if self.check_non_finite:
@@ -630,8 +638,8 @@ class Transformer:
                     if check[0]:
                         reset_and_halve_grad_scale()
                         self.warn_logger(msg=f"[NON-FINITE step: {step}] non finite loss at microstep {microstep}. \ngradient_scale is halved: {self.gradient_scale}", log_msg=f"\n non-finite weights:\n{check[1]}", category= UserWarning)
-                        continue         
-                    
+                        continue
+
                 gscale = self.gradient_clipping_factor(microbatch_size)
 
                 optimizer.calculate_lr(max_step, total_epoch)
@@ -704,7 +712,7 @@ class Transformer:
                                     setattr(obj, w, new_param.astype(nx.float32))
                                 else:
                                     setattr(obj, w, new_param.astype(dtype=self.dtype))
-                    
+
                     del optimized
                 self.zeroes_gradient()
                 step += 1
@@ -737,7 +745,7 @@ class Transformer:
                 break
             contexts = nx.array(contexts).reshape(dataloader.batch_size, dataloader.context_size)
             next_tokens = nx.array(next_tokens).reshape(dataloader.batch_size, dataloader.context_size)
-        
+
             embedded = self.embedding.forward(contexts)
 
             doc_id = nx.cumsum(contexts == 2, axis=-1) if self.doc_id else None #B,T
@@ -755,7 +763,7 @@ class Transformer:
                 mtp_output, _  = self.mtp_forward(unnormalized_output[:, :-1], next_tokens_embedded, doc_id_sliced, is_training=False)
                 mtp_loss = fused_cross_entropy(mtp_output,lookup_table, next_tokens[:, 1:], gradient_scale=self.gradient_scale, is_training=False, chunk_size=self.cross_entropy_chunk_size)
 
-            val_loss = nx.mean(val_loss)  + total_z_loss 
+            val_loss = nx.mean(val_loss)  + total_z_loss
             total_loss += val_loss * next_tokens.size
             total_mtp_loss += nx.mean(mtp_loss) * next_tokens.size
             count += next_tokens.size
@@ -813,7 +821,14 @@ class Transformer:
 
         scores = nx.mul(output, self.embedding.lookup_table, self.embedding.table_scale, self.embedding.bias, transpose=True)
         return scores, all_caches
-    
+
+    def set_rope_scale(self, s):
+        for block in self.blocks:
+            block.attention.set_rope_scale(s)
+
+        for mtp in self.mtp_blocks:
+            mtp.transformer_block.attention.set_rope_scale(s)
+
     def get_configs(self):
         configs = {}
         configs["vocab_size"] = self.vocab_size
@@ -876,7 +891,7 @@ class Transformer:
 
     def get_quant_params(self):
         quant_params = {}
-        
+
         for obj, d, _, wfull, _ in self.get_parameters():
             if d not in ["gamma", "router_bias", "router"]:
                 scales, biases = obj.get_quants(name=d) #type:ignore

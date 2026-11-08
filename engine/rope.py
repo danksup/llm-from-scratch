@@ -1,53 +1,69 @@
 import engine.backend as nx
 
-def precompute_freqs(head_dim, arg1:int|nx.ArrayLike=32768, freq_multiplier=10000):
+def precompute_freqs(head_dim, arg1:int|nx.ArrayLike=32768, freq_multiplier=10000, s=1.0, ori_T=None, alpha=1.0, beta=32.0):
     if isinstance(arg1, int):
         positions = nx.arange(arg1, dtype=nx.float32)
     else:
         positions = arg1
-        
+
     dims = nx.arange(0,head_dim,2, dtype=nx.float32)
     theta = 1.0 / (freq_multiplier ** (dims / head_dim))
+    if s > 1.0 and ori_T is not None:
+        λ = (2 * nx.pi) / theta
+        r = ori_T / λ
+        gamma = nx.clip((r - alpha) / (beta - alpha), 0, 1)
+        theta = (1.0 - gamma) * theta / s + gamma * theta
+
     angles = positions[:, None] * theta[None,:]
     return angles
 
-def rope_forward(x, angles, position=0, freq_multiplier=10000):
-    T = x.shape[2]    
+def rope_forward(x, angles, position=0, freq_multiplier=10000, s=1.0, ori_T=None, alpha=1.0, beta=32.0):
+    T = x.shape[2]
+    if s > 1.0:
+        m_scale = 0.1 * nx.log(s) + 1.0
+        x = x * m_scale
+    else:
+        s = 1.0
 
     if position + T > angles.shape[0]:
         positions = nx.arange(position, position+T, dtype=nx.float32)
-        current_angles =  precompute_freqs(x.shape[-1], arg1=positions, freq_multiplier=freq_multiplier)
+        current_angles =  precompute_freqs(x.shape[-1], arg1=positions, freq_multiplier=freq_multiplier, s=s, ori_T=ori_T, alpha=alpha, beta=beta)
     else:
         current_angles = angles[position:position+T]
 
     sin = nx.sin(current_angles, dtype=x.dtype)
     cos = nx.cos(current_angles, dtype=x.dtype)
-    x1 = x[..., ::2] 
+    x1 = x[..., ::2]
     x2 = x[..., 1::2]
-    
+
     rotated_x1 = (x1 * cos) - (x2 * sin)
     rotated_x2 = (x1 * sin) + (x2 * cos)
-    
+
     stacked = nx.stack([rotated_x1, rotated_x2], axis=-1)
     return stacked.reshape(x.shape)
 
-def rope_inverse(x,angles, freq_multiplier=10000):
+def rope_inverse(x,angles, freq_multiplier=10000, s=1.0, ori_T=None, alpha=1.0, beta=32.0):
     T = x.shape[2]
+    if s > 1.0:
+        m_scale = 0.1 * nx.log(s) + 1.0
+        x = x * m_scale
+    else:
+        s = 1.0
 
     if  T > angles.shape[0]:
         positions = nx.arange(T, dtype=nx.float32)
-        current_angles =  precompute_freqs(x.shape[-1], arg1=positions, freq_multiplier=freq_multiplier)
+        current_angles =  precompute_freqs(x.shape[-1], arg1=positions, freq_multiplier=freq_multiplier, s=s, ori_T=ori_T, alpha=alpha, beta=beta)
     else:
         current_angles = angles[:T,:]
 
     sin = nx.sin(current_angles, dtype=x.dtype)
     cos = nx.cos(current_angles, dtype=x.dtype)
 
-    x1 = x[..., ::2] 
-    x2 = x[..., 1::2]  
-    
+    x1 = x[..., ::2]
+    x2 = x[..., 1::2]
+
     rotated_x1 = (x1 * cos) + (x2 * sin)
     rotated_x2 = -(x1 * sin) + (x2 * cos)
-    
+
     stacked = nx.stack([rotated_x1, rotated_x2], axis=-1)
     return stacked.reshape(x.shape)

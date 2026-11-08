@@ -74,13 +74,13 @@ logs:
 - moe aux loss free balancing nov 1 2026
 - multi token prediction nov 5 2026
 - 8bit adam nov 7 2026
+- yarn (rope) nov 8 2026
 
 ## Ongoing:
 - ram usage optimization
 - optimizing/cleanup/docs
 
 ## TODO (not in order):
-- yarn (rope)
 - fill in the middle transformer
 - fix optimizer states saving to safetensors
 - parallelizing tokenizer word frequency counting
@@ -156,4 +156,3 @@ recompute_activation: True | chunked_cross_entropy: chunk_size=512
 - 195_605_563 corpus len | 16384 |fitting finished in 283.527 (5 jul 2026)
 - 1_351_277_738 corpus len | 24000 | fitting finished in 1437.236 (6 aug 2026)
 - 1_351_277_738 corpus len | 48000 | fitting finished in 3883.186 (6 aug 2026)
-

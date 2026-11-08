@@ -128,13 +128,13 @@ class TransformerBlock:
             "rmsnorm1": self.rmsnorm1.configs,
             "rmsnorm2": self.rmsnorm2.configs,
         }
-    
+
     def copy(self):
         attn_copy = self.attention.copy()
         ff_copy = self.ff.copy()
         rms1_copy = self.rmsnorm1.copy()
         rms2_copy = self.rmsnorm2.copy()
-        
+
         block_copy = TransformerBlock(attn_copy, ff_copy, rms1_copy, rms2_copy)
         return block_copy
 
@@ -147,4 +147,3 @@ class TransformerBlock:
         self.rmsnorm1.set_gradient(kwargs["tblock_d_gamma1"])
         self.rmsnorm2.set_gradient(kwargs["tblock_d_gamma2"])
         self.ff.set_gradient(dWcombined=kwargs["dwcombined"], dWout=kwargs["dwout"], d_router=kwargs["d_router"], dW_dense_combined=kwargs["dw_dense_combined"],dW_dense_out=kwargs["dw_dense_out"])
-

@@ -7,7 +7,7 @@ from engine.rope import precompute_freqs
 from engine.rmsnorm import RMSNorm
 
 class AttentionFull:
-    def __init__(self,embed_dim:int, n_heads:int,Q_norm:RMSNorm, K_norm:RMSNorm,  n_kv_heads:int=-1,theta=10000, dtype:Any=nx.float16,  initializer:Callable=initializer.glorot_uniform, quantized:bool=False, *, init=True) -> None:
+    def __init__(self,embed_dim:int, n_heads:int,Q_norm:RMSNorm, K_norm:RMSNorm,  n_kv_heads:int=-1,theta=10000,s=1.0, ori_T=None, alpha=1.0, beta=32.0, dtype:Any=nx.float16,  initializer:Callable=initializer.glorot_uniform, quantized:bool=False, *, init=True) -> None:
         self.n_kv_heads = n_kv_heads
 
         if n_kv_heads < 0:
@@ -25,9 +25,13 @@ class AttentionFull:
         self.n_rep = self.n_heads // self.n_kv_heads
 
         self.theta = theta
-        self.freqs = precompute_freqs(self.head_dim, arg1=32768, freq_multiplier=theta)
+        self.s = s
+        self.ori_T = ori_T
+        self.alpha = alpha
+        self.beta = beta
+        self.freqs = precompute_freqs(self.head_dim, arg1=32768, freq_multiplier=theta, s=s, ori_T=ori_T, alpha=alpha, beta=beta)
 
-        self.configs = self.embed_dim, self.n_kv_heads, self.n_heads, self.n_rep, self.head_dim, self.theta, self.freqs
+        self.configs = self.embed_dim, self.n_kv_heads, self.n_heads, self.n_rep, self.head_dim, self.theta, self.s,self.ori_T, self.alpha,self.beta, self.freqs
 
         self.quantized = quantized
         self.scales = (None, None)
@@ -77,7 +81,7 @@ class AttentionFull:
 
     def get_quants(self, name):
         return self.scales[self.quant_map[name]], self.biases[self.quant_map[name]]
-        
+
     def set_quants(self, name, scale, bias):
         scale_list = list(self.scales)
         scale_list[self.quant_map[name]] = scale
@@ -108,7 +112,8 @@ class AttentionFull:
         #fp_16_x shape = (B,T,D)
         #Wqkv.T (D, D + 2 * n_kv_heads * H)
         #combined (B, T, D + 2 * n_kv_heads * H)
-        embed_dim, n_kv_heads, n_heads, n_rep, head_dim,theta, freqs = attn_configs
+        embed_dim, n_kv_heads, n_heads, n_rep, head_dim, theta, s,ori_T, alpha, beta, freqs = attn_configs
+
         Wqkv, Wo, Q_norm_gamma, K_norm_gamma = attn_params
 
         wqkv_scale, wo_scale, wqkv_bias, wo_bias = quantization
@@ -129,8 +134,8 @@ class AttentionFull:
 
         Q, Q_norm_caches = RMSNorm._forward(Q, Q_norm_gamma, 1e-5)
         K, K_norm_caches = RMSNorm._forward(K, K_norm_gamma, 1e-5)
-        Q = rope_forward(Q, freqs, freq_multiplier=theta)
-        K = rope_forward(K, freqs, freq_multiplier=theta)
+        Q = rope_forward(Q, freqs, freq_multiplier=theta, s=s, ori_T=ori_T, alpha=alpha, beta=beta)
+        K = rope_forward(K, freqs, freq_multiplier=theta, s=s, ori_T=ori_T, alpha=alpha, beta=beta)
 
         Q = Q.reshape(B,n_kv_heads, n_rep, T, head_dim)
 
@@ -161,7 +166,8 @@ class AttentionFull:
 
     @staticmethod
     def _backward(gradient:nx.ArrayLike, caches:tuple[Any,...], attn_configs:tuple[Any,...], attn_params: tuple[Any,...], quantization:tuple[Any,...]|None=None,  *, recompute_activation=True) -> tuple[nx.ArrayLike,...]:
-        embed_dim, n_kv_heads, n_heads, n_rep, head_dim, theta, freqs = attn_configs
+        embed_dim, n_kv_heads, n_heads, n_rep, head_dim,theta, s,ori_T, alpha, beta, freqs = attn_configs
+
         Wqkv, Wo, Q_norm_gamma, K_norm_gamma = attn_params
 
         wqkv_scale, wo_scale, wqkv_bias, wo_bias = quantization #type:ignore
@@ -197,8 +203,8 @@ class AttentionFull:
         del Q, dscores, dweights, d_output, d_output_concat
 
         dQ = dQ.reshape(B, -1, T, head_dim)
-        dQ = rope_inverse(dQ, freqs, freq_multiplier=theta)
-        dK = rope_inverse(dK, freqs, freq_multiplier=theta)
+        dQ = rope_inverse(dQ, freqs, freq_multiplier=theta, s=s, ori_T=ori_T, alpha=alpha, beta=beta)
+        dK = rope_inverse(dK, freqs, freq_multiplier=theta, s=s, ori_T=ori_T, alpha=alpha, beta=beta)
         dQ, Q_norm_d_gamma = RMSNorm._backward(dQ, Q_norm_caches, Q_norm_gamma)
         dK, K_norm_d_gamma = RMSNorm._backward(dK, K_norm_caches, K_norm_gamma)
 
@@ -239,7 +245,7 @@ class AttentionFull:
 
         K = K.reshape(B, T, self.n_kv_heads, self.head_dim).transpose(0,2,1,3)
         K, _ = RMSNorm._forward(K, self.K_norm.gamma, self.K_norm.epsilon)
-        K = rope_forward(K, freqs, position, freq_multiplier=self.theta)
+        K = rope_forward(K, freqs, position, freq_multiplier=self.theta, s=self.s, ori_T=self.ori_T, alpha=self.alpha, beta=self.beta)
 
         end = position + T
 
@@ -265,7 +271,7 @@ class AttentionFull:
         Q = combined[..., :self.embed_dim]
         Q = Q.reshape(B, T, self.n_heads, self.head_dim).transpose(0,2,1,3)
         Q, _ = RMSNorm._forward(Q, self.Q_norm.gamma, self.Q_norm.epsilon)
-        Q = rope_forward(Q, freqs, position, freq_multiplier=self.theta)
+        Q = rope_forward(Q, freqs, position, freq_multiplier=self.theta, s=self.s, ori_T=self.ori_T, alpha=self.alpha, beta=self.beta)
 
         repeats_cached_k = nx.repeat(active_K, self.n_rep, axis=1 )
         repeats_cached_v = nx.repeat(active_V, self.n_rep, axis=1 )
@@ -287,15 +293,20 @@ class AttentionFull:
             output_projected = output_concat @ self.Wo #type:ignore
 
         return output_projected, cached_k, cached_v
-    
+
     @staticmethod
     def compute_mask(T):
         return nx.triu(nx.ones((T, T), dtype=nx.bool_), k=1)
 
+    def set_rope_scale(self, s):
+        self.s = s
+        self.freqs = precompute_freqs(self.head_dim, 32768, self.theta, s, self.ori_T, self.alpha, self.beta)
+        self.configs = self.embed_dim, self.n_kv_heads, self.n_heads, self.n_rep, self.head_dim, self.theta,self.s, self.ori_T, self.alpha,self.beta, self.freqs
+
     def copy(self):
         Q_norm_copy = self.Q_norm.copy()
         K_norm_copy = self.K_norm.copy()
-        attn_copy = AttentionFull(embed_dim=self.embed_dim, n_heads=self.n_heads, Q_norm=Q_norm_copy, K_norm=K_norm_copy, n_kv_heads=self.n_kv_heads, theta=self.theta,dtype=self.dtype, quantized=self.quantized, init=False)
+        attn_copy = AttentionFull(embed_dim=self.embed_dim, n_heads=self.n_heads, Q_norm=Q_norm_copy, K_norm=K_norm_copy, n_kv_heads=self.n_kv_heads, theta=self.theta,ori_T=self.ori_T, s=self.s, alpha=self.alpha, beta=self.beta,dtype=self.dtype, quantized=self.quantized, init=False)
         attn_copy.Wqkv = nx.copy(self.Wqkv)
         attn_copy.Wo = nx.copy(self.Wo)
         if self.quantized:
@@ -303,7 +314,7 @@ class AttentionFull:
             attn_copy.biases = (nx.copy(self.biases[0]), nx.copy(self.biases[1]))
 
         return attn_copy
-    
+
     def quantize(self):
         if self.quantized:
             return

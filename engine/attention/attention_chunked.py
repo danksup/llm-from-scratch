@@ -7,7 +7,7 @@ from engine.rmsnorm import RMSNorm
 
 #TODO: do the thing
 class AttentionChunked:
-    def __init__(self,embed_dim:int, n_heads:int, Q_norm:RMSNorm, K_norm:RMSNorm, n_kv_heads:int=-1, chunk_size=8,theta=10000, dtype:Any=nx.float16, initializer:Callable=initializer.glorot_uniform, quantized:bool=False, *, init=True) -> None:
+    def __init__(self,embed_dim:int, n_heads:int, Q_norm:RMSNorm, K_norm:RMSNorm, n_kv_heads:int=-1, chunk_size=8,theta=10000, s=1.0, ori_T=None, alpha=1.0, beta=32.0, dtype:Any=nx.float16, initializer:Callable=initializer.glorot_uniform, quantized:bool=False, *, init=True) -> None:
         self.n_kv_heads = n_kv_heads
 
         if n_kv_heads < 0:
@@ -28,9 +28,13 @@ class AttentionChunked:
         self.n_rep = self.n_heads // self.n_kv_heads
 
         self.theta = theta
-        self.freqs = precompute_freqs(self.head_dim, arg1=32768, freq_multiplier=theta)
+        self.s = s
+        self.ori_T = ori_T
+        self.alpha = alpha
+        self.beta = beta
+        self.freqs = precompute_freqs(self.head_dim, arg1=32768, freq_multiplier=theta, s=s, ori_T=ori_T, alpha=alpha, beta=beta)
 
-        self.configs = self.embed_dim, self.n_kv_heads, self.n_heads, self.n_rep, head_dim, self.chunk_size,  self.theta, self.freqs
+        self.configs = self.embed_dim, self.n_kv_heads, self.n_heads, self.n_rep, head_dim, self.chunk_size,  self.theta,self.s,self.ori_T, self.alpha,self.beta, self.freqs
 
         self.quantized = quantized
 
@@ -81,7 +85,7 @@ class AttentionChunked:
 
     def get_quants(self, name):
         return self.scales[self.quant_map[name]], self.biases[self.quant_map[name]]
-    
+
     def set_quants(self, name, scale, bias):
         scale_list = list(self.scales)
         scale_list[self.quant_map[name]] = scale
@@ -105,7 +109,7 @@ class AttentionChunked:
 
     @staticmethod
     def _forward(x:nx.ArrayLike, causal_mask:nx.ArrayLike,doc_id, configs:tuple[Any,...], params:tuple[Any,...], quantization, *, recompute_activation=True):
-        embed_dim, n_kv_heads, n_heads, n_rep, head_dim, chunk_size,theta, freqs = configs
+        embed_dim, n_kv_heads, n_heads, n_rep, head_dim, chunk_size,theta, s,ori_T, alpha, beta, freqs = configs
         Wqkv, Wo, Q_norm_gamma, K_norm_gamma = params
 
         wqkv_scale, wo_scale, wqkv_bias, wo_bias = quantization
@@ -128,8 +132,8 @@ class AttentionChunked:
         Q, Q_norm_caches = RMSNorm._forward(Q, Q_norm_gamma, 1e-5)
         K, K_norm_caches = RMSNorm._forward(K, K_norm_gamma, 1e-5)
 
-        Q = rope_forward(Q, freqs, freq_multiplier=theta)
-        K = rope_forward(K, freqs, freq_multiplier=theta)
+        Q = rope_forward(Q, freqs, freq_multiplier=theta, s=s, ori_T=ori_T, alpha=alpha, beta=beta)
+        K = rope_forward(K, freqs, freq_multiplier=theta, s=s, ori_T=ori_T, alpha=alpha, beta=beta)
 
         remainder = (chunk_size - (T % chunk_size)) % chunk_size
         pad = [(0,0), (0,0), (0, remainder), (0,0)]
@@ -160,7 +164,7 @@ class AttentionChunked:
             doc_id_q = doc_id[:,:,:,None]
             doc_pad = nx.zeros((B, 1, 1, chunk_size), doc_id.dtype)
             doc_id = doc_id[:,:,None,:]
-            preprendix = nx.concatenate([doc_pad, doc_id[:,:-1,:, :]], axis=1) 
+            preprendix = nx.concatenate([doc_pad, doc_id[:,:-1,:, :]], axis=1)
             doc_id_k = nx.concatenate([preprendix, doc_id], axis=-1) #B, n_chunk, 1, 2c
             doc_mask = doc_id_k == doc_id_q
             combined_mask = causal_mask & (doc_mask[:,None,None,:,:])
@@ -191,7 +195,7 @@ class AttentionChunked:
 
     @staticmethod
     def _backward(gradient:nx.ArrayLike, caches:tuple[Any,...], attn_configs:tuple[Any,...], attn_params: tuple[Any,...], quantization, *, recompute_activation=True) :#-> tuple[nx.ArrayLike,...]:
-        embed_dim, n_kv_heads, n_heads, n_rep, head_dim, chunk_size, theta, freqs = attn_configs
+        embed_dim, n_kv_heads, n_heads, n_rep, head_dim, chunk_size, theta,s,ori_T, alpha,beta, freqs = attn_configs
         Wqkv, Wo, Q_norm_gamma, K_norm_gamma = attn_params
         B, T, D = gradient.shape
 
@@ -244,7 +248,7 @@ class AttentionChunked:
         dQ = d_scores @ K_chunked #B, n_kv_head, n_rep, n_chunk, chunk_size, head_dim
         dQ = dQ.reshape(B, n_heads, T+remainder, head_dim)
         dQ = dQ[:,:,:T,:] #B, n_heads, T, head_dim
-        dQ = rope_inverse(dQ, freqs, freq_multiplier=theta)
+        dQ = rope_inverse(dQ, freqs, freq_multiplier=theta, s=s, ori_T=ori_T, alpha=alpha, beta=beta)
         dQ,Q_norm_d_gamma = RMSNorm._backward(dQ, Q_norm_caches, Q_norm_gamma)
         dQ = dQ.transpose(0, 2, 1, 3).reshape(B, T, embed_dim)
 
@@ -252,7 +256,7 @@ class AttentionChunked:
         dK_r = d_chunked_K[:, :, :, chunk_size:, :]
         dK_r[:,:,:-1,:,:] += dK_l[:,:,1:,:,:] #B, n_heads, n_chunk, chunk_size, Dh
         dK = dK_r.reshape(B, n_kv_heads, -1, head_dim)[:, :, :T, :] #B, n_kv_heads, T, Dh
-        dK = rope_inverse(dK, freqs, freq_multiplier=theta)
+        dK = rope_inverse(dK, freqs, freq_multiplier=theta, s=s, ori_T=ori_T, alpha=alpha, beta=beta)
         dK,K_norm_d_gamma = RMSNorm._backward(dK, K_norm_caches, K_norm_gamma)
         dK = dK.transpose(0,2,1,3).reshape(B,T, head_dim*n_kv_heads) #B, T, D
 
@@ -288,7 +292,7 @@ class AttentionChunked:
 
         K = K.reshape(B, T, self.n_kv_heads, self.head_dim).transpose(0,2,1,3)
         K, _ = RMSNorm._forward(K, self.K_norm.gamma, self.K_norm.epsilon)
-        K = rope_forward(K, freqs, position, freq_multiplier=self.theta)
+        K = rope_forward(K, freqs, position, freq_multiplier=self.theta, s=self.s, ori_T=self.ori_T, alpha=self.alpha, beta=self.beta)
 
         end = position + T
 
@@ -314,7 +318,7 @@ class AttentionChunked:
         Q = combined[..., :self.embed_dim]
         Q = Q.reshape(B, T, self.n_heads, self.head_dim).transpose(0,2,1,3)
         Q, _ = RMSNorm._forward(Q, self.Q_norm.gamma, self.Q_norm.epsilon)
-        Q = rope_forward(Q, freqs, position, freq_multiplier=self.theta)
+        Q = rope_forward(Q, freqs, position, freq_multiplier=self.theta, s=self.s, ori_T=self.ori_T, alpha=self.alpha, beta=self.beta)
 
         repeats_cached_k = nx.repeat(active_K, self.n_rep, axis=1 )
         repeats_cached_v = nx.repeat(active_V, self.n_rep, axis=1 )
@@ -351,10 +355,15 @@ class AttentionChunked:
     def compute_mask_inference(T):
         return nx.triu(nx.ones((T, T), dtype=nx.bool_), k=1)
 
+    def set_rope_scale(self, s):
+        self.s = s
+        self.freqs = precompute_freqs(self.head_dim, 32768, self.theta, s, self.ori_T, self.alpha, self.beta)
+        self.configs = self.embed_dim, self.n_kv_heads, self.n_heads, self.n_rep, self.head_dim, self.chunk_size, self.theta,self.s, self.ori_T, self.alpha,self.beta, self.freqs
+
     def copy(self):
         Q_norm_copy = self.Q_norm.copy()
         K_norm_copy = self.K_norm.copy()
-        attn_copy = AttentionChunked(embed_dim=self.embed_dim, n_heads=self.n_heads, Q_norm=Q_norm_copy, K_norm=K_norm_copy, n_kv_heads=self.n_kv_heads, chunk_size=self.chunk_size,theta=self.theta, dtype=self.dtype, quantized=self.quantized, init=False)
+        attn_copy = AttentionChunked(embed_dim=self.embed_dim, n_heads=self.n_heads, Q_norm=Q_norm_copy, K_norm=K_norm_copy, n_kv_heads=self.n_kv_heads, chunk_size=self.chunk_size,theta=self.theta, ori_T=self.ori_T, s=self.s, alpha=self.alpha, beta=self.beta, dtype=self.dtype, quantized=self.quantized, init=False)
         attn_copy.Wqkv = nx.copy(self.Wqkv)
         attn_copy.Wo = nx.copy(self.Wo)
         if self.quantized:

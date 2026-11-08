@@ -18,14 +18,13 @@ EPOCHS = 1
 EMBED_DIM = 256
 CONTEXT_SIZE = 2048
 BATCH_SIZE = 2
-BASE_WIDTH = 4 * EMBED_DIM
 N_HEADS = 8
 N_KV_HEADS = max(1, N_HEADS // 4)
-N_EXPERTS = 8
+N_EXPERTS = 12
 CF = 1.25
-VAL = 1
+VAL = .9
 TOP_K = 2
-MAX_STEP = 50
+MAX_STEP = 31160
 
 CORPUS_PATH = "artifacts/dataloader/2025_26"
 TOKENIZER_PATH = "artifacts/tokenizer/tokenizer32768_1624612680len.tokenizer"
@@ -35,21 +34,21 @@ session_configs = {
     "epochs":EPOCHS,
     "max_step":MAX_STEP,
     "train_split": VAL,
-    "max_val_step":100,
+    "max_val_step":20,
     "eval_every":1,
     "validate_every":10,
     "context_size": CONTEXT_SIZE,
     "batch_size": BATCH_SIZE,
-    "microbatch_size":16,
+    "microbatch_size":32,
     "optimizer":"adamw",
     "optimizer_args":{
         "lr": 1e-3,
         "use_master": True,
         "scheduler": "cosine_decay",
-        "min_lr": 5e-5,
-        "t_warmup": max(1, int(MAX_STEP * 0.015)),
+        "min_lr": 8e-5,
+        "t_warmup": max(1, int(MAX_STEP * 0.02)),
         "eight_bit":True,
-        "foreach":False
+        "foreach":True
     },
     "save":True,
     "logger":True,
@@ -64,35 +63,39 @@ session_configs = {
 }
 
 model_configs = {
-    "n_blocks":8,
-    "n_mtp":0,
+    "n_blocks":16,
+    "n_mtp":1,
     "discard_mtp":False,
     "mtp_lambda":0.5,
     "embed_dim":EMBED_DIM,
     "dtype": "float16",
-    "gradient_scale":32768,
+    "gradient_scale":8192,
     "vocab_size": len(tokenizer1.vocab),
     "quantized":False,
     "doc_id":True,
     "check_non_finite":True,
     "recompute_activation":True,
     "block_configs":{
-        "ff_hidden_width": BASE_WIDTH,
+        "ff_hidden_width": int(2.625 * EMBED_DIM),
         "ff_n_experts":N_EXPERTS,
         "ff_topk":TOP_K,
         "ff_cf":CF,
         "ff_init":"glorot_uniform",
-        "ff_dense_hidden_width":BASE_WIDTH, 
+        "ff_dense_hidden_width":4*EMBED_DIM,
         "ff_n_dense":1,
         "ff_jitter_eps":0.02,
         "ff_bias_gamma": 1e-3,
         "attn_type":"chunked",
-        "attn_chunk_size":CONTEXT_SIZE//8,
+        "attn_chunk_size":CONTEXT_SIZE//4,
         "attn_variant":"gqa",
         "attn_n_heads":N_HEADS,
         "attn_n_kv_heads":N_KV_HEADS,
         "attn_init":"glorot_uniform",
-        "attn_rope_theta":10000
+        "attn_rope_theta":10000,
+        "attn_rope_scale": 1.0,
+        "attn_rope_orig_ctx": CONTEXT_SIZE,
+        "attn_rope_alpha": 1.0,
+        "attn_rope_beta": 32.0
         },
     "block_overrides":{
       }

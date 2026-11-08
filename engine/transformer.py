@@ -34,6 +34,7 @@ default_block_configs = {
     "attn_variant":"gqa",
     "attn_n_heads":16,
     "attn_init":"glorot_uniform",
+    "attn_rope_theta":10000
 }
 
 ATTN_TYPE = {
@@ -148,12 +149,13 @@ class Transformer:
                     n_kv_heads = overrided["attn_n_kv_heads"]
 
                 attn_type = ATTN_TYPE[attn_type_str]["attn"]
+                attn_rope_theta = overrided["attn_rope_theta"]
 
                 a = copy.deepcopy(attn_extra)
                 if attn_type_str == "chunked":
                     a["chunked"]["chunk_size"] = chunk_size
 
-                attn = attn_type(embed_dim=D, n_heads=n_heads, Q_norm = Q_norm, K_norm=K_norm, n_kv_heads=n_kv_heads, dtype=self.dtype, initializer=attn_init, quantized=self.quantized, init=init, **a[attn_type_str])
+                attn = attn_type(embed_dim=D, n_heads=n_heads, Q_norm = Q_norm, K_norm=K_norm, n_kv_heads=n_kv_heads,theta=attn_rope_theta, dtype=self.dtype, initializer=attn_init, quantized=self.quantized, init=init, **a[attn_type_str])
                 ff = FFN(CF, topk, E, D, H, ff_dense_hidden_width, ff_n_dense,ff_jitter_eps,ff_bias_gamma, dtype=self.dtype, initializer=ff_init, quantized=self.quantized, init=init)
                 rmsnorm1 = RMSNorm(D, init=init)
                 rmsnorm2 = RMSNorm(D, init=init)
@@ -292,7 +294,9 @@ class Transformer:
         current_grad = err_signal
         rmsnorm_final_cache = all_caches.pop()
         current_grad, rmsnorm_final_d_gamma = self.rmsnorm_final._backward(current_grad, rmsnorm_final_cache, self.rmsnorm_final.gamma)
-        current_grad[:,:-1] += total_dh
+
+        if total_dh is not None:
+            current_grad[:,:-1] += total_dh
         self.rmsnorm_final.d_gamma = rmsnorm_final_d_gamma if getattr(self.rmsnorm_final, "d_gamma", None) is None else self.rmsnorm_final.d_gamma + rmsnorm_final_d_gamma
         for block, masks,caches in zip(self.blocks[::-1], all_masks[::-1],all_caches[::-1]):
             current_grad = current_grad.astype(self.dtype)

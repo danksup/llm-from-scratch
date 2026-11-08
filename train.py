@@ -92,6 +92,7 @@ model_configs = {
         "attn_n_heads":N_HEADS,
         "attn_n_kv_heads":N_KV_HEADS,
         "attn_init":"glorot_uniform",
+        "attn_rope_theta":10000
         },
     "block_overrides":{
       }

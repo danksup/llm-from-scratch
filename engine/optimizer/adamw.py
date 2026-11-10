@@ -1,5 +1,6 @@
 import engine.backend as nx
 from typing import Any, Callable
+import copy
 
 class AdamW:
     def __init__(self, lr=1e-3, beta1:float=0.9, beta2:float=0.999, epsilon:float=1e-8, weight_decay:float=0.01, use_master:bool=True, scheduler:None|Callable=None, min_lr:None | float= None, t_warmup:None|int=None, *, _all_not_decayed:bool=False, eight_bit=False, foreach=False) -> None:
@@ -27,13 +28,13 @@ class AdamW:
                     self.min_lr = nx.float_32(min_lr)
         self.beta1 = nx.float_32(beta1)
         self.beta2 = nx.float_32(beta2)
-       
+
         self.epsilon = nx.float_32(epsilon)
         self.weight_decay = nx.float_32(weight_decay)
         self.use_master = use_master
 
         self.__all_not_decayed = _all_not_decayed
-    
+
     def step_many(self, name_param_gradient_decay:list[Any]) -> dict[Any,Any]:
         group = {}
         m_dtype = nx.float32 if not self.eight_bit else nx.int8
@@ -51,15 +52,15 @@ class AdamW:
 
             group[grouping].append((name,param,gradient,decay_bool))
 
-        name_param_gradient_decay.clear()        
+        name_param_gradient_decay.clear()
 
         optimized = {}
-        
+
         for group_tuple, thing in group.items():
             _, should_decay = group_tuple
             names = [i[0] for i in thing]
             gradients = nx.stack([i[2] for i in thing])
-           
+
             if group_tuple not in self.state:
                 params = nx.stack([i[1] for i in thing])
                 self.state[group_tuple] = {
@@ -68,14 +69,14 @@ class AdamW:
                     "v": nx.zeros_like(params,  v_dtype),
                     "m_scales": None,
                     "v_scales": None,
-                } 
+                }
             else:
                 if self.use_master:
                     params = self.state[group_tuple]["master"]
                 else:
                     params = nx.stack([i[1] for i in thing])
 
-            state_shape = self.state[group_tuple]   
+            state_shape = self.state[group_tuple]
             thing.clear()
 
             m_v_t = (state_shape["m"], state_shape["v"], self.state["t"], state_shape["m_scales"], state_shape["v_scales"],)
@@ -86,7 +87,7 @@ class AdamW:
             del params, gradients
 
             nx.eval(new_params, m, v, m_scales, v_scales)
-            
+
             self.state[group_tuple] = {"m":m, "v":v, "m_scales":m_scales, "v_scales":v_scales}
 
             if self.use_master:
@@ -97,7 +98,7 @@ class AdamW:
                 optimized[name] = new_params[idx]
                 name_list.append(name)
             self.state[group_tuple]["names"] = name_list
-            
+
             del new_params
 
         return optimized
@@ -106,7 +107,7 @@ class AdamW:
         name, w, dw, decay = tup
         if self.__all_not_decayed:
             decay = False
-            
+
         m_dtype = nx.float32 if not self.eight_bit else nx.int8
         v_dtype = nx.float32 if not self.eight_bit else nx.uint8
         if name not in self.state:
@@ -115,12 +116,12 @@ class AdamW:
                 "v": nx.zeros_like(w, v_dtype),
                 "m_scales": None,
                 "v_scales": None,
-            } 
+            }
         else:
             if self.use_master:
                 w = self.state[name]["master"]
 
-        state_shape = self.state[name]   
+        state_shape = self.state[name]
         m_v_t = (state_shape["m"], state_shape["v"], self.state["t"], state_shape["m_scales"], state_shape["v_scales"],)
         weight_decay = self.weight_decay if decay else nx.float_32(0.0)
 
@@ -130,7 +131,7 @@ class AdamW:
         if self.use_master:
             self.state[name]["master"] = new_param
 
-        return new_param        
+        return new_param
 
     def calculate_lr(self, max_step, total_epoch):
         t_warmup = self.t_warmup
@@ -153,14 +154,14 @@ class AdamW:
 
     @staticmethod
     @nx.compile
-    def __step(m_v_t, params:Any, grads:Any, lr:Any, epsilon:float, beta1:float, beta2:float, weight_decay:float, eight_bit) -> tuple[Any,...]: 
-        m,v,t,m_scales,v_scales = m_v_t    
+    def __step(m_v_t, params:Any, grads:Any, lr:Any, epsilon:float, beta1:float, beta2:float, weight_decay:float, eight_bit) -> tuple[Any,...]:
+        m,v,t,m_scales,v_scales = m_v_t
         if m_scales is not None:
-            m = nx.linear_dequantize(m, m_scales)  
+            m = nx.linear_dequantize(m, m_scales)
         else:
             m = m.astype(nx.float32)
         if v_scales is not None:
-            v = nx.log_dequantize(v, v_scales, epsilon)  
+            v = nx.log_dequantize(v, v_scales, epsilon)
         else:
             v = v.astype(nx.float32)
 
@@ -176,65 +177,37 @@ class AdamW:
             v,v_scales = nx.log_quantize(v, epsilon)
         return params, m, v, m_scales, v_scales
 
-    #TODO: coderot
-    # def to_dict(self, config_only:bool=True) -> dict[Any, Any]:
-    #     adamw = {}
-        
-    #     if not config_only:
-    #         adamw["t"] = self.state["t"].item()
-    #         for key, value in self.state.items():
-    #             shape_copy = {}
-    #             if key != "t":
-    #                 shape_copy["names"] = value["names"]
-    #                 if self.use_master:
-    #                     shape_copy["master"] = value["master"].tolist()
-    #                 shape_copy["m"] = value["m"].tolist()
-    #                 shape_copy["v"] = value["v"].tolist()
-    #                 adamw[key] = shape_copy
+    def to_dict(self) -> dict[Any, Any]:
+        adamw = {"state":{}}
+        adamw["state"]["t"] = nx.copy(self.state["t"])
 
-    #     adamw_configs = {
-    #         "config_only": config_only,
-    #         "lr": self.init_lr.item(),
-    #         "beta1": self.beta1.item(),
-    #         "beta2": self.beta2.item(),
-    #         "epsilon": self.epsilon.item(),
-    #         "weight_decay":self.weight_decay.item(),
-    #         "use_master":self.use_master,
-    #         "scheduler":self.scheduler,
-    #         "min_lr": self.min_lr,
-    #         "t_warmup": self.t_warmup
-    #     }
-    #     if self.min_lr is not None and hasattr(self.min_lr, "dtype"):
-    #         adamw_configs["min_lr"] = self.min_lr.item() #type:ignore
+        # if self.foreach:
+        adamw["state"] = copy.deepcopy(self.state)
 
-    #     adamw["adamw_configs"] = adamw_configs
-    #     return adamw
+        adamw_configs = {
+            "lr": self.init_lr.item(),
+            "beta1": self.beta1.item(),
+            "beta2": self.beta2.item(),
+            "epsilon": self.epsilon.item(),
+            "weight_decay":self.weight_decay.item(),
+            "use_master":self.use_master,
+            "scheduler":self.scheduler,
+            "min_lr": self.min_lr,
+            "t_warmup": self.t_warmup,
+            "foreach":self.foreach,
+            "eight_bit":self.eight_bit,
+            "_all_not_decayed":self.__all_not_decayed
+        }
+        if self.min_lr is not None and hasattr(self.min_lr, "dtype"):
+            adamw_configs["min_lr"] = self.min_lr.item() #type:ignore
 
-    # @classmethod
-    # def from_dict(cls, thing:dict[Any, Any]) -> "AdamW":
-    #     configs = thing["adamw_configs"]
-    #     config_only = configs["config_only"]
-    #     lr = configs["lr"]
-    #     beta1 = configs["beta1"]
-    #     beta2 = configs["beta2"]
-    #     epsilon = configs["epsilon"]
-    #     weight_decay = configs["weight_decay"]
-    #     use_master = configs["use_master"]
-    #     scheduler = configs["scheduler"]
-    #     min_lr = configs["min_lr"]
-    #     t_warmup = configs["t_warmup"]
-    #     adamw = cls(lr=lr, beta1=beta1, beta2=beta2, epsilon=epsilon, weight_decay=weight_decay, use_master=use_master, scheduler=scheduler, min_lr=min_lr, t_warmup=t_warmup)
-    #     if not config_only:
-    #         adamw.state["t"] = nx.array(thing["t"], dtype=nx.int32)
-    #         for key, value in thing.items():
-    #             shape_copy = {}
-    #             if key != "t" and key != "adamw_configs":
-    #                 shape_copy["names"] = value["names"]
-    #                 if adamw.use_master:
-    #                     shape_copy["master"] = nx.array(value["master"], dtype=nx.float32)
-    #                 shape_copy["m"] = nx.array(value["m"], dtype=nx.float32)
-    #                 shape_copy["v"] = nx.array(value["v"], dtype=nx.float32)
-    #                 adamw.state[key] = shape_copy
-    #     else:
-    #         adamw.state = {}
-    #     return adamw
+        adamw["adamw_configs"] = adamw_configs
+        return adamw
+
+    @classmethod
+    def from_dict(cls, thing:dict[Any, Any]) -> "AdamW":
+        configs = thing["adamw_configs"]
+        states = thing["state"]
+        adamw = cls(**configs)
+        adamw.state = states
+        return adamw

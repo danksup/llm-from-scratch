@@ -17,7 +17,7 @@ from helper.validate_and_raise import validate_choice
 from helper.singleton import sleep
 import warnings
 
-optimizers = optim.Adam | optim.AdamW | optim.SGD | optim.RMSProp
+optimizers = optim.AdamW | optim.SGD | optim.RMSProp
 
 default_block_configs = {
     "ff_hidden_width": 1024,
@@ -644,7 +644,7 @@ class Transformer:
 
                 optimizer.calculate_lr(max_step, total_epoch)
 
-                if not optimizer.foreach:
+                if optimizer.foreach:
                     for obj, w, dw, full_w_name, _ in self.get_parameters():
                         if dw is not None:
                             w_ = getattr(obj, w)

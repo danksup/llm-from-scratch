@@ -136,10 +136,12 @@ class AttentionChunked:
         K = rope_forward(K, freqs, freq_multiplier=theta, s=s, ori_T=ori_T, alpha=alpha, beta=beta)
 
         remainder = (chunk_size - (T % chunk_size)) % chunk_size
-        pad = [(0,0), (0,0), (0, remainder), (0,0)]
-        Q = nx.pad(Q, pad) # (B, n_heads, T + remainder, Dh)
-        K = nx.pad(K, pad) # (B, n_kv_heads, T + remainder, Dh)
-        V = nx.pad(V, pad) # (B, n_kv_heads, T + remainder, Dh)
+
+        if remainder > 0:
+            pad = [(0,0), (0,0), (0, remainder), (0,0)]
+            Q = nx.pad(Q, pad) # (B, n_heads, T + remainder, Dh)
+            K = nx.pad(K, pad) # (B, n_kv_heads, T + remainder, Dh)
+            V = nx.pad(V, pad) # (B, n_kv_heads, T + remainder, Dh)
 
         n_chunk = Q.shape[2] // chunk_size
         Q = Q.reshape(B, n_kv_heads, n_rep, n_chunk, chunk_size, head_dim)

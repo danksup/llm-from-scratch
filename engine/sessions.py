@@ -22,8 +22,8 @@ from helper.validate_and_raise import validate_choice, validate_match
 from helper.logger import Logger
 
 
-optimizers = Union[optim.Adam, optim.AdamW, optim.SGD, optim.RMSProp]
-OPTIMIZER_TYPES = (optim.Adam,optim.AdamW,optim.SGD, optim.RMSProp)
+optimizers = Union[optim.AdamW, optim.SGD, optim.RMSProp]
+OPTIMIZER_TYPES = (optim.AdamW,optim.SGD, optim.RMSProp)
 
 DEFAULT_CONFIGS = {
     "epochs": 1,
@@ -40,7 +40,7 @@ DEFAULT_CONFIGS = {
     "error_save":False,
     "create_checkpoint":False,
     "checkpoint_every":1000,
-    "weights_only": True,
+    "weight_only": True,
     "logger":True,
     "discard_mtp":False
 }
@@ -48,7 +48,6 @@ DEFAULT_CONFIGS = {
 OPTIMIZERS = {
     "sgd": optim.SGD,
     "adamw": optim.AdamW,
-    "adam": optim.Adam,
     "rmsprop": optim.RMSProp
 }
 
@@ -68,18 +67,6 @@ DEFAULT_OPTIMIZER_ARGS = {
         "scheduler":None,
         "min_lr":None,
         "t_warmup": max(1,int(DEFAULT_CONFIGS["max_step"] * 0.015)),
-        "foreach":False
-        },
-    "adam": {
-        "lr":1e-3,
-        "beta1":0.9,
-        "beta2":0.999,
-        "epsilon":1e-8,
-        "use_master":False,
-        "scheduler":None,
-        "min_lr":None,
-        "t_warmup": max(1,int(DEFAULT_CONFIGS["max_step"] * 0.015)),
-        "eight_bit":False,
         "foreach":False
         },
     "adamw":{
@@ -132,7 +119,7 @@ class Session:
         self.transformer:Transformer = transformer(logger=self.logger)
 
         validate_match(transformer.vocab_size, len(tokenizer.vocab), f"between {transformer.vocab_size} in transformer and {len(tokenizer.vocab)} in tokenizer.")
-        
+
         configs["session_id"] = self.session_id
         self.configs = DEFAULT_CONFIGS | configs
         config_optimizer = self.configs["optimizer"].lower()
@@ -324,7 +311,7 @@ class Session:
                         next_validate_step += validate_every
                         print(f"step: {step_counter} validating\033[K",                                                                                   end="\r")
                         val_loss, val_mtp_loss = self.transformer.validate(dataloader, self.configs["max_val_step"]) #type:ignore
-                       
+
                         if val_loss is not None and val_loss < best_val_loss:
                             best_val_loss = val_loss
                             best_val_loss_step = step_counter
@@ -376,73 +363,31 @@ class Session:
                 self.logger.info(msg_res, hist_res, print_msg=True)
 
             if self.configs["save"]:
-                infer_only = "_weights_only" if self.configs["weights_only"] else ""
+                infer_only = "_weight_only" if self.configs["weight_only"] else ""
                 quantized = "_quantized" if self.transformer.quantized else ""
                 filename = f"{self.transformer.count_params()}_param_{epoch+1}_epochs{infer_only}{quantized}_{self.session_id}"
                 if savefile_name == "":
                     savefile_name = filename
                 self.save(savefile_name)
 
-        except ValueError as e:
+        except (ValueError, OverflowError, KeyboardInterrupt, RuntimeError,FloatingPointError) as e:
             end = time.perf_counter()
-            print(f"epoch {epoch}: {e}. Time elapsed: {end-start:.5f}")
-            if self.configs["save"] and self.configs["error_save"]:
-                self.save(f"valueerror_save_{self.session_id}")
+            err_type = type(e).__name__.lower()
 
-            if msg_res == "":
-                msg_res = "-"
-            if hist_res == "":
-                hist_res = None
-            self.logger.error(msg_res,hist_res, e)
-        except OverflowError as e:
-            end = time.perf_counter()
             print(f"epoch {epoch}: {e}. Time elapsed: {end-start:.5f}")
             if self.configs["save"] and self.configs["error_save"]:
-                self.save(f"overflow_save_{self.session_id}")
-
-            if msg_res == "":
-                msg_res = "-"
-            if hist_res == "":
-                hist_res = None
-            self.logger.error(msg_res,hist_res, e)
-        except KeyboardInterrupt as e:
-            end = time.perf_counter()
-            print(f"epoch {epoch}: {e}. Time elapsed: {end-start:.5f}")
-            if self.configs["save"] and self.configs["error_save"]:
-                self.save(f"keyboardinterrupt_save_{self.session_id}")
+                self.save(f"{err_type}_save_{self.session_id}")
             if msg_res == "":
                 msg_res = "-"
             if hist_res == "":
                 hist_res = None
             self.logger.error(msg_res,hist_res, e)
 
-        except RuntimeError as e:
-            end = time.perf_counter()
-            print(f"epoch {epoch}: {e}. Time elapsed: {end-start:.5f}")
-            if self.configs["save"] and self.configs["error_save"]:
-                self.save(f"RuntimeError_save_{self.session_id}")
-            if msg_res == "":
-                msg_res = "-"
-            if hist_res == "":
-                hist_res = None
-            self.logger.error(msg_res,hist_res, e)
-
-        except FloatingPointError as e:
-            end = time.perf_counter()
-            print(f"epoch {epoch}: {e}. Time elapsed: {end-start:.5f}")
-            if self.configs["save"] and self.configs["error_save"]:
-                self.save(f"FloatingPointError_save_{self.session_id}")
-            if msg_res == "":
-                msg_res = "-"
-            if hist_res == "":
-                hist_res = None
-            self.logger.error(msg_res, hist_res, e)
-
-    def save(self, filename:str="test123", *, save_tokenizer:bool=False):
+    def save(self, filename:str="test123"):
         if self.configs["discard_mtp"]:
             self.transformer.discard_mtp()
 
-        weights = self.transformer.get_all_weights() 
+        weights = self.transformer.get_all_weights()
         quants = self.transformer.get_quant_params()
 
         tensors = weights | (quants if self.transformer.quantized else {})
@@ -476,22 +421,22 @@ class Session:
         for a,b,_,c,_ in transformer.get_parameters():
             setattr(a, b, session[c]) #type:ignore
             if quantized:
-                sname = c + ".scales" 
+                sname = c + ".scales"
                 bname = c + ".biases"
-                scales = session.get(sname, None) #type:ignore 
-                biases = session.get(bname, None) #type:ignore 
+                scales = session.get(sname, None) #type:ignore
+                biases = session.get(bname, None) #type:ignore
                 if scales is not None:
                     a.set_quants(name=b, scale=session[sname], bias=biases) #type:ignore
 
         session_id = session_configs["session_id"]
         session = cls(transformer=transformer, tokenizer=tokenizer, init_optimizer=False, session_id=session_id)
-       
-        return session  
+
+        return session
 
     @classmethod
     def create_checkpoint(cls, to_checkpoint:"Session",) -> "Session":
         transformer_checkpoint = Transformer.copy(to_checkpoint.transformer)
         tokenizer_checkpoint = Tokenizer.from_dict(to_checkpoint.tokenizer.to_dict())
-        # optimizer = None if to_checkpoint.optimizer is None else to_checkpoint.optimizer.from_dict(to_checkpoint.optimizer.to_dict(to_checkpoint.configs["weights_only"]))
-        checkpoint = cls(transformer=transformer_checkpoint, tokenizer = tokenizer_checkpoint, init_optimizer=None)
+        optimizer = None if to_checkpoint.optimizer is None or to_checkpoint.configs["weight_only"] else to_checkpoint.optimizer.from_dict(to_checkpoint.optimizer.to_dict())
+        checkpoint = cls(transformer=transformer_checkpoint, tokenizer = tokenizer_checkpoint, init_optimizer=optimizer)
         return checkpoint

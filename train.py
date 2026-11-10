@@ -1,6 +1,3 @@
-#btw if u found this repo this is like the manual cus im too lazy to make one.
-#feel free to play with any values u see here, especially the filepath.
-
 import os
 os.environ["BACKEND"] = "auto"
 
@@ -15,12 +12,12 @@ from engine.transformer import Transformer
 nx.set_seed(12345)
 
 EPOCHS = 1
-EMBED_DIM = 256
+EMBED_DIM = 512
 CONTEXT_SIZE = 2048
-BATCH_SIZE = 2
+BATCH_SIZE = 4
 N_HEADS = 8
 N_KV_HEADS = max(1, N_HEADS // 4)
-N_EXPERTS = 12
+N_EXPERTS = 8
 CF = 1.25
 VAL = .9
 TOP_K = 2
@@ -39,7 +36,7 @@ session_configs = {
     "validate_every":10,
     "context_size": CONTEXT_SIZE,
     "batch_size": BATCH_SIZE,
-    "microbatch_size":32,
+    "microbatch_size":16,
     "optimizer":"adamw",
     "optimizer_args":{
         "lr": 1e-3,
@@ -48,14 +45,14 @@ session_configs = {
         "min_lr": 8e-5,
         "t_warmup": max(1, int(MAX_STEP * 0.02)),
         "eight_bit":True,
-        "foreach":True
+        "foreach":False
     },
     "save":True,
     "logger":True,
     "error_save":True,
     "create_checkpoint":True,
     "checkpoint_every":100,
-    "weights_only": True,
+    "weight_only": True,
     "backend": {
         "mlx_disable_compile":False,
         "mlx_save_quantized_weights_as_symmetric":True
@@ -63,7 +60,7 @@ session_configs = {
 }
 
 model_configs = {
-    "n_blocks":16,
+    "n_blocks":10,
     "n_mtp":1,
     "discard_mtp":False,
     "mtp_lambda":0.5,
@@ -76,17 +73,17 @@ model_configs = {
     "check_non_finite":True,
     "recompute_activation":True,
     "block_configs":{
-        "ff_hidden_width": int(2.625 * EMBED_DIM),
+        "ff_hidden_width": int(2 * EMBED_DIM),
         "ff_n_experts":N_EXPERTS,
         "ff_topk":TOP_K,
         "ff_cf":CF,
         "ff_init":"glorot_uniform",
-        "ff_dense_hidden_width":4*EMBED_DIM,
+        "ff_dense_hidden_width":int(4 * EMBED_DIM),
         "ff_n_dense":1,
         "ff_jitter_eps":0.02,
         "ff_bias_gamma": 1e-3,
         "attn_type":"chunked",
-        "attn_chunk_size":CONTEXT_SIZE//4,
+        "attn_chunk_size":CONTEXT_SIZE//16,
         "attn_variant":"gqa",
         "attn_n_heads":N_HEADS,
         "attn_n_kv_heads":N_KV_HEADS,

@@ -1,5 +1,6 @@
 import engine.backend as nx
 from typing import Any, Callable
+import copy
 
 class SGD:
     def __init__(self, lr=1e-4, momentum:float=0.0,weight_decay:float=.0,dampening:float=.0, use_master:bool=True, scheduler:None|Callable=None, min_lr:None | float= None, t_warmup:int|None=None, foreach=False) -> None:
@@ -26,10 +27,10 @@ class SGD:
                     raise ValueError("min lr cant be bigger than init lr")
                 if isinstance(min_lr, float):
                     self.min_lr = nx.float_32(min_lr)
-                    
+
         self.state = {}
         self.state["t"] = nx.array(1, dtype=nx.int32)
-    
+
     def step_many(self, name_param_gradient_decay:list[Any]):
         group = {}
         for x in name_param_gradient_decay:
@@ -43,7 +44,7 @@ class SGD:
 
             group[grouping].append((name,param,gradient,decay_bool))
         name_param_gradient_decay.clear()
-            
+
         optimized = {}
         for group_tuple, thing in group.items():
             _, should_decay = group_tuple
@@ -70,7 +71,7 @@ class SGD:
 
             weight_decay = self.weight_decay if should_decay else nx.float_32(0.0)
             new_params, new_v= self.__step(params, gradients, self.lr, self.momentum, v, weight_decay, self.dampening)
-            
+
             if self.momentum > 0:
                 self.state[group_tuple]["v"] = new_v
                 nx.eval(new_v, new_params)
@@ -87,10 +88,10 @@ class SGD:
                 optimized[name] = new_params[idx]
                 name_list.append(name)
             self.state[group_tuple]["names"] = name_list
-            
+
             del new_params
-        
-                
+
+
         return optimized
 
     def step(self, tup):
@@ -99,7 +100,7 @@ class SGD:
         if name not in self.state:
             self.state[name] = {
                 "v": nx.zeros_like(w, nx.float32) if self.momentum > 0.0 else 0,
-            } 
+            }
         else:
             if self.use_master:
                 w = self.state[name]["master"]
@@ -117,8 +118,8 @@ class SGD:
         if self.use_master:
             self.state[name]["master"] = new_param
 
-        return new_param  
-    
+        return new_param
+
     @staticmethod
     @nx.compile
     def __step(params:Any ,gradient:Any, lr, momentum:Any=0, v:Any=0, weight_decay:Any=0, dampening:Any=0) -> Any:
@@ -146,70 +147,29 @@ class SGD:
     def increment_t(self):
         self.state["t"] += 1
 
-    # def to_dict(self, config_only:bool=True) -> dict[str,Any]:
-    #     sgd = {
-    #         "t":self.t.item(),
-    #         "lr": self.init_lr,
-    #         "momentum":self.momentum.item(),
-    #         "min_lr": self.min_lr,
-    #         "weight_decay":self.weight_decay.item(),
-    #         "dampening":self.dampening.item(),
-    #         "scheduler":self.scheduler,
-    #         "use_master":self.use_master,
-    #         "config_only":config_only,
-    #         "t_warmup":self.t_warmup
-    #     }
-    #     if self.min_lr is not None and hasattr(self.min_lr, "dtype"):
-    #         sgd["min_lr"] = self.min_lr.item() #type:ignore
+    def to_dict(self) -> dict[str,Any]:
+        sgd = {}
+        sgd["state"] = copy.deepcopy(self.state)
+        sgd["sgd_configs"] = {
+            "lr": self.init_lr,
+            "momentum":self.momentum.item(),
+            "min_lr": self.min_lr,
+            "weight_decay":self.weight_decay.item(),
+            "dampening":self.dampening.item(),
+            "scheduler":self.scheduler,
+            "use_master":self.use_master,
+            "t_warmup":self.t_warmup,
+            "foreach":self.foreach
 
-    #     if not config_only:
-    #         if self.use_master:
-    #             master_copy = {}
-    #             for key, val in self.masters.items():
-    #                 master_copy[key] = {
-    #                     "names": val["names"].copy(),
-    #                     "master":val["master"].tolist()
-    #                 }
-    #             sgd["masters"] = master_copy
-    #         if self.momentum > 0.0:
-    #             state_copy = {}
-    #             for shape, val in self.state.items():
-    #                 state_copy[shape] = {
-    #                     "v": val["v"].tolist()
-    #                 }
-    #             sgd["state"] = state_copy
-    #     else:
-    #         if hasattr(self, "masters"):
-    #             del self.masters
-    #         if hasattr(self, "state"):
-    #             del self.state
-    #     return sgd
-    
-    # @classmethod
-    # def from_dict(cls, thing) -> "SGD":
-    #     sgd = cls(lr=thing["lr"], momentum=thing["momentum"], weight_decay=thing["weight_decay"], dampening=thing["dampening"], use_master=thing["use_master"], scheduler=thing["scheduler"], min_lr=thing["min_lr"], t_warmup=thing["t_warmup"])
+        }
 
-    #     if not thing["config_only"]:
-    #         sgd.t = nx.array(thing["t"], nx.int32)
-    #         if sgd.use_master:
-    #             masters = {}
-    #             for key, val in thing["masters"].items():
-    #                 masters[key] = {
-    #                     "names": val["names"],
-    #                     "master": nx.array(val["master"], nx.float32)
-    #                 } 
-    #             sgd.masters = masters
-            
-    #         if sgd.momentum > 0:
-    #             state = {}
-    #             for shape, val in thing["state"].items():
-    #                 state[shape] = {
-    #                     "v": nx.array(val["v"], nx.float32)
-    #                 }
-    #             sgd.state = state
-    #     else:
-    #         sgd.t = nx.array(0, dtype=nx.int32)
-    #         sgd.masters = {}
-    #         sgd.state = {}
+        return sgd
 
-    #     return sgd
+    @classmethod
+    def from_dict(cls, thing:dict[Any, Any]) -> "SGD":
+        configs = thing["sgd_configs"]
+        states = thing["state"]
+        sgd = cls(**configs)
+        sgd.state = states
+
+        return sgd

@@ -106,7 +106,7 @@ class SGD:
     def step(self, tup):
         name, w, dw, decay = tup
 
-        if name not in self.state and self.momentum > 0.0:
+        if name not in self.state:
             self.state[name] = {
                 "v": nx.zeros_like(w, nx.float32) if self.momentum > 0.0 else 0,
             }
@@ -183,7 +183,7 @@ class SGD:
         sgd["configs"] = {
             "type":"sgd",
             "lr": self.lr.item() if hasattr(self.lr, "item") else self.lr,
-            "init_lr": self.init_lr.item(),
+            "init_lr": self.init_lr.item()if hasattr(self.init_lr, "item") else self.init_lr,
             "momentum":self.momentum.item() if hasattr(self.momentum, "item") else self.momentum,
             "min_lr": self.min_lr.item() if hasattr(self.min_lr, "item") else self.min_lr, #type:ignore
             "weight_decay":self.weight_decay.item() if hasattr(self.weight_decay, "item") else self.weight_decay, #type:ignore
@@ -210,7 +210,7 @@ class SGD:
             init_lr = configs.pop("init_lr")
 
         sgd = cls(**configs)
-        sgd.init_lr = init_lr
+        sgd.init_lr = nx.float_32(init_lr)
 
         built = {}
 

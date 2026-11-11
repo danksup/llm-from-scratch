@@ -203,11 +203,11 @@ class AdamW:
         adamw_configs = {
             "type":"adamw",
             "lr": self.lr.item(),
-            "init_lr": self.init_lr.item(),
-            "beta1": self.beta1.item(),
-            "beta2": self.beta2.item(),
+            "init_lr": self.init_lr.item()if hasattr(self.init_lr, "item") else self.init_lr,
+            "beta1": self.beta1.item()if hasattr(self.beta1, "item") else self.beta1,
+            "beta2": self.beta2.item()if hasattr(self.beta2, "item") else self.beta2,
             "epsilon": self.epsilon.item() if hasattr(self.epsilon, "item") else self.epsilon,
-            "weight_decay":self.weight_decay.item(),
+            "weight_decay": self.weight_decay.item()if hasattr(self.weight_decay, "item") else self.weight_decay,
             "use_master":self.use_master,
             "scheduler":self.scheduler,
             "min_lr": self.min_lr.item() if hasattr(self.min_lr, "item") else self.min_lr, #type:ignore
@@ -217,8 +217,6 @@ class AdamW:
             "_all_not_decayed":self.__all_not_decayed,
             "names": optimizer_state_name
         }
-        if self.min_lr is not None and hasattr(self.min_lr, "dtype"):
-            adamw_configs["min_lr"] = self.min_lr.item() #type:ignore
 
         adamw["configs"] = adamw_configs
         return adamw
@@ -237,8 +235,7 @@ class AdamW:
             init_lr = configs.pop("init_lr")
 
         adamw = cls(**configs)
-        adamw.init_lr = init_lr
-
+        adamw.init_lr = nx.float_32(init_lr)
 
         built = {}
         # built["names"] = names

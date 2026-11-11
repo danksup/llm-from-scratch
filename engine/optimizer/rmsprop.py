@@ -205,7 +205,7 @@ class RMSProp:
         adamw_configs = {
             "type":"rmsprop",
             "lr": self.lr.item() if hasattr(self.lr, "item") else self.lr,
-            "init_lr": self.init_lr.item(),
+            "init_lr": self.init_lr.item()if hasattr(self.init_lr, "item") else self.init_lr,
             "momentum":self.momentum.item() if hasattr(self.momentum, "item") else self.momentum,
             "beta2": self.beta2.item() if hasattr(self.beta2, "item") else self.beta2,
             "epsilon": self.epsilon.item() if hasattr(self.epsilon, "item") else self.epsilon, #type:ignore
@@ -234,7 +234,8 @@ class RMSProp:
             init_lr = configs.pop("init_lr")
 
         adamw = cls(**configs)
-        adamw.init_lr = init_lr
+        adamw.init_lr = nx.float_32(init_lr)
+
 
         built = {}
 

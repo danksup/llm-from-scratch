@@ -160,7 +160,6 @@ class Session:
                     if isinstance(schedule, str):
                         if schedule not in SCHEDULER:
                             validate_choice(schedule, "scheduler", SCHEDULER)
-                        optimizer_args["scheduler"] = SCHEDULER[schedule]
 
                     if self.configs["optimizer_args"]["min_lr"] is None:
                         self.configs["optimizer_args"]["min_lr"] = optimizer_args["min_lr"] = self.configs["optimizer_args"]["lr"] / 1e2
@@ -390,14 +389,18 @@ class Session:
         weights = self.transformer.get_all_weights()
         quants = self.transformer.get_quant_params()
 
-        tensors = weights | (quants if self.transformer.quantized else {})
+        optim = {}
+        if self.optimizer and not self.configs["weight_only"]:
+            optim = self.optimizer.to_dict()
 
+        tensors = weights | (quants if self.transformer.quantized else {}) | optim.get("state", {})
         metadata = {
             "tokenizer_id": str(self.tokenizer.tokenizer_id),
             "session_configs": str(self.configs),
             "transformer_configs": str(self.transformer.configs),
             "block_configs": str(self.transformer.get_block_configs()),
-            "rmsnorm_final_configs": str(self.transformer.rmsnorm_final.configs)
+            "rmsnorm_final_configs": str(self.transformer.rmsnorm_final.configs),
+            "optim_configs": str(optim.get("configs", {}))
         }
         nx.save_safetensors(Path(f"artifacts/sessions/session_{filename}.safetensors"), tensors, metadata)
 
@@ -409,7 +412,7 @@ class Session:
         session, metadata = nx.load(filepath, return_metadata=True) #type:ignore
         session_configs = ast.literal_eval(metadata["session_configs"]) #type:ignore
         transformer_configs =  ast.literal_eval(metadata["transformer_configs"]) #type:ignore
-        block_configs =  ast.literal_eval(metadata["block_configs"]) #type:ignore
+        # block_configs =  ast.literal_eval(metadata["block_configs"]) #type:ignore
         tokenizer_id = metadata["tokenizer_id"] #type:ignore
 
         if tokenizer_id != str(tokenizer.tokenizer_id):
@@ -429,7 +432,13 @@ class Session:
                     a.set_quants(name=b, scale=session[sname], bias=biases) #type:ignore
 
         session_id = session_configs["session_id"]
-        session = cls(transformer=transformer, tokenizer=tokenizer, init_optimizer=False, session_id=session_id)
+
+        optim = False
+        optim_configs = ast.literal_eval(metadata["optim_configs"]) #type:ignore
+        if optim_configs.get("type", None) is not None:
+            if not session_configs["weight_only"]:
+                optim = OPTIMIZERS[optim_configs["type"]].from_dict(optim_configs, session)
+        session = cls(transformer=transformer, tokenizer=tokenizer, init_optimizer=optim, session_id=session_id, configs=session_configs)
 
         return session
 
@@ -437,6 +446,10 @@ class Session:
     def create_checkpoint(cls, to_checkpoint:"Session",) -> "Session":
         transformer_checkpoint = Transformer.copy(to_checkpoint.transformer)
         tokenizer_checkpoint = Tokenizer.from_dict(to_checkpoint.tokenizer.to_dict())
-        optimizer = None if to_checkpoint.optimizer is None or to_checkpoint.configs["weight_only"] else to_checkpoint.optimizer.from_dict(to_checkpoint.optimizer.to_dict())
-        checkpoint = cls(transformer=transformer_checkpoint, tokenizer = tokenizer_checkpoint, init_optimizer=optimizer)
+
+        optimizer = None
+        if to_checkpoint.optimizer is not None and not to_checkpoint.configs["weight_only"]:
+            optim_things = to_checkpoint.optimizer.to_dict()
+            optimizer = to_checkpoint.optimizer.from_dict(optim_things["configs"], optim_things["state"])
+        checkpoint = cls(transformer=transformer_checkpoint, tokenizer = tokenizer_checkpoint, init_optimizer=optimizer, configs=to_checkpoint.configs)
         return checkpoint

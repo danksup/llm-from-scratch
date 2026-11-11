@@ -31,17 +31,17 @@ class DataLoader:
         else:
             self.type_code = 'I'
         pass
-    
+
     @staticmethod
     def get_files(filepath:str|Path="data"):
         path = Path(filepath)
         files = []
 
         for file in path.iterdir():
-            if file.is_file() and file.suffix in [".txt", ".tokenized"]:
+            if file.is_file() and file.suffix in [".tokenized"]:
                 files.append(file)
         return files
-    
+
     @staticmethod
     def split_files(filepath:str|Path, split_value:float=.9):
         path = Path(filepath)
@@ -54,7 +54,7 @@ class DataLoader:
 
         file_sizes = [i.stat().st_size for i in files]
         target_train = sum(file_sizes) * split_value
-        
+
         sorted_sizes = [i[0] for i in sorted(enumerate(file_sizes), key=lambda x: x[1], reverse=True)]
 
         train_files = []
@@ -158,8 +158,3 @@ class DataLoader:
             total += i.stat().st_size - 29
 
         return total // typecode[self.type_code]
-
-
-            
-                
-

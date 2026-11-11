@@ -98,7 +98,7 @@ str_to_dtype = {
 floating_type = [float64, float32, float16]
 
 if backend != "NumPy":
-    bfloat16 = _nx.bfloat16    
+    bfloat16 = _nx.bfloat16
     dtype_to_srt[bfloat16] = "bf16"
     str_to_dtype["bf16"] = bfloat16
     floating_type.append(bfloat16)
@@ -129,7 +129,7 @@ def set_seed(seed:int):
     else:
         rng = _nx.random.default_rng(seed)
         return
-    
+
 def get_dim(a):
     return 1 + get_dim(a[0]) if isinstance(a, (list, arraymodule.array)) and a else 0
 
@@ -615,7 +615,7 @@ def dequantize(w,/,scales,biases, dtype:Any=float32):
     back_end = backend.lower()
     if back_end  == "mlx":
         return _nx.dequantize(w, scales=scales,biases=biases,bits=8, mode='affine', dtype=dtype)
-    
+
     u8 = _nx.ascontiguousarray(w).view(uint8)
     u8_shape = u8.shape
     group_size = u8.shape[-1] // scales.shape[-1]
@@ -639,7 +639,7 @@ def quantized_matmul(x,w,/, scales, biases, transpose:bool|tuple=False):
         if transpose:
             transpose = True
         return _nx.quantized_matmul(x, w, scales=scales,biases=biases,bits=8, mode='affine', transpose=transpose)
-    
+
     dequant_q = dequantize(w, scales=scales,biases=biases, dtype=x.dtype)
     if transpose:
         if isinstance(transpose, bool):

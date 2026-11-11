@@ -1,9 +1,16 @@
 import engine.backend as nx
 from typing import Any, Callable
 import copy
+import ast
+from .scheduler import LinearSchedule, CosineDecay
+
+SCHEDULER = {
+    "cosine_decay": CosineDecay,
+    "linear_schedule": LinearSchedule
+}
 
 class RMSProp:
-    def __init__(self, lr=1e-3, momentum:float=0.0, beta2:float=0.999, epsilon:float=1e-8, weight_decay:float=0.01, use_master:bool=True, scheduler:None|Callable=None, min_lr:None | float= None, t_warmup:None|int=None, *, _all_not_decayed:bool=False, foreach=False) -> None:
+    def __init__(self, lr=1e-3, momentum:float=0.0, beta2:float=0.999, epsilon:float=1e-8, weight_decay:float=0.01, use_master:bool=True, scheduler:None|str=None, min_lr:None | float= None, t_warmup:None|int=None, *, _all_not_decayed:bool=False, foreach=False) -> None:
         assert lr >= 0, "lr must be non-negative"
         assert momentum >= 0 and momentum < 1, "allowed momentum range: [0, 1)"
         assert beta2 >= 0 and beta2 < 1, "allowed beta2 range: [0,1)"
@@ -20,7 +27,7 @@ class RMSProp:
         self.foreach= foreach
 
         if scheduler:
-            self.schedule = scheduler(self.init_lr, min_lr)
+            self.schedule = SCHEDULER[scheduler](self.init_lr, min_lr)
             if min_lr is not None:
                 if min_lr > lr:
                     raise ValueError("min lr cant be bigger than init lr")
@@ -180,31 +187,85 @@ class RMSProp:
         self.state["t"] += 1
 
     def to_dict(self) -> dict[Any, Any]:
-        adamw = {}
-        adamw["state"] = copy.deepcopy(self.state)
+        adamw = {"state":{}}
+        adamw["state"]["optimizer.t"] = nx.copy(self.state["t"])
 
+        state = copy.deepcopy(self.state)
+
+        optimizer_state_name = {}
+        for shape, a in state.items():
+            if shape != "t":
+                for b, c in a.items():
+                    if b != "names":
+                        if c is not None:
+                            adamw["state"][f"optimizer.{str(shape)}.{b}"] = c
+                    else:
+                        optimizer_state_name[f"optimizer.{str(shape)}.{b}"] = c
 
         adamw_configs = {
-            "lr": self.init_lr.item(),
-            "momentum": self.momentum.item(),
-            "beta2": self.beta2.item(),
-            "epsilon": self.epsilon.item(),
-            "weight_decay":self.weight_decay.item(),
+            "type":"rmsprop",
+            "lr": self.lr.item() if hasattr(self.lr, "item") else self.lr,
+            "init_lr": self.init_lr.item(),
+            "momentum":self.momentum.item() if hasattr(self.momentum, "item") else self.momentum,
+            "beta2": self.beta2.item() if hasattr(self.beta2, "item") else self.beta2,
+            "epsilon": self.epsilon.item() if hasattr(self.epsilon, "item") else self.epsilon, #type:ignore
+            "weight_decay":self.weight_decay.item() if hasattr(self.weight_decay, "item") else self.weight_decay, #type:ignore
             "use_master":self.use_master,
-            "scheduler":self.scheduler,
-            "min_lr": self.min_lr,
+            "scheduler": self.scheduler,
+            "min_lr": self.min_lr.item() if hasattr(self.min_lr, "item") else self.min_lr, #type:ignore
             "t_warmup": self.t_warmup,
-            "foreach":self.foreach
+            "foreach":self.foreach,
+            "names": optimizer_state_name
         }
 
-        adamw["rmsprop_configs"] = adamw_configs
+        adamw["configs"] = adamw_configs
         return adamw
 
     @classmethod
-    def from_dict(cls, thing:dict[Any, Any]) -> "RMSProp":
-        configs = thing["rmsprop_configs"]
-        states = thing["state"]
+    def from_dict(cls, configs, states) -> "RMSProp":
+        if configs.get("type", None) is not None:
+            configs.pop("type")
+        names = None
+        if configs.get("names", None) is not None:
+                names = configs.pop("names")
+
+        init_lr = 1e-3
+        if configs.get("init_lr", None) is not None:
+            init_lr = configs.pop("init_lr")
+
         adamw = cls(**configs)
-        adamw.state = states
+        adamw.init_lr = init_lr
+
+        built = {}
+
+        for name_shape, tensor in states.items():
+            if name_shape.startswith("optimizer"):
+                name_shape = name_shape[10:]
+                if name_shape != "t":
+                    a,b = name_shape.rsplit(".", 1)
+                    try:
+                        formatted = ast.literal_eval(a)
+                    except:
+                        formatted = a
+
+
+                    if formatted not in built:
+                        built[formatted] = {b:tensor}
+                    else:
+                        built[formatted][b] = tensor
+                else:
+                    built["t"] = tensor
+
+        if names is not None:
+            for name_shape, tensor in names.items():
+                name_shape = name_shape[10:]
+                a,b = name_shape.rsplit(".", 1)
+                formatted = ast.literal_eval(a)
+                if formatted not in built:
+                    built[formatted] = {b:tensor}
+                else:
+                    built[formatted][b] = tensor
+
+        adamw.state = built
 
         return adamw

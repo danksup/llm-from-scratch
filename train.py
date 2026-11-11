@@ -12,8 +12,8 @@ from engine.transformer import Transformer
 nx.set_seed(12345)
 
 EPOCHS = 1
-EMBED_DIM = 512
-CONTEXT_SIZE = 2048
+EMBED_DIM = 128
+CONTEXT_SIZE = 512
 BATCH_SIZE = 4
 N_HEADS = 8
 N_KV_HEADS = max(1, N_HEADS // 4)
@@ -21,7 +21,7 @@ N_EXPERTS = 8
 CF = 1.25
 VAL = .9
 TOP_K = 2
-MAX_STEP = 31160
+MAX_STEP = 5
 
 CORPUS_PATH = "artifacts/dataloader/2025_26"
 TOKENIZER_PATH = "artifacts/tokenizer/tokenizer32768_1624612680len.tokenizer"
@@ -52,7 +52,7 @@ session_configs = {
     "error_save":True,
     "create_checkpoint":True,
     "checkpoint_every":100,
-    "weight_only": True,
+    "weight_only": False,
     "backend": {
         "mlx_disable_compile":False,
         "mlx_save_quantized_weights_as_symmetric":True
@@ -60,7 +60,7 @@ session_configs = {
 }
 
 model_configs = {
-    "n_blocks":10,
+    "n_blocks":5,
     "n_mtp":1,
     "discard_mtp":False,
     "mtp_lambda":0.5,

@@ -1,9 +1,16 @@
 import engine.backend as nx
 from typing import Any, Callable
 import copy
+import ast
+from .scheduler import LinearSchedule, CosineDecay
+
+SCHEDULER = {
+    "cosine_decay": CosineDecay,
+    "linear_schedule": LinearSchedule
+}
 
 class AdamW:
-    def __init__(self, lr=1e-3, beta1:float=0.9, beta2:float=0.999, epsilon:float=1e-8, weight_decay:float=0.01, use_master:bool=True, scheduler:None|Callable=None, min_lr:None | float= None, t_warmup:None|int=None, *, _all_not_decayed:bool=False, eight_bit=False, foreach=False) -> None:
+    def __init__(self, lr=1e-3, beta1:float=0.9, beta2:float=0.999, epsilon:float=1e-8, weight_decay:float=0.01, use_master:bool=True, scheduler:None|str=None, min_lr:None | float= None, t_warmup:None|int=None, *, _all_not_decayed:bool=False, eight_bit=False, foreach=False) -> None:
         assert lr >= 0, "lr must be non-negative"
         assert beta1 >= 0 and beta1 < 1, "allowed beta1 range: [0,1)"
         assert beta2 >= 0 and beta2 < 1, "allowed beta2 range: [0,1)"
@@ -20,7 +27,7 @@ class AdamW:
         self.foreach= foreach
 
         if scheduler:
-            self.schedule = scheduler(self.init_lr, min_lr)
+            self.schedule = SCHEDULER[scheduler](self.init_lr, min_lr)
             if min_lr is not None:
                 if min_lr > lr:
                     raise ValueError("min lr cant be bigger than init lr")
@@ -122,7 +129,7 @@ class AdamW:
                 w = self.state[name]["master"]
 
         state_shape = self.state[name]
-        m_v_t = (state_shape["m"], state_shape["v"], self.state["t"], state_shape["m_scales"], state_shape["v_scales"],)
+        m_v_t = (state_shape["m"], state_shape["v"], self.state["t"], state_shape.get("m_scales", None), state_shape.get("v_scales", None),)
         weight_decay = self.weight_decay if decay else nx.float_32(0.0)
 
         new_param, m,v, m_scales, v_scales = self.__step(m_v_t, w, dw,self.lr,  self.epsilon, self.beta1, self.beta2, weight_decay, self.eight_bit)
@@ -179,35 +186,90 @@ class AdamW:
 
     def to_dict(self) -> dict[Any, Any]:
         adamw = {"state":{}}
-        adamw["state"]["t"] = nx.copy(self.state["t"])
+        adamw["state"]["optimizer.t"] = nx.copy(self.state["t"])
 
-        # if self.foreach:
-        adamw["state"] = copy.deepcopy(self.state)
+        state = copy.deepcopy(self.state)
+
+        optimizer_state_name = {}
+        for shape, a in state.items():
+            if shape != "t":
+                for b, c in a.items():
+                    if b != "names":
+                        if c is not None:
+                            adamw["state"][f"optimizer.{str(shape)}.{b}"] = c
+                    else:
+                        optimizer_state_name[f"optimizer.{str(shape)}.{b}"] = c
 
         adamw_configs = {
-            "lr": self.init_lr.item(),
+            "type":"adamw",
+            "lr": self.lr.item(),
+            "init_lr": self.init_lr.item(),
             "beta1": self.beta1.item(),
             "beta2": self.beta2.item(),
-            "epsilon": self.epsilon.item(),
+            "epsilon": self.epsilon.item() if hasattr(self.epsilon, "item") else self.epsilon,
             "weight_decay":self.weight_decay.item(),
             "use_master":self.use_master,
             "scheduler":self.scheduler,
-            "min_lr": self.min_lr,
+            "min_lr": self.min_lr.item() if hasattr(self.min_lr, "item") else self.min_lr, #type:ignore
             "t_warmup": self.t_warmup,
             "foreach":self.foreach,
             "eight_bit":self.eight_bit,
-            "_all_not_decayed":self.__all_not_decayed
+            "_all_not_decayed":self.__all_not_decayed,
+            "names": optimizer_state_name
         }
         if self.min_lr is not None and hasattr(self.min_lr, "dtype"):
             adamw_configs["min_lr"] = self.min_lr.item() #type:ignore
 
-        adamw["adamw_configs"] = adamw_configs
+        adamw["configs"] = adamw_configs
         return adamw
 
     @classmethod
-    def from_dict(cls, thing:dict[Any, Any]) -> "AdamW":
-        configs = thing["adamw_configs"]
-        states = thing["state"]
+    def from_dict(cls,  configs, states) -> "AdamW":
+        if configs.get("type", None) is not None:
+            configs.pop("type")
+
+        names = None
+        if configs.get("names", None) is not None:
+            names = configs.pop("names")
+
+        init_lr = 1e-3
+        if configs.get("init_lr", None) is not None:
+            init_lr = configs.pop("init_lr")
+
         adamw = cls(**configs)
-        adamw.state = states
+        adamw.init_lr = init_lr
+
+
+        built = {}
+        # built["names"] = names
+
+        for name_shape, tensor in states.items():
+            if name_shape.startswith("optimizer"):
+                name_shape = name_shape[10:]
+                if name_shape != "t":
+                    a,b = name_shape.rsplit(".", 1)
+                    try:
+                        formatted = ast.literal_eval(a)
+                    except:
+                        formatted = a
+
+                    if formatted not in built:
+                        built[formatted] = {b:tensor}
+                    else:
+                        built[formatted][b] = tensor
+                else:
+                    built["t"] = tensor
+
+        if names is not None:
+            for name_shape, tensor in names.items():
+                name_shape = name_shape[10:]
+                a,b = name_shape.rsplit(".", 1)
+                formatted = ast.literal_eval(a)
+                if formatted not in built:
+                    built[formatted] = {b:tensor}
+                else:
+                    built[formatted][b] = tensor
+
+        adamw.state = built
+
         return adamw

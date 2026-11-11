@@ -24,7 +24,7 @@ session_configs = {
     "max_step":21,
     "train_split": .9,
     "max_val_step":21,
-    "eval_every":1, 
+    "eval_every":1,
     "validate_every":7,
     "context_size": 32,
     "batch_size": 1,
@@ -40,7 +40,7 @@ session_configs = {
     "save":False,
     "create_checkpoint":True,
     "checkpoint_every":1000,
-    "weights_only": True,
+    "weight_only": True,
     "logger":False,
     "discard_mtp":False
 }
@@ -53,7 +53,7 @@ model_configs = {
     "dtype": "float16",
     "gradient_scale":32768,
     "vocab_size": len(tokenizer1.vocab),
-    "quantized":False, 
+    "quantized":False,
     "check_non_finite":True,
     "recompute_activation":True,
     "block_configs":{
@@ -62,7 +62,7 @@ model_configs = {
         "ff_topk":1,
         "ff_cf":1.25,
         "ff_init":"glorot_uniform",
-        "ff_dense_hidden_width":512, 
+        "ff_dense_hidden_width":512,
         "ff_n_dense":1,
         "ff_jitter_eps":0.02,
         "attn_type":"chunked",

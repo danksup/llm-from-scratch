@@ -82,10 +82,10 @@ logs:
 - optimizing/cleanup/docs
 
 ## TODO (not in order):
-- fill in the middle transformer
 - parallelizing tokenizer word frequency counting
   
 #### Maybe:
+- fill in the middle transformer
 - muon
 - multimodal (or maybe bimodal image-in -> text first)
 - LoRA

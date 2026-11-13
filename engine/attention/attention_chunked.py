@@ -214,7 +214,6 @@ class AttentionChunked:
             Wqkv = nx.dequantize(Wqkv, wqkv_scale,wqkv_bias, x.dtype)
 
         chunk_size = min(chunk_size, T-1)
-        remainder = (chunk_size - (T % chunk_size)) % chunk_size
 
         if wo_scale is not None:
             d_output_unchunked = nx.quantized_matmul(gradient, Wo, wo_scale, wo_bias, True)
@@ -223,8 +222,12 @@ class AttentionChunked:
 
         d_output_unchunked = d_output_unchunked.reshape(B,T, n_heads, head_dim).transpose(0,2,1,3)
 
-        pad = [(0,0),(0,0), (0, remainder), (0,0)]
-        d_output_padded = nx.pad(d_output_unchunked, pad)#(B,n_heads, T+remainder,D)
+        remainder = (chunk_size - (T % chunk_size)) % chunk_size
+        if remainder > 0:
+            pad = [(0,0),(0,0), (0, remainder), (0,0)]
+            d_output_padded = nx.pad(d_output_unchunked, pad)#(B,n_heads, T+remainder,D)
+        else:
+            d_output_padded = d_output_unchunked
 
         n_chunk = d_output_padded.shape[2] // chunk_size
         d_output_chunked = d_output_padded.reshape(B, n_heads, n_chunk, chunk_size, head_dim)

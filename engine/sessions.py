@@ -139,7 +139,7 @@ class Session:
                 self.configs["optimizer_args"]["use_master"] = False
                 warnings.warn(colorize("master is disabled when using full precision", "yellow"), UserWarning)
             if self.transformer.gradient_scale != 1:
-                self.transformer.gradient_scale = 1
+                self.transformer.gradient_scale = nx.array(1, nx.int32)
                 warnings.warn(colorize("gradient scale is reset to 1 when using full precision", "yellow"), UserWarning)
 
         if self.configs["train_split"] == 1:

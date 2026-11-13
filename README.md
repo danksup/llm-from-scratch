@@ -77,16 +77,17 @@ logs:
 - yarn (rope) nov 8 2026
 
 ## Ongoing:
+- fix optimizer states saving to safetensors
 - ram usage optimization
 - optimizing/cleanup/docs
 
 ## TODO (not in order):
 - fill in the middle transformer
-- fix optimizer states saving to safetensors
 - parallelizing tokenizer word frequency counting
   
 #### Maybe:
 - muon
+- multimodal (or maybe bimodal image-in -> text first)
 - LoRA
 - GaLoRA
 - conversation memory

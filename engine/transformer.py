@@ -88,10 +88,9 @@ class Transformer:
         self.embedding = Embedding(self.vocab_size, self.embed_dim, self.dtype, self.quantized, init=init)
         self.rmsnorm_final = RMSNorm(self.embed_dim, init=init)
 
-        self.gradient_scale = configs.get("gradient_scale", 4096)
+        self.gradient_scale = max(nx.array(4096, nx.int32) if configs.get("gradient_scale", None) is None else nx.array(configs.get("gradient_scale"), nx.int32), nx.array(1, nx.int32))
         self.max_gradient_scale = self.gradient_scale
 
-        assert self.gradient_scale > 0, "gradient scale cant be less than 1"
         no_class_attn_type = copy.deepcopy(ATTN_TYPE)
         no_class_attn_type[default_block_configs["attn_type"]].pop('attn')
         self.block_configs =  default_block_configs | configs.get("block_configs", {})
@@ -547,7 +546,7 @@ class Transformer:
             microstep = 0
             total_histograms = None
             clean_step = 0
-            self.gradient_scale = max(1, self.gradient_scale//2)
+            self.gradient_scale = max(nx.array(1, nx.int32), self.gradient_scale//2)
 
             for block in self.blocks:
                 block.zeroes_gradient()
@@ -629,7 +628,7 @@ class Transformer:
 
                         reset_and_halve_grad_scale()
 
-                        self.warn_logger(msg=f"[NON-FINITE step: {step}] non finite loss at microstep {microstep}. isnan forward/backward: {forward_nan}/{backward_nan} | isinf forward/backward: {forward_inf}/{backward_inf}\ngradient_scale is halved: {self.gradient_scale}", log_msg=f"\n non-finite weights:\n{nan_weights}", category= UserWarning)
+                        self.warn_logger(msg=f"[NON-FINITE step: {step}] non finite loss at microstep {microstep}. isnan forward/backward: {forward_nan}/{backward_nan} | isinf forward/backward: {forward_inf}/{backward_inf}\ngradient_scale is halved: {self.gradient_scale.item()}", log_msg=f"\n non-finite weights:\n{nan_weights}", category= UserWarning)
                         continue
 
             if microstep == microbatch_size:
@@ -637,7 +636,7 @@ class Transformer:
                     check = self.network_non_finite_check()
                     if check[0]:
                         reset_and_halve_grad_scale()
-                        self.warn_logger(msg=f"[NON-FINITE step: {step}] non finite loss at microstep {microstep}. \ngradient_scale is halved: {self.gradient_scale}", log_msg=f"\n non-finite weights:\n{check[1]}", category= UserWarning)
+                        self.warn_logger(msg=f"[NON-FINITE step: {step}] non finite loss at microstep {microstep}. \ngradient_scale is halved: {self.gradient_scale.item()}", log_msg=f"\n non-finite weights:\n{check[1]}", category= UserWarning)
                         continue
 
                 gscale = self.gradient_clipping_factor(microbatch_size)
@@ -835,7 +834,7 @@ class Transformer:
         configs["embed_dim"] = self.embed_dim
         configs["dtype"] = nx.dtype_to_srt[self.dtype]
         configs["quantized"] =  self.quantized
-        configs["gradient_scale"] = self.gradient_scale
+        configs["gradient_scale"] = self.gradient_scale.item() if hasattr(self.gradient_scale, "item") else self.gradient_scale
         configs["recompute_activation"] = self.recompute_activation
         configs["n_mtp_block"] = len(self.mtp_blocks)
         return configs

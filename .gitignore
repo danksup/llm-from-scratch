@@ -35,3 +35,6 @@ tokenizer-demo/*
 cabbage.py
 
 .ropeproject/
+
+other_models/*
+!other_models/.gitkeep

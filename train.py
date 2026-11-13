@@ -12,11 +12,11 @@ from engine.transformer import Transformer
 nx.set_seed(12345)
 
 EPOCHS = 1
-EMBED_DIM = 128
-CONTEXT_SIZE = 512
-BATCH_SIZE = 4
-N_HEADS = 8
-N_KV_HEADS = max(1, N_HEADS // 4)
+EMBED_DIM = 1536
+CONTEXT_SIZE = 2048
+BATCH_SIZE = 1
+N_HEADS = 12
+N_KV_HEADS = max(1, N_HEADS // 3)
 N_EXPERTS = 8
 CF = 1.25
 VAL = .9
@@ -36,7 +36,7 @@ session_configs = {
     "validate_every":10,
     "context_size": CONTEXT_SIZE,
     "batch_size": BATCH_SIZE,
-    "microbatch_size":16,
+    "microbatch_size":1,
     "optimizer":"adamw",
     "optimizer_args":{
         "lr": 1e-3,
@@ -45,7 +45,7 @@ session_configs = {
         "min_lr": 8e-5,
         "t_warmup": max(1, int(MAX_STEP * 0.02)),
         "eight_bit":True,
-        "foreach":False
+        "foreach":True
     },
     "save":True,
     "logger":True,
@@ -60,7 +60,7 @@ session_configs = {
 }
 
 model_configs = {
-    "n_blocks":5,
+    "n_blocks":24,
     "n_mtp":1,
     "discard_mtp":False,
     "mtp_lambda":0.5,
@@ -68,17 +68,17 @@ model_configs = {
     "dtype": "float16",
     "gradient_scale":8192,
     "vocab_size": len(tokenizer1.vocab),
-    "quantized":False,
+    "quantized":True,
     "doc_id":True,
     "check_non_finite":True,
     "recompute_activation":True,
     "block_configs":{
-        "ff_hidden_width": int(2 * EMBED_DIM),
+        "ff_hidden_width": 2304,#int(2 * EMBED_DIM),
         "ff_n_experts":N_EXPERTS,
         "ff_topk":TOP_K,
         "ff_cf":CF,
         "ff_init":"glorot_uniform",
-        "ff_dense_hidden_width":int(4 * EMBED_DIM),
+        "ff_dense_hidden_width": 3584,#int(4 * EMBED_DIM),
         "ff_n_dense":1,
         "ff_jitter_eps":0.02,
         "ff_bias_gamma": 1e-3,

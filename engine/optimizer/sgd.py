@@ -107,9 +107,10 @@ class SGD:
         name, w, dw, decay = tup
 
         if name not in self.state:
-            self.state[name] = {
-                "v": nx.zeros_like(w, nx.float32) if self.momentum > 0.0 else 0,
-            }
+            self.state[name] = {}
+            if self.momentum > 0.0:
+                self.state[name]["v"] = nx.zeros_like(w, nx.float32)
+
         else:
             if self.use_master:
                 w = self.state[name]["master"]

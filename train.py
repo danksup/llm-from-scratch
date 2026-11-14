@@ -93,7 +93,8 @@ model_configs = {
         "attn_rope_scale": 1.0,
         "attn_rope_orig_ctx": CONTEXT_SIZE,
         "attn_rope_alpha": 1.0,
-        "attn_rope_beta": 32.0
+        "attn_rope_beta": 32.0,
+        "dropout_p":0.0
         },
     "block_overrides":{
       }

@@ -3,7 +3,7 @@ import engine.backend as nx
 class Dropout:
     @staticmethod
     def _forward(x, p, is_training):
-        if not is_training:
+        if not is_training or p <=0.0:
             return x, None
 
         s = nx.uniform(0.0, 1.0, x.shape, dtype=x.dtype)

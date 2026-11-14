@@ -19,7 +19,7 @@ class RMSNorm:
 
     def set_gradient(self, dgamma):
         self.d_gamma += dgamma
-    
+
     @staticmethod
     def _forward(x:nx.ArrayLike, gamma:nx.ArrayLike, epsilon:Any) -> tuple[nx.ArrayLike, tuple[Any,...]]:
         '''

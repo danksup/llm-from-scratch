@@ -29,7 +29,6 @@ default_block_configs = {
     "ff_n_dense":2,
     "ff_jitter_eps":0.02,
     "ff_bias_gamma":1e-3,
-    "attn_dropout":0.1,
     "attn_type":"chunked",
     "attn_variant":"gqa",
     "attn_n_heads":16,
@@ -38,7 +37,8 @@ default_block_configs = {
     "attn_rope_scale": 1.0,
     "attn_rope_orig_ctx": None,
     "attn_rope_alpha": 1.0,
-    "attn_rope_beta": 32.0
+    "attn_rope_beta": 32.0,
+    "dropout_p":0.0
 }
 
 ATTN_TYPE = {
@@ -166,7 +166,7 @@ class Transformer:
                 ff = FFN(CF, topk, E, D, H, ff_dense_hidden_width, ff_n_dense,ff_jitter_eps,ff_bias_gamma, dtype=self.dtype, initializer=ff_init, quantized=self.quantized, init=init)
                 rmsnorm1 = RMSNorm(D, init=init)
                 rmsnorm2 = RMSNorm(D, init=init)
-                transformer_block = TransformerBlock(attn, ff, rmsnorm1, rmsnorm2)
+                transformer_block = TransformerBlock(attn, ff, rmsnorm1, rmsnorm2, overrided["dropout_p"])
 
                 self.blocks.append(transformer_block)
         else:
@@ -261,7 +261,7 @@ class Transformer:
                 gamma1 = block.rmsnorm1.gamma
                 gamma2 = block.rmsnorm2.gamma
 
-                P = nx.array(0.1, dtype=self.dtype)
+                P = block.dropout_p
 
                 attn_str = block.attention.self_type()
 
@@ -285,16 +285,10 @@ class Transformer:
                 print(f"[block {idx}] ValueError")
                 raise ValueError(e)
 
-        last_output = output.astype(self.dtype)
+        last_output = output#.astype(self.dtype)
         rmsnorm_out, rms_cache = self.rmsnorm_final._forward(last_output, self.rmsnorm_final.gamma,self.rmsnorm_final.epsilon)
 
-        # if self.quantized:
-        #     scores = nx.quantized_matmul(rmsnorm_out, self.embedding.lookup_table, self.embedding.table_scale, self.embedding.bias, transpose=True)
-        # else:
-        #     scores = rmsnorm_out.astype(self.dtype) @ self.embedding.lookup_table.T # B,T,V
-
         all_caches += rms_cache,
-        # return scores, rmsnorm_out, all_masks, all_caches, total_z_loss, histograms, last_output
         return rmsnorm_out, all_masks, all_caches, total_z_loss, histograms, last_output
 
     def backward(self, err_signal:Any,  all_masks, all_caches:list, doc_id, total_dh) -> Any:
@@ -306,12 +300,12 @@ class Transformer:
             current_grad[:,:-1] += total_dh
         self.rmsnorm_final.d_gamma = rmsnorm_final_d_gamma if getattr(self.rmsnorm_final, "d_gamma", None) is None else self.rmsnorm_final.d_gamma + rmsnorm_final_d_gamma
         for block, masks,caches in zip(self.blocks[::-1], all_masks[::-1],all_caches[::-1]):
-            current_grad = current_grad.astype(self.dtype)
+            current_grad = current_grad#.astype(self.dtype)
             _,T,_ = current_grad.shape
             caches_attn, caches_ff, caches_rmsnorm1, caches_rmsnorm2 = caches
             mask1, mask2 = masks
             ff_configs = block.ff.configs
-            P = nx.array(0.1, dtype=self.dtype)
+            P = block.dropout_p
 
             ff_params = (block.ff.router,block.ff.Wcombined, block.ff.Wout,  block.ff.W_dense_combined, block.ff.W_dense_out, block.ff.router_bias)
             attn_str = block.attention.self_type()
@@ -344,7 +338,7 @@ class Transformer:
         return current_grad
 
     def mtp_forward(self, input, next_tokens, doc_id, *, is_training=True):
-        output = input.astype(self.dtype)
+        output = input#.astype(self.dtype)
         all_caches = []
         B,T,D = input.shape
         for mtp in self.mtp_blocks:
@@ -580,6 +574,7 @@ class Transformer:
 
                 mtp_output, mtp_caches  = self.mtp_forward(unnormalized_output[:, :-1], next_tokens_embedded, doc_id_sliced, is_training=True)
                 mtp_loss, mtp_block_gradient, mtp_d_table = fused_cross_entropy(mtp_output, lookup_table, next_tokens[:, 1:], gradient_scale=self.gradient_scale, chunk_size=self.cross_entropy_chunk_size)
+                mtp_block_gradient *= self.mtp_lambda
                 dh,de = self.mtp_backward(mtp_block_gradient, mtp_caches)
                 if total_dh is None:
                     total_dh = dh
@@ -657,7 +652,8 @@ class Transformer:
                             decay = True
                             use_muon = True
                             if w in ["lookup_table", "gamma", "router"]:
-                                decay = use_muon = False
+                                decay = False
+                                use_muon = False
 
                             exc = ["router", "gamma"]
 

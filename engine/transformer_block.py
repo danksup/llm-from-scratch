@@ -13,7 +13,7 @@ ATTN_TYPE = {
 }
 
 class TransformerBlock:
-    def __init__(self ,attention:Attention, ff:FFN, rmsnorm1:RMSNorm, rmsnorm2:RMSNorm) -> None:
+    def __init__(self ,attention:Attention, ff:FFN, rmsnorm1:RMSNorm, rmsnorm2:RMSNorm, dropout_p=0.0) -> None:
         self.causal_mask = None
 
         self.attention = attention
@@ -21,6 +21,7 @@ class TransformerBlock:
         self.ff = ff
         self.rmsnorm1 = rmsnorm1
         self.rmsnorm2 = rmsnorm2
+        self.dropout_p = dropout_p
 
     def zeroes_gradient(self):
         self.attention.zeroes_gradient()
@@ -61,7 +62,7 @@ class TransformerBlock:
         rmsnorm1_out = rmsnorm1_out.astype(x.dtype)
 
         attn_out, caches_attn = ATTN_TYPE[attention]._forward(rmsnorm1_out, causal_mask,doc_id, attn_configs, attn_params, quantization[0], recompute_activation=recompute_activation) #type:ignore
-        drop_attn_out, mask1 = Dropout._forward(attn_out, p,is_training)
+        drop_attn_out, mask1 = Dropout._forward(attn_out, p, is_training)
 
         attn_out = drop_attn_out + x
 
@@ -69,7 +70,7 @@ class TransformerBlock:
 
         rmsnorm2_out = rmsnorm2_out.astype(x.dtype)
         ff_out, caches_ff, z_loss, normalized_histogram = FFN.forward(rmsnorm2_out, ff_configs, ff_params, quantization[1], recompute_activation=recompute_activation, is_training=is_training) #type:ignore
-        drop_ff_out, mask2 =  Dropout._forward(ff_out, p,is_training)
+        drop_ff_out, mask2 =  Dropout._forward(ff_out, p, is_training)
 
         ff_out = drop_ff_out + attn_out
 
@@ -127,6 +128,7 @@ class TransformerBlock:
             "ff":self.ff.configs,
             "rmsnorm1": self.rmsnorm1.configs,
             "rmsnorm2": self.rmsnorm2.configs,
+            "dropout_p":self.dropout_p
         }
 
     def copy(self):
@@ -135,7 +137,7 @@ class TransformerBlock:
         rms1_copy = self.rmsnorm1.copy()
         rms2_copy = self.rmsnorm2.copy()
 
-        block_copy = TransformerBlock(attn_copy, ff_copy, rms1_copy, rms2_copy)
+        block_copy = TransformerBlock(attn_copy, ff_copy, rms1_copy, rms2_copy, self.dropout_p)
         return block_copy
 
     def quantize(self):

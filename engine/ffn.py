@@ -33,7 +33,7 @@ class FFN:
         router_shape = embed_dim, n_experts
         dense_combined_shape = embed_dim, n_dense * dense_hidden_width * 2
         dense_out_shape = (n_dense * dense_hidden_width, embed_dim)
-        
+
         if init:
             if self.n_experts > 0:
                 self.router_bias = nx.zeros(n_experts, dtype=nx.float32)
@@ -71,9 +71,18 @@ class FFN:
                 self.router = nx.empty(router_shape)
                 self.Wcombined = nx.empty(wcombined_shape)
                 self.Wout = nx.empty(wout_shape)
+            else:
+                self.router = None
+                self.Wcombined = None
+                self.Wout = None
+                self.router_bias = None
+
             if n_dense > 0:
                 self.W_dense_combined = nx.empty(dense_combined_shape)
                 self.W_dense_out = nx.empty(dense_out_shape)
+            else:
+                self.W_dense_combined = None
+                self.W_dense_out = None
 
         if n_experts > 0:
             self.dWcombined = nx.zeros(wcombined_shape)
@@ -97,7 +106,6 @@ class FFN:
             "W_dense_combined": 2,
             "W_dense_out": 3,
         }
-
 
     def zeroes_gradient(self):
         if self.n_experts > 0:
@@ -146,10 +154,10 @@ class FFN:
 
         return total, total_dense
 
-    @staticmethod 
+    @staticmethod
     def compute_expert_input(n_experts,top_k, N, flatten_x, valid, safe_slot, capacity, D, flatten_top_expert_indices,dtype):
         assignement_tokens = nx.repeat( nx.arange(N, dtype=nx.int32), top_k) #(N*K,)
-        masked_tokens = flatten_x[assignement_tokens] * valid[:, None] 
+        masked_tokens = flatten_x[assignement_tokens] * valid[:, None]
         expert_input = nx.zeros((n_experts, capacity, D), dtype=dtype)
         expert_input = nx.add_at(expert_input, (flatten_top_expert_indices, safe_slot), masked_tokens)
         return expert_input
@@ -165,13 +173,13 @@ class FFN:
 
         return projected
 
-    @staticmethod 
+    @staticmethod
     def compute_hidden(projected, dtype):
         H = projected.shape[-1] // 2
         gate_half = projected[..., :H]
         value_half = projected[..., H:]
         s = swish(gate_half, dtype)
-        return s * value_half #(E, capacity, H) 
+        return s * value_half #(E, capacity, H)
 
     def update_bias(self, n_routed_tokens, gamma:float=1e-3):
         ideal = 1 / self.n_experts
@@ -207,7 +215,7 @@ class FFN:
             top_k = min(top_k, n_experts)
 
             capacity = math.ceil(capacity_factor * N * top_k / n_experts)
-                
+
             scores =  flatten_x.astype(nx.float32) @ router#(N, E)
 
             if is_training and jitter_eps > 0:
@@ -306,7 +314,7 @@ class FFN:
         N = B*T
 
         flatten_gradient = gradient.reshape(-1, D)
-        
+
         wcombined_scale, wout_scale,dense_expert_scale,dense_expert_out_scale, wcombined_bias, wout_bias, dense_expert_bias,  dense_expert_out_bias = quantization  #type:ignore
 
         router, Wcombined, Wout,  W_dense_combined, W_dense_out, _ = ff_params
@@ -327,7 +335,7 @@ class FFN:
                     d_dense_hidden = nx.quantized_matmul(flatten_gradient, W_dense_out, dense_expert_out_scale, dense_expert_out_bias, True)
             else:
                 d_dense_hidden = flatten_gradient @ W_dense_out.T #N,H
-            
+
             dense_gate_half = dense_projected[..., :dense_hidden_width * n_dense] #N,H
             dense_value_half = dense_projected[..., dense_hidden_width* n_dense:]
 
@@ -355,7 +363,7 @@ class FFN:
                 hidden = FFN.compute_hidden(projected, gradient.dtype)
 
             M = N *top_k
-        
+
             assignment_gradient = flatten_gradient[assignement_tokens] #(M,D)
             d_masked_output = assignment_gradient * valid[...,None]
 
@@ -367,7 +375,7 @@ class FFN:
             d_expert_gate = nx.sum(d_gated_output * raw_output, axis=-1, dtype=nx.float32,) #(E, capacity)
 
             dWout = hidden.transpose(0, 2, 1) @ d_raw_output
-            
+
             if wout_scale is not None:
                 d_hidden = nx.quantized_matmul(d_raw_output, Wout, wout_scale,biases=wout_bias, transpose=(0,2,1))  #(E,C,H) fp16
             else:
@@ -478,7 +486,7 @@ class FFN:
                     wcombined_bias = wcombined_bias[flatten_top_expert_indices]
                     wout_scale = wout_scale[flatten_top_expert_indices]
                     wout_bias = wout_bias[flatten_top_expert_indices]
-                    
+
                 projected = FFN.compute_projected(flatten_x[None,:,:], Wcombined, (wcombined_scale, wcombined_bias))
 
                 hidden = FFN.compute_hidden(projected, x.dtype) #(E, capacity, H)
@@ -496,19 +504,19 @@ class FFN:
                 assignment_rows = nx.arange(M, dtype=nx.int32)
                 routing_mask = nx.zeros((M,n_experts), nx.int32)
                 routing_mask = nx.add_at(routing_mask, (assignment_rows, flatten_top_expert_indices), 1)
-        
+
                 cum_assignment = nx.cumsum(routing_mask, axis=0, dtype=nx.int32)
-        
+
                 slot_idx = cum_assignment[assignment_rows, flatten_top_expert_indices] - 1 #(N,)
                 safe_slot = nx.clip(slot_idx, 0, capacity - 1, dtype=nx.int32)
                 valid = slot_idx < capacity
-        
+
                 expert_input = FFN.compute_expert_input(n_experts, top_k, N, flatten_x, valid, safe_slot, capacity, D, flatten_top_expert_indices, x.dtype) #(n_experts, capacity, D)
-        
+
                 expert_gate = nx.zeros((n_experts, capacity), dtype=top_gates.dtype)
                 safe_gates = nx.where(valid, flatten_top_gates, nx.zeros_like(flatten_top_gates))
                 expert_gate = nx.add_at(expert_gate, (flatten_top_expert_indices, safe_slot), safe_gates)
-                
+
                 projected = FFN.compute_projected(expert_input, Wcombined, (wcombined_scale, wcombined_bias)) #(E, capacity, 2H)
 
                 hidden = FFN.compute_hidden(projected, x.dtype) #(E, capacity, H)
@@ -521,7 +529,7 @@ class FFN:
                 gated_output = raw_output * expert_gate[..., None]
                 moe_output = gated_output[flatten_top_expert_indices, safe_slot]
                 moe_output = moe_output * valid[..., None]
-            
+
             moe_output = moe_output.reshape(N,top_k,D)
             moe_output = nx.sum(moe_output, axis=1, dtype=nx.float32).reshape(B,T,D) #check
 
@@ -547,15 +555,15 @@ class FFN:
 
         if self.n_experts > 0:
             moe_copy.router = nx.copy(self.router)
-            moe_copy.router_bias = nx.copy(self.router_bias) 
-            moe_copy.Wcombined = nx.copy(self.Wcombined) 
+            moe_copy.router_bias = nx.copy(self.router_bias)
+            moe_copy.Wcombined = nx.copy(self.Wcombined)
             moe_copy.Wout = nx.copy(self.Wout)
             if self.quantized:
                 moe_copy.scales = (nx.copy(self.scales[0]), nx.copy(self.scales[1]), self.scales[2], self.scales[3])
                 moe_copy.biases = (nx.copy(self.biases[0]), nx.copy(self.biases[1]), self.biases[2], self.biases[3])
 
         if self.n_dense > 0:
-            moe_copy.W_dense_combined = nx.copy(self.W_dense_combined) 
+            moe_copy.W_dense_combined = nx.copy(self.W_dense_combined)
             moe_copy.W_dense_out = nx.copy(self.W_dense_out)
             if self.quantized:
                 moe_copy.scales = (self.scales[0], self.scales[1], nx.copy(self.scales[2]), nx.copy(self.scales[3]))
@@ -566,7 +574,7 @@ class FFN:
     def quantize(self):
         if self.quantized:
             return
-        
+
         self.quantized = True
 
         if self.n_experts > 0:

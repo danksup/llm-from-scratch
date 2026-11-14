@@ -53,7 +53,7 @@ class MTPBlock:
     # @nx.compile
     @staticmethod
     def forward(h, next_token_embed, params, configs, attention, causal_mask, doc_id, epsilon,quantization, *, is_training=True, recompute_activation=True):
-        wproj, gamma1, gamma2, attn_params,ffn_params, block_gamma1, block_gamma2 = params
+        wproj, gamma1, gamma2, attn_params,ffn_params, block_gamma1, block_gamma2, P = params
         wproj_scale, wproj_bias, tblock_quants = quantization
         attn_configs, ff_configs = configs
         z = nx.concatenate([h, next_token_embed], axis=-1) #B,T,2D
@@ -67,7 +67,7 @@ class MTPBlock:
         rmsnorm1_out = rmsnorm1_out.astype(h.dtype)
 
         tblock_out, masks, caches, z_loss, normalized_histogram = TransformerBlock._forward(x=rmsnorm1_out, causal_mask=causal_mask,doc_id=doc_id, attn_configs=attn_configs, attn_params=attn_params, ff_configs=ff_configs, ff_params=ffn_params,
-                                                                                              attention=attention, epsilon=epsilon,gamma1=block_gamma1, gamma2=block_gamma2, p=0.1, is_training=is_training, quantization=tblock_quants, recompute_activation=recompute_activation)
+                                                                                              attention=attention, epsilon=epsilon,gamma1=block_gamma1, gamma2=block_gamma2, p=P, is_training=is_training, quantization=tblock_quants, recompute_activation=recompute_activation)
 
         rmsnorm2_out, rmsnorm2_cache = RMSNorm._forward(tblock_out, gamma2, epsilon)
 
@@ -80,13 +80,13 @@ class MTPBlock:
         z, rmsnorm1_cache, rmsnorm2_cache, masks, tblock_caches, z_loss, normalized_histogram = all_caches
         tblock_caches_attn, tblock_caches_ff, tblock_caches_rmsnorm1, tblock_caches_rmsnorm2 = tblock_caches
 
-        wproj, gamma1, gamma2, tblock_attn_params, tblock_ff_params, tblock_gamma1,tblock_gamma2 = all_params
+        wproj, gamma1, gamma2, tblock_attn_params, tblock_ff_params, tblock_gamma1,tblock_gamma2, P = all_params
         mask1, mask2 = masks
         attn_configs, ff_configs = all_configs
         wproj_scale, wproj_bias,tblock_quants = quantization
 
         dx_rms2,d_gamma2 = RMSNorm._backward(gradient, rmsnorm2_cache, gamma2)
-        dx, dWout, dWcombined, d_router,dW_dense_combined, dW_dense_out, dWqkv,dWo, tblock_d_gamma1, tblock_d_gamma2, Q_norm_d_gamma, K_norm_d_gamma= TransformerBlock._backward(dx_rms2, mask1, mask2,attention,0.1,tblock_caches_attn,tblock_caches_ff, tblock_caches_rmsnorm1, tblock_caches_rmsnorm2,
+        dx, dWout, dWcombined, d_router,dW_dense_combined, dW_dense_out, dWqkv,dWo, tblock_d_gamma1, tblock_d_gamma2, Q_norm_d_gamma, K_norm_d_gamma= TransformerBlock._backward(dx_rms2, mask1, mask2,attention, P, tblock_caches_attn,tblock_caches_ff, tblock_caches_rmsnorm1, tblock_caches_rmsnorm2,
                                    attn_configs=attn_configs,attn_params=tblock_attn_params, ff_configs=ff_configs, gradient_scale=gradient_scale,
                                    ff_params=tblock_ff_params,gamma1=tblock_gamma1,gamma2=tblock_gamma2, quantization=tblock_quants, recompute_activation=recompute_activation)
 
@@ -153,8 +153,9 @@ class MTPBlock:
         ff_params = tblock_ff.router, tblock_ff.Wcombined, tblock_ff.Wout, tblock_ff.W_dense_combined, tblock_ff.W_dense_out, tblock_ff.router_bias
         tblock_rms1 = tblock_rmsnorm1.gamma
         tblock_rms2 = tblock_rmsnorm2.gamma
+        tblock_dropout_p = self.transformer_block.dropout_p
 
-        params = (self.Wproj, self.rmsnorm1.gamma, self.rmsnorm2.gamma, attn_params, ff_params ,tblock_rms1 ,tblock_rms2)
+        params = (self.Wproj, self.rmsnorm1.gamma, self.rmsnorm2.gamma, attn_params, ff_params ,tblock_rms1 ,tblock_rms2, tblock_dropout_p)
         configs = tblock_attn.configs, tblock_ff.configs
 
         quants = self.scale, self.bias , ((tblock_attn.scales + tblock_attn.biases), (tblock_ff.scales + tblock_ff.biases))

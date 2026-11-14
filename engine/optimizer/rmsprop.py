@@ -44,9 +44,7 @@ class RMSProp:
     def step_many(self, name_param_gradient_decay:list[Any]) -> dict[Any,Any]:
         group = {}
         for x in name_param_gradient_decay:
-            if len(x) == 3:
-                x += True,
-            name,param,gradient,decay_bool = x
+            name,param,gradient,decay_bool, _ = x
             shape = param.shape
             if self.__all_not_decayed:
                 decay_bool = False
@@ -110,7 +108,7 @@ class RMSProp:
         return optimized
 
     def step(self, tup):
-        name, w, dw, decay = tup
+        name, w, dw, decay, _ = tup
         if self.__all_not_decayed:
             decay = False
 

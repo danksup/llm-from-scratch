@@ -78,6 +78,7 @@ DEFAULT_OPTIMIZER_ARGS = {
         "use_master":False,
         "scheduler":None,
         "min_lr":None,
+        "_all_not_decayed": False,
         "t_warmup": max(1,int(DEFAULT_CONFIGS["max_step"] * 0.015)),
         "eight_bit":False,
         "foreach":False

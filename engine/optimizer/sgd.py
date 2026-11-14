@@ -43,9 +43,7 @@ class SGD:
     def step_many(self, name_param_gradient_decay:list[Any]):
         group = {}
         for x in name_param_gradient_decay:
-            if len(x) == 3:
-                x += True,
-            name,param,gradient,decay_bool = x
+            name,param,gradient,decay_bool, _ = x
             shape = param.shape
             grouping = (shape,decay_bool)
             if grouping not in group:
@@ -104,7 +102,7 @@ class SGD:
         return optimized
 
     def step(self, tup):
-        name, w, dw, decay = tup
+        name, w, dw, decay, _ = tup
 
         if name not in self.state:
             self.state[name] = {}

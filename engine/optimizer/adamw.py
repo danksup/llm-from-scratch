@@ -47,9 +47,7 @@ class AdamW:
         m_dtype = nx.float32 if not self.eight_bit else nx.int8
         v_dtype = nx.float32 if not self.eight_bit else nx.uint8
         for x in name_param_gradient_decay:
-            if len(x) == 3:
-                x += True,
-            name,param,gradient,decay_bool = x
+            name,param,gradient,decay_bool, _ = x
             shape = param.shape
             if self.__all_not_decayed:
                 decay_bool = False
@@ -111,7 +109,7 @@ class AdamW:
         return optimized
 
     def step(self, tup):
-        name, w, dw, decay = tup
+        name, w, dw, decay, _ = tup
         if self.__all_not_decayed:
             decay = False
 
@@ -168,7 +166,7 @@ class AdamW:
         else:
             m = m.astype(nx.float32)
         if v_scales is not None:
-            v = nx.log_dequantize(v, v_scales, epsilon)
+            v = nx.log_dequantize(v, v_scales, 1e-24)
         else:
             v = v.astype(nx.float32)
 
@@ -181,7 +179,7 @@ class AdamW:
 
         if eight_bit:
             m,m_scales = nx.linear_quantize(m)
-            v,v_scales = nx.log_quantize(v, epsilon)
+            v,v_scales = nx.log_quantize(v, 1e-24)
         return params, m, v, m_scales, v_scales
 
     def to_dict(self) -> dict[Any, Any]:

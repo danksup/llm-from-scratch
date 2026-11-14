@@ -77,6 +77,7 @@ logs:
 - yarn (rope) nov 8 2026
 
 ## Ongoing:
+- muon
 - fix optimizer states saving to safetensors
 - ram usage optimization
 - optimizing/cleanup/docs
@@ -86,7 +87,6 @@ logs:
   
 #### Maybe:
 - fill in the middle transformer
-- muon
 - multimodal (or maybe bimodal image-in -> text first)
 - LoRA
 - GaLoRA

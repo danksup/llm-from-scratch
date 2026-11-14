@@ -707,24 +707,24 @@ def linear_dequantize(w,/,scales, dtype:Any=float32):
     q_float = w.astype(dtype)
     return q_float  * scales
 
-def log_quantize(v, epsilon):
-    floor_epsilon = epsilon ** 2
+def log_quantize(v, floor_epsilon=1e-24):
+    floor_epsilon = floor_epsilon#epsilon ** 2
     v_save = maximum(v, floor_epsilon)
     y = log(v_save,float32)
     ymin = log(floor_epsilon)
-    ymax = max(y)
+    ymax = _nx.max(y, axis=-1,keepdims=True)
 
-    scale = (ymax - ymin)/255
+    scale = maximum((ymax - ymin)/255, 1e-9)
     q = _nx.round((y-ymin)/scale)
     q = _nx.clip(q, 0, 255).astype(uint8)
 
     return q,scale
 
-def log_dequantize(q,scale, epsilon, dtype:Any=float32):
+def log_dequantize(q,scale, floor_epsilon=1e-24, dtype:Any=float32):
     v = q.astype(dtype)
-    ymin  = log(epsilon ** 2)
+    ymin  = log(floor_epsilon)
     rec = v * scale + ymin
-    vreq = where(q == 0, 0.0, exp(rec))
+    vreq = where(q <= 0, 0.0, exp(rec))
     return vreq
 
 set_seed(seed)

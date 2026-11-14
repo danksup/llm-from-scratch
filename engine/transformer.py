@@ -509,11 +509,13 @@ class Transformer:
                     block_i = w_name.split(".")[0]
                     try:
                         block_i = int(block_i)
-                        failures[block_i].append(w_name)
+                        if not is_w_finite:
+                            failures[block_i].append(w_name)
                         if not is_d_finite:
                             failures[block_i].append(dw_name)
                     except ValueError:
-                        failures["-"].append(w_name)
+                        if not is_w_finite:
+                            failures["-"].append(w_name)
                         if not is_d_finite:
                             failures["-"].append(dw_name)
 
@@ -653,8 +655,9 @@ class Transformer:
                                 dw_ = getattr(obj, dw).astype(nx.float32) / self.gradient_scale / microbatch_size * gscale
 
                             decay = True
+                            use_muon = True
                             if w in ["lookup_table", "gamma", "router"]:
-                                decay = False
+                                decay = use_muon = False
 
                             exc = ["router", "gamma"]
 
@@ -662,7 +665,7 @@ class Transformer:
                                 quants = obj.get_quants(name=w) #type:ignore
                                 w_ = nx.dequantize(w_, scales=quants[0], biases=quants[1])
 
-                            new_param = optimizer.step((full_w_name, w_.astype(nx.float32), dw_, decay)) #type:ignore
+                            new_param = optimizer.step((full_w_name, w_.astype(nx.float32), dw_, decay, use_muon)) #type:ignore
 
                             if self.quantized and w not in exc:
                                 new_param, new_scale, new_bias = nx.quantize(new_param)
@@ -685,14 +688,15 @@ class Transformer:
                                 dw_ = getattr(obj, dw).astype(nx.float32) / self.gradient_scale / microbatch_size * gscale
 
                             decay = True
+                            use_muon = True
                             if w in ["lookup_table", "gamma", "router"]:
-                                decay = False
+                                decay = use_muon = False
 
                             if self.quantized and w not in ["gamma", "router"]:
                                 quants = obj.get_quants(name=w) #type:ignore
                                 w_ = nx.dequantize(w_, scales=quants[0], biases=quants[1])
 
-                            all_network_params.append((full_w_name, w_.astype(nx.float32), dw_, decay)) #type:ignore
+                            all_network_params.append((full_w_name, w_.astype(nx.float32), dw_, decay, use_muon)) #type:ignore
 
                     optimized = optimizer.step_many(all_network_params)
                     del all_network_params
@@ -794,10 +798,8 @@ class Transformer:
             output = ff_out
 
         rmsfinal_out, _ = self.rmsnorm_final._forward(output, self.rmsnorm_final.gamma, self.rmsnorm_final.epsilon)
-        if self.quantized:
-            scores = nx.quantized_matmul(rmsfinal_out, self.embedding.lookup_table, self.embedding.table_scale, self.embedding.bias, transpose=True) #type:ignore
-        else:
-            scores = rmsfinal_out @ self.embedding.lookup_table.T
+
+        scores = nx.mul(rmsfinal_out, self.embedding.lookup_table, self.embedding.table_scale, self.embedding.bias, transpose=True)
 
         return scores, all_caches, output
 

@@ -550,8 +550,8 @@ class Transformer:
             clean_step = 0
             self.gradient_scale = max(nx.array(1, nx.int32), self.gradient_scale//2)
 
-            for block in self.blocks:
-                block.zeroes_gradient()
+            self.zeroes_gradient()
+
 
         for contexts, next_tokens in dataloader.stream_batches(dataloader.train_files):
             B = dataloader.batch_size

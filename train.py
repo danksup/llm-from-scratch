@@ -9,7 +9,8 @@ from engine.sessions import Session
 from engine.tokenizer import Tokenizer
 from engine.transformer import Transformer
 
-nx.set_seed(12345)
+SEED = 42
+nx.set_seed(SEED)
 
 EPOCHS = 1
 EMBED_DIM = 1536
@@ -104,6 +105,7 @@ if __name__ == "__main__":
     session_configs["block_size"] = len(transformer.blocks)
 
     dataloader = DataLoader(CORPUS_PATH, tokenizer1, session_configs["context_size"], session_configs["batch_size"], session_configs["train_split"])
+    dataloader.set_seed(SEED)
 
     session1 = Session(transformer, tokenizer1, True, session_configs)
     start = time.perf_counter()

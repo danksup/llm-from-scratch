@@ -20,34 +20,36 @@ class Logger:
         self.filepath = base_dir / f"log_{filename}.log"
 
     def warn(self, msg,log_msg=None, category=None):
+        if category is None or not issubclass(category, Warning):
+            category = Warning
         if not self.disabled:
-            if category is None or not issubclass(category, Warning):
-                category = Warning
             self.log(msg, 'warn', log_msg=log_msg, category=category)
-            warnings.warn(msg, category=category)
+        warnings.warn(msg, category=category)
 
     def error(self, msg,log_msg=None, category=None):
-        if not self.disabled:
-            if category is None:
-                category = RuntimeError(msg)
+        if category is None:
+            category = RuntimeError(msg)
 
-            cat_class = category
-            if isinstance(category, BaseException):
-                cat_class = category.__class__
+        cat_class = category
+        if isinstance(category, BaseException):
+            cat_class = category.__class__
+            if not self.disabled:
                 self.log(msg, 'raise', log_msg=log_msg, category=cat_class)
-                raise category
-            else:
-                if isinstance(category, type) and issubclass(category, BaseException):
+            raise category
+        else:
+            if isinstance(category, type) and issubclass(category, BaseException):
+                if not self.disabled:
                     self.log(msg, 'raise', log_msg=log_msg, category=category)
-                    raise category(msg)
-                else:
+                raise category(msg)
+            else:
+                if not self.disabled:
                     self.log(msg, 'raise', log_msg=log_msg, category=RuntimeError)
-                    raise RuntimeError(msg)
-        
+                raise RuntimeError(msg)
+
     def info(self, msg,log_msg=None, print_msg:bool=False):
+        if print_msg:
+            print(msg)
         if not self.disabled:
-            if print_msg:
-                print(msg)
             self.log(msg, 'info', log_msg=log_msg)
 
     def log(self, msg, action:Literal['info', 'warn', 'raise']="info", category=None, log_msg=None):

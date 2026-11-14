@@ -6,7 +6,6 @@ from helper.validate_and_raise import validate_match
 import uuid
 import array
 import random
-
 typecode = {
     "I":4,
     "H":2
@@ -31,6 +30,10 @@ class DataLoader:
         else:
             self.type_code = 'I'
         pass
+
+    @staticmethod
+    def set_seed(seed):
+        random.seed(seed)
 
     @staticmethod
     def get_files(filepath:str|Path="data"):

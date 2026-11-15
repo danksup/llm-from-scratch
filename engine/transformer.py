@@ -270,7 +270,7 @@ class Transformer:
                 attn_params = block.attention.Wqkv, block.attention.Wo, block.attention.Q_norm.gamma, block.attention.K_norm.gamma
                 ff_params = block.ff.router, block.ff.Wcombined, block.ff.Wout, block.ff.W_dense_combined, block.ff.W_dense_out, block.ff.router_bias
                 quants = (block.attention.scales + block.attention.biases, block.ff.scales + block.ff.biases)
-                ff_out ,masks, caches, z_loss, normalized_histogram = block._forward(output, block.causal_mask,doc_id, attn_str ,block.attention.configs, attn_params, block.ff.configs, ff_params, epsilon, gamma1, gamma2, P, is_training, quants, recompute_activation=self.recompute_activation)
+                ff_out ,masks, caches, z_loss, normalized_histogram = block._forward(output, block.causal_mask,doc_id, attn_str ,block.attention.configs, attn_params, block.ff.configs, ff_params, epsilon, gamma1, gamma2, P, is_training, quants, dtype=nx.dtype_to_srt[self.dtype], recompute_activation=self.recompute_activation)
                 total_z_loss += z_loss
                 output = ff_out
                 all_masks.append(masks)
@@ -285,7 +285,7 @@ class Transformer:
                 print(f"[block {idx}] ValueError")
                 raise ValueError(e)
 
-        last_output = output#.astype(self.dtype)
+        last_output = output
         rmsnorm_out, rms_cache = self.rmsnorm_final._forward(last_output, self.rmsnorm_final.gamma,self.rmsnorm_final.epsilon)
 
         all_caches += rms_cache,
@@ -300,7 +300,7 @@ class Transformer:
             current_grad[:,:-1] += total_dh
         self.rmsnorm_final.d_gamma = rmsnorm_final_d_gamma if getattr(self.rmsnorm_final, "d_gamma", None) is None else self.rmsnorm_final.d_gamma + rmsnorm_final_d_gamma
         for block, masks,caches in zip(self.blocks[::-1], all_masks[::-1],all_caches[::-1]):
-            current_grad = current_grad#.astype(self.dtype)
+            # current_grad = current_grad#.astype(self.dtype)
             _,T,_ = current_grad.shape
             caches_attn, caches_ff, caches_rmsnorm1, caches_rmsnorm2 = caches
             mask1, mask2 = masks
@@ -315,7 +315,7 @@ class Transformer:
 
             dx, dWout, dWcombined, d_router,dW_dense_combined, dW_dense_out, dWqkv,dWo, d_gamma1, d_gamma2, Q_norm_d_gamma, K_norm_d_gamma = block._backward(current_grad, mask1=mask1, mask2=mask2, p=P, attention=attn_str,
                                                                 caches_attn=caches_attn, caches_ff=caches_ff, caches_rmsnorm1=caches_rmsnorm1, caches_rmsnorm2=caches_rmsnorm2,
-                                                                attn_configs = attn_configs, attn_params=attn_params, gamma1=block.rmsnorm1.gamma, gamma2=block.rmsnorm2.gamma, ff_params=ff_params, ff_configs=ff_configs, gradient_scale=self.gradient_scale, quantization=scales, recompute_activation=self.recompute_activation)
+                                                                attn_configs = attn_configs, attn_params=attn_params, gamma1=block.rmsnorm1.gamma, gamma2=block.rmsnorm2.gamma, ff_params=ff_params, ff_configs=ff_configs, gradient_scale=self.gradient_scale, quantization=scales, dtype=nx.dtype_to_srt[self.dtype], recompute_activation=self.recompute_activation)
             if block.ff.n_experts > 0:
                 block.ff.dWout += dWout
                 block.ff.dWcombined += dWcombined
@@ -345,7 +345,7 @@ class Transformer:
             attn_type = mtp.transformer_block.attention.self_type()
             self.compute_mask(attn_type, mtp.transformer_block, T)
             params, configs, quants, causal_mask, epsilon = mtp.get_things()
-            rmsnorm2_out, caches = MTPBlock.forward(output, next_tokens, params, configs, attn_type, causal_mask, doc_id, epsilon, quants, is_training=is_training, recompute_activation=self.recompute_activation)
+            rmsnorm2_out, caches = MTPBlock.forward(output, next_tokens, params, configs, attn_type, causal_mask, doc_id, epsilon, quants, is_training=is_training, dtype=nx.dtype_to_srt[self.dtype], recompute_activation=self.recompute_activation)
             output = rmsnorm2_out
             all_caches.append(caches)
         return output, all_caches
@@ -356,7 +356,7 @@ class Transformer:
         for mtp,caches in zip(self.mtp_blocks[::-1], all_caches[::-1]):
             attn_type = mtp.transformer_block.attention.self_type()
             params, configs, quants, causal_mask, epsilon = mtp.get_things()
-            dh, de, dWproj, d_gamma1, d_gamma2, tblock_grads = MTPBlock.backward(dh, caches, params, configs, attn_type, self.gradient_scale, quants, recompute_activation=self.recompute_activation)
+            dh, de, dWproj, d_gamma1, d_gamma2, tblock_grads = MTPBlock.backward(dh, caches, params, configs, attn_type, self.gradient_scale, quants, dtype=nx.dtype_to_srt[self.dtype], recompute_activation=self.recompute_activation)
             mtp.set_gradient(dwproj = dWproj, d_gamma1=d_gamma1, d_gamma2=d_gamma2, **tblock_grads)
 
         return dh,de
@@ -580,7 +580,7 @@ class Transformer:
                     total_dh = dh
                 else:
                     total_dh += dh
-                self.embedding.d_lookup_table = nx.add_at(self.embedding.d_lookup_table, next_tokens[:, :-1], de/self.gradient_scale)
+                self.embedding.d_lookup_table = nx.add_at(self.embedding.d_lookup_table, next_tokens[:, :-1], de.astype(nx.float32) / self.gradient_scale) #type:ignore
                 self.embedding.d_lookup_table += mtp_d_table * self.mtp_lambda
 
             if total_histograms is None:
@@ -664,9 +664,10 @@ class Transformer:
                             new_param = optimizer.step((full_w_name, w_.astype(nx.float32), dw_, decay, use_muon)) #type:ignore
 
                             if self.quantized and w not in exc:
-                                new_param, new_scale, new_bias = nx.quantize(new_param)
+                                new_param = new_param.astype(self.dtype)
+                                q, new_scale, new_bias = nx.quantize(new_param)
                                 obj.set_quants(scale=new_scale, bias=new_bias, name=w) #type:ignore
-                                setattr(obj, w, new_param)
+                                setattr(obj, w, q)
                             else:
                                 if w in exc:
                                     setattr(obj, w, new_param.astype(nx.float32))
@@ -703,9 +704,10 @@ class Transformer:
 
                             exc = ["router", "gamma"]
                             if self.quantized and w not in exc:
-                                new_param, new_scale, new_bias = nx.quantize(new_param)
+                                new_param = new_param.astype(self.dtype)
+                                q, new_scale, new_bias = nx.quantize(new_param)
                                 obj.set_quants(scale=new_scale, bias=new_bias, name=w) #type:ignore
-                                setattr(obj, w, new_param)
+                                setattr(obj, w, q)
                             else:
                                 if w in exc:
                                     setattr(obj, w, new_param.astype(nx.float32))
@@ -789,7 +791,7 @@ class Transformer:
         output = self.embedding.forward(context)
         for idx, block in enumerate(self.blocks):
             cached_k, cached_v = all_caches[idx]
-            ff_out, cache_k, cache_v = block.inference_forward(output,max_cache_len, cached_k, cached_v, position)
+            ff_out, cache_k, cache_v = block.inference_forward(output,max_cache_len, cached_k, cached_v, position, dtype=self.dtype)
             all_caches[idx] = (cache_k, cache_v)
             output = ff_out
 

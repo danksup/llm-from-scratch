@@ -133,6 +133,8 @@ class AttentionChunked:
         K, K_norm_caches = RMSNorm._forward(K, K_norm_gamma, 1e-5)
 
         Q = rope_forward(Q, freqs, freq_multiplier=theta, s=s, ori_T=ori_T, alpha=alpha, beta=beta)
+        Q = Q.astype(x.dtype)
+
         K = rope_forward(K, freqs, freq_multiplier=theta, s=s, ori_T=ori_T, alpha=alpha, beta=beta)
 
         remainder = (chunk_size - (T % chunk_size)) % chunk_size
@@ -156,7 +158,6 @@ class AttentionChunked:
         preprendix = nx.concatenate([front,V[:,:,:-1,:,:]], axis=2)
         V_chunked = nx.concatenate([preprendix, V], axis=3)  #(B, n_kv_heads, n_chunk, 2W, head_dim)
 
-        Q = Q.astype(x.dtype)
         K_chunked = K_chunked.astype(x.dtype)
         V_chunked = V_chunked.astype(x.dtype)
 
@@ -271,7 +272,7 @@ class AttentionChunked:
         dV = dV_r.reshape(B, n_kv_heads, -1, head_dim)[:, :, :T, :] #B, n_kv_heads, T, Dh
         dV = dV.transpose(0,2,1,3).reshape(B,T, head_dim*n_kv_heads)#B, T, D
 
-        dQKV = nx.concatenate([dQ, dK,dV], axis=-1) #(B,T, D + 2 * (n_kv_heads * Dh))
+        dQKV = nx.concatenate([dQ, dK,dV], axis=-1).astype(x.dtype) #(B,T, D + 2 * (n_kv_heads * Dh))
         DQKV = dQKV.reshape(-1, embed_dim + 2 * (n_kv_heads * head_dim))
 
         X = x.reshape(-1, embed_dim)
@@ -298,6 +299,7 @@ class AttentionChunked:
         K = K.reshape(B, T, self.n_kv_heads, self.head_dim).transpose(0,2,1,3)
         K, _ = RMSNorm._forward(K, self.K_norm.gamma, self.K_norm.epsilon)
         K = rope_forward(K, freqs, position, freq_multiplier=self.theta, s=self.s, ori_T=self.ori_T, alpha=self.alpha, beta=self.beta)
+        K = K.astype(self.dtype)
 
         end = position + T
 
@@ -324,6 +326,7 @@ class AttentionChunked:
         Q = Q.reshape(B, T, self.n_heads, self.head_dim).transpose(0,2,1,3)
         Q, _ = RMSNorm._forward(Q, self.Q_norm.gamma, self.Q_norm.epsilon)
         Q = rope_forward(Q, freqs, position, freq_multiplier=self.theta, s=self.s, ori_T=self.ori_T, alpha=self.alpha, beta=self.beta)
+        Q = Q.astype(self.dtype)
 
         repeats_cached_k = nx.repeat(active_K, self.n_rep, axis=1 )
         repeats_cached_v = nx.repeat(active_V, self.n_rep, axis=1 )

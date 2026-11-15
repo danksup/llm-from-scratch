@@ -1,3 +1,7 @@
+# Portions of this file (zeropower_via_newtonschulz5) are adapted from Muon:
+# Copyright (c) 2024 Keller Jordan
+# See the root LICENSE file for details.
+
 from .sgd import SGD
 from .adamw import AdamW
 from .rmsprop import RMSProp
@@ -63,6 +67,7 @@ class Muon:
         """
         adapted from the Muon optimizer by Keller Jordan et al. (2024)
         https://kellerjordan.github.io/posts/muon/
+        https://github.com/KellerJordan/Muon
         """
         assert G.ndim >= 2
         X = G.astype(nx.float32)

@@ -25,7 +25,7 @@ class MTPBlock:
         else:
             self.Wproj = nx.empty(projection_shape)
 
-        self.dWproj = nx.zeros(projection_shape, dtype=dtype)
+        self.dWproj = nx.zeros(projection_shape)
 
     def zeroes_gradient(self):
         self.dWproj = nx.zeros_like(self.dWproj)
@@ -52,11 +52,12 @@ class MTPBlock:
 
     # @nx.compile
     @staticmethod
-    def forward(h, next_token_embed, params, configs, attention, causal_mask, doc_id, epsilon,quantization, *, is_training=True, recompute_activation=True):
+    def forward(h, next_token_embed, params, configs, attention, causal_mask, doc_id, epsilon,quantization,dtype="float16", *, is_training=True, recompute_activation=True):
         wproj, gamma1, gamma2, attn_params,ffn_params, block_gamma1, block_gamma2, P = params
         wproj_scale, wproj_bias, tblock_quants = quantization
         attn_configs, ff_configs = configs
         z = nx.concatenate([h, next_token_embed], axis=-1) #B,T,2D
+        z = z.astype(nx.str_to_dtype[dtype])
 
         if wproj_scale is not None:
             projected = nx.quantized_matmul(z, wproj, wproj_scale, wproj_bias)
@@ -64,20 +65,22 @@ class MTPBlock:
             projected = z @ wproj #B,T,D
 
         rmsnorm1_out, rmsnorm1_cache = RMSNorm._forward(projected, gamma1, epsilon)
-        rmsnorm1_out = rmsnorm1_out.astype(h.dtype)
 
+        rmsnorm1_out = rmsnorm1_out.astype(nx.str_to_dtype[dtype])
         tblock_out, masks, caches, z_loss, normalized_histogram = TransformerBlock._forward(x=rmsnorm1_out, causal_mask=causal_mask,doc_id=doc_id, attn_configs=attn_configs, attn_params=attn_params, ff_configs=ff_configs, ff_params=ffn_params,
-                                                                                              attention=attention, epsilon=epsilon,gamma1=block_gamma1, gamma2=block_gamma2, p=P, is_training=is_training, quantization=tblock_quants, recompute_activation=recompute_activation)
+                                                                                              attention=attention, epsilon=epsilon,gamma1=block_gamma1, gamma2=block_gamma2, p=P, is_training=is_training, quantization=tblock_quants,dtype=dtype, recompute_activation=recompute_activation)
 
         rmsnorm2_out, rmsnorm2_cache = RMSNorm._forward(tblock_out, gamma2, epsilon)
 
         all_caches = (z, rmsnorm1_cache, rmsnorm2_cache, masks, caches, z_loss, normalized_histogram)
+
+        rmsnorm2_out = rmsnorm2_out.astype(nx.str_to_dtype[dtype])
         return rmsnorm2_out, all_caches
 
     # @nx.compile
     @staticmethod
-    def backward(gradient, all_caches, all_params,all_configs, attention, gradient_scale, quantization, *, recompute_activation=True):
-        z, rmsnorm1_cache, rmsnorm2_cache, masks, tblock_caches, z_loss, normalized_histogram = all_caches
+    def backward(gradient, all_caches, all_params,all_configs, attention, gradient_scale, quantization, dtype="float16", *, recompute_activation=True):
+        z, rmsnorm1_cache, rmsnorm2_cache, masks, tblock_caches, _, _ = all_caches
         tblock_caches_attn, tblock_caches_ff, tblock_caches_rmsnorm1, tblock_caches_rmsnorm2 = tblock_caches
 
         wproj, gamma1, gamma2, tblock_attn_params, tblock_ff_params, tblock_gamma1,tblock_gamma2, P = all_params
@@ -86,11 +89,13 @@ class MTPBlock:
         wproj_scale, wproj_bias,tblock_quants = quantization
 
         dx_rms2,d_gamma2 = RMSNorm._backward(gradient, rmsnorm2_cache, gamma2)
+
         dx, dWout, dWcombined, d_router,dW_dense_combined, dW_dense_out, dWqkv,dWo, tblock_d_gamma1, tblock_d_gamma2, Q_norm_d_gamma, K_norm_d_gamma= TransformerBlock._backward(dx_rms2, mask1, mask2,attention, P, tblock_caches_attn,tblock_caches_ff, tblock_caches_rmsnorm1, tblock_caches_rmsnorm2,
                                    attn_configs=attn_configs,attn_params=tblock_attn_params, ff_configs=ff_configs, gradient_scale=gradient_scale,
-                                   ff_params=tblock_ff_params,gamma1=tblock_gamma1,gamma2=tblock_gamma2, quantization=tblock_quants, recompute_activation=recompute_activation)
+                                   ff_params=tblock_ff_params,gamma1=tblock_gamma1,gamma2=tblock_gamma2, quantization=tblock_quants,dtype=dtype, recompute_activation=recompute_activation)
 
         dx_rms1, d_gamma1 = RMSNorm._backward(dx, rmsnorm1_cache, gamma1)
+        dx_rms1 = dx_rms1.astype(nx.str_to_dtype[dtype])
 
         D = gradient.shape[-1]
         flatten_z = z.reshape(-1, 2*D)
@@ -112,13 +117,12 @@ class MTPBlock:
     def inference_forward(self, h, next_token_embed, max_cache_len, cached_k, cached_v, position):
         z = nx.concatenate([h, next_token_embed], axis=-1) #B,T,2D
         projected = nx.mul(z, self.Wproj, scales= self.scale, biases=self.bias)
-        projected = projected.astype(nx.float32) #type:ignore
         rms1_out, _ = self.rmsnorm1._forward(projected, self.rmsnorm1.gamma, self.rmsnorm1.epsilon)
         rms1_out = rms1_out.astype(self.dtype)
-        tblock_out, cached_k, cached_v= self.transformer_block.inference_forward(rms1_out, max_cache_len, cached_k, cached_v, position)
-        tblock_out = tblock_out.astype(nx.float32)
+        tblock_out, cached_k, cached_v= self.transformer_block.inference_forward(rms1_out, max_cache_len, cached_k, cached_v, position, self.dtype)
         rms2_out,_ = self.rmsnorm2._forward(tblock_out, self.rmsnorm2.gamma, self.rmsnorm2.epsilon)
 
+        rms2_out = rms2_out.astype(self.dtype)
         return rms2_out, cached_k, cached_v
 
     def quantize(self):

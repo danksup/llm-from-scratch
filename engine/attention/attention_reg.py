@@ -137,7 +137,8 @@ class AttentionFull:
         Q = rope_forward(Q, freqs, freq_multiplier=theta, s=s, ori_T=ori_T, alpha=alpha, beta=beta)
         K = rope_forward(K, freqs, freq_multiplier=theta, s=s, ori_T=ori_T, alpha=alpha, beta=beta)
 
-        Q = Q.reshape(B,n_kv_heads, n_rep, T, head_dim)
+        Q = Q.reshape(B,n_kv_heads, n_rep, T, head_dim).astype(x.dtype)
+        K = K.astype(x.dtype)
 
         if doc_id is not None:
             combined_mask = causal_mask | (doc_id[:,None,None,:] != doc_id[:,None,:,None])
@@ -212,7 +213,7 @@ class AttentionFull:
         dK = dK.transpose(0, 2, 1, 3).reshape(B, T, n_kv_heads * head_dim)
         dV = dV.transpose(0, 2, 1, 3).reshape(B, T,  n_kv_heads * head_dim)
 
-        dQKV = nx.concatenate([dQ, dK,dV], axis=-1)
+        dQKV = nx.concatenate([dQ, dK,dV], axis=-1).astype(x.dtype)
         DQKV = dQKV.reshape(-1, embed_dim + 2 * (n_kv_heads * head_dim))
 
         del dQ, dK, dV
@@ -246,6 +247,7 @@ class AttentionFull:
         K = K.reshape(B, T, self.n_kv_heads, self.head_dim).transpose(0,2,1,3)
         K, _ = RMSNorm._forward(K, self.K_norm.gamma, self.K_norm.epsilon)
         K = rope_forward(K, freqs, position, freq_multiplier=self.theta, s=self.s, ori_T=self.ori_T, alpha=self.alpha, beta=self.beta)
+        K = K.astype(self.dtype)
 
         end = position + T
 
@@ -272,6 +274,7 @@ class AttentionFull:
         Q = Q.reshape(B, T, self.n_heads, self.head_dim).transpose(0,2,1,3)
         Q, _ = RMSNorm._forward(Q, self.Q_norm.gamma, self.Q_norm.epsilon)
         Q = rope_forward(Q, freqs, position, freq_multiplier=self.theta, s=self.s, ori_T=self.ori_T, alpha=self.alpha, beta=self.beta)
+        Q = Q.astype(self.dtype)
 
         repeats_cached_k = nx.repeat(active_K, self.n_rep, axis=1 )
         repeats_cached_v = nx.repeat(active_V, self.n_rep, axis=1 )

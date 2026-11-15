@@ -20,8 +20,9 @@ def precompute_freqs(head_dim, arg1:int|nx.ArrayLike=32768, freq_multiplier=1000
 def rope_forward(x, angles, position=0, freq_multiplier=10000, s=1.0, ori_T=None, alpha=1.0, beta=32.0):
     T = x.shape[2]
     if s > 1.0:
-        m_scale = 0.1 * nx.log(s) + 1.0
-        x = x * m_scale
+        m_scale = 0.1 * nx.log(s, nx.float32) + 1.0
+        x_ = x * m_scale
+        x = x_.astype(x.dtype)
     else:
         s = 1.0
 
@@ -31,8 +32,11 @@ def rope_forward(x, angles, position=0, freq_multiplier=10000, s=1.0, ori_T=None
     else:
         current_angles = angles[position:position+T]
 
-    sin = nx.sin(current_angles, dtype=x.dtype)
-    cos = nx.cos(current_angles, dtype=x.dtype)
+    sin = nx.sin(current_angles, dtype=nx.float32)
+    cos = nx.cos(current_angles, dtype=nx.float32)
+    sin = sin.astype(x.dtype)
+    cos = cos.astype(x.dtype)
+
     x1 = x[..., ::2]
     x2 = x[..., 1::2]
 
@@ -45,8 +49,9 @@ def rope_forward(x, angles, position=0, freq_multiplier=10000, s=1.0, ori_T=None
 def rope_inverse(x,angles, freq_multiplier=10000, s=1.0, ori_T=None, alpha=1.0, beta=32.0):
     T = x.shape[2]
     if s > 1.0:
-        m_scale = 0.1 * nx.log(s) + 1.0
-        x = x * m_scale
+        m_scale = 0.1 * nx.log(s, nx.float32) + 1.0
+        x_ = x * m_scale
+        x = x_.astype(x.dtype)
     else:
         s = 1.0
 
@@ -56,8 +61,10 @@ def rope_inverse(x,angles, freq_multiplier=10000, s=1.0, ori_T=None, alpha=1.0, 
     else:
         current_angles = angles[:T,:]
 
-    sin = nx.sin(current_angles, dtype=x.dtype)
-    cos = nx.cos(current_angles, dtype=x.dtype)
+    sin = nx.sin(current_angles, dtype=nx.float32)
+    cos = nx.cos(current_angles, dtype=nx.float32)
+    sin = sin.astype(x.dtype)
+    cos = cos.astype(x.dtype)
 
     x1 = x[..., ::2]
     x2 = x[..., 1::2]

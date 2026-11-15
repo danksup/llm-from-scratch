@@ -56,10 +56,10 @@ class TransformerBlock:
 
     @staticmethod
     @nx.compile
-    def _forward(x, causal_mask:Any,doc_id, attention:str, attn_configs:tuple[Any,...], attn_params:tuple[Any,...], ff_configs, ff_params, epsilon:float, gamma1:Any, gamma2:Any, p:float, is_training:bool, quantization:tuple[Any,...]|None=None, *, recompute_activation:bool=True) -> tuple[Any, Any, Any, Any, Any]:
+    def _forward(x, causal_mask:Any,doc_id, attention:str, attn_configs:tuple[Any,...], attn_params:tuple[Any,...], ff_configs, ff_params, epsilon:float, gamma1:Any, gamma2:Any, p:float, is_training:bool, quantization:tuple[Any,...]|None=None, dtype="float16", *, recompute_activation:bool=True) -> tuple[Any, Any, Any, Any, Any]:
         rmsnorm1_out, caches_rmsnorm1 = RMSNorm._forward(x, gamma1,epsilon)
 
-        rmsnorm1_out = rmsnorm1_out.astype(x.dtype)
+        rmsnorm1_out = rmsnorm1_out.astype(nx.str_to_dtype[dtype])
 
         attn_out, caches_attn = ATTN_TYPE[attention]._forward(rmsnorm1_out, causal_mask,doc_id, attn_configs, attn_params, quantization[0], recompute_activation=recompute_activation) #type:ignore
         drop_attn_out, mask1 = Dropout._forward(attn_out, p, is_training)
@@ -68,7 +68,7 @@ class TransformerBlock:
 
         rmsnorm2_out, caches_rmsnorm2 = RMSNorm._forward(attn_out, gamma2,epsilon)
 
-        rmsnorm2_out = rmsnorm2_out.astype(x.dtype)
+        rmsnorm2_out = rmsnorm2_out.astype(nx.str_to_dtype[dtype])
         ff_out, caches_ff, z_loss, normalized_histogram = FFN.forward(rmsnorm2_out, ff_configs, ff_params, quantization[1], recompute_activation=recompute_activation, is_training=is_training) #type:ignore
         drop_ff_out, mask2 =  Dropout._forward(ff_out, p, is_training)
 
@@ -80,40 +80,38 @@ class TransformerBlock:
 
     @staticmethod
     @nx.compile
-    def _backward(gradient:Any, mask1:Any, mask2:Any, attention:str, p, caches_attn:tuple[Any,...], caches_ff:tuple[Any,...], caches_rmsnorm1:tuple[Any,...], caches_rmsnorm2:tuple[Any,...], attn_configs:tuple[Any,...], attn_params:tuple[Any,...], gamma1:Any, gamma2:Any, ff_params:tuple, ff_configs, gradient_scale, quantization:tuple[Any,...]|None=None, *, recompute_activation:bool=True) -> tuple[Any, Any, Any, Any, Any, Any, Any, Any,Any, Any, Any, Any]:
-        d_ff_drop = Dropout._backward(gradient, mask2, p) #grad dtype
-
+    def _backward(gradient:Any, mask1:Any, mask2:Any, attention:str, p, caches_attn:tuple[Any,...], caches_ff:tuple[Any,...], caches_rmsnorm1:tuple[Any,...], caches_rmsnorm2:tuple[Any,...], attn_configs:tuple[Any,...], attn_params:tuple[Any,...], gamma1:Any, gamma2:Any, ff_params:tuple, ff_configs, gradient_scale, quantization:tuple[Any,...]|None=None, dtype="float16", *, recompute_activation:bool=True) -> tuple[Any, Any, Any, Any, Any, Any, Any, Any,Any, Any, Any, Any]:
+        grad = gradient.astype(nx.str_to_dtype[dtype])
+        d_ff_drop = Dropout._backward(grad, mask2, p) #grad dtype
         dx_ff, dWcombined, dWout, d_router, dW_dense_combined, dW_dense_out = FFN.backward(d_ff_drop, caches_ff, ff_configs, ff_params,gradient_scale, quantization[1], recompute_activation=recompute_activation) #out:fp32 #type:ignore
 
         d_rmsn2,d_gamma2 = RMSNorm._backward(dx_ff, caches_rmsnorm2 ,gamma2)
 
-        d_attn_out = gradient + d_rmsn2
+        d_attn_out = gradient.astype(nx.float32) + d_rmsn2
 
-        d_attn_out = d_attn_out.astype(gradient.dtype)
-        d_attn_drop = Dropout._backward(d_attn_out, mask1, p)
-
+        d_attn_out_ = d_attn_out.astype(nx.str_to_dtype[dtype])
+        d_attn_drop = Dropout._backward(d_attn_out_, mask1, p)
         d_attn, dWqkv, dWo, Q_norm_d_gamma, K_norm_d_gamma = ATTN_TYPE[attention]._backward(d_attn_drop, caches_attn, attn_configs, attn_params, quantization[0], recompute_activation=recompute_activation) #type:ignore
 
-        d_attn = d_attn.astype(nx.float32)
         d_rmsn1, d_gamma1 = RMSNorm._backward(d_attn,caches_rmsnorm1,gamma1)
 
-        dx = d_rmsn1 + d_attn_out
-
+        dx = d_rmsn1 + d_attn_out.astype(nx.float32)
+        # dx = dx.astype(nx.str_to_dtype[dtype])
         return dx, dWout, dWcombined, d_router,dW_dense_combined, dW_dense_out, dWqkv,dWo, d_gamma1, d_gamma2, Q_norm_d_gamma, K_norm_d_gamma
 
     #TODO:compiled, dtype consistency fix/check
-    def inference_forward(self, x, max_cache_len, cached_k=None, cached_v=None,  position=0):
+    def inference_forward(self, x, max_cache_len, cached_k=None, cached_v=None,  position=0, dtype=nx.float16):
         rmsnorm1_out, _ = RMSNorm._forward(x, self.rmsnorm1.gamma, self.rmsnorm1.epsilon)
-        rmsnorm1_out = rmsnorm1_out.astype(x.dtype)
 
         attn_quant_params = self.attention.scales + self.attention.biases
+        rmsnorm1_out = rmsnorm1_out.astype(dtype)
         attn_out, cached_k, cached_v = self.attention.inference_forward(x=rmsnorm1_out, max_cache_len=max_cache_len,freqs= self.attention.freqs, quantization=attn_quant_params, cached_k=cached_k, cached_v= cached_v, position=position)
         attn_out = attn_out + x
 
         rmsnorm2_out, _ = RMSNorm._forward(attn_out, self.rmsnorm2.gamma, self.rmsnorm2.epsilon)
-        rmsnorm2_out = rmsnorm2_out.astype(x.dtype)
 
         ff_quant_params = self.ff.scales + self.ff.biases
+        rmsnorm2_out = rmsnorm2_out.astype(dtype)
         ff_out= FFN.inference_forward(rmsnorm2_out, self.ff.configs, (self.ff.Wcombined, self.ff.Wout, self.ff.router, self.ff.W_dense_combined, self.ff.W_dense_out, self.ff.router_bias ), ff_quant_params)
         ff_out = ff_out + attn_out
 

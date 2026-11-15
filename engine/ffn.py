@@ -109,7 +109,7 @@ class FFN:
 
     def zeroes_gradient(self):
         if self.n_experts > 0:
-            self.dWcombined = nx.zeros_like(self.dWcombined)
+            self.dWcombined = nx.zeros_like(self.dWcombined,)
             self.dWout = nx.zeros_like(self.dWout)
             self.d_router = nx.zeros_like(self.d_router, dtype=nx.float32)
 
@@ -209,7 +209,7 @@ class FFN:
         wcombined_scale, wout_scale, dense_combined_scale, dense_out_scale, wcombined_bias, wout_bias, dense_combined_bias,  dense_out_bias = quantization  #type:ignore
         flatten_x = x.reshape(-1, D)
 
-        final_output = nx.zeros((B,T,D), dtype=x.dtype)
+        final_output = nx.zeros((B,T,D), dtype=nx.float32)
 
         if n_experts > 0:
             top_k = min(top_k, n_experts)
@@ -296,7 +296,7 @@ class FFN:
 
             dense_output = raw_dense_output.reshape(B,T,D)
 
-            final_output += dense_output
+            final_output += dense_output.astype(nx.float32)
 
             if recompute_activation:
                 dense_cache = (None, None)
@@ -306,6 +306,7 @@ class FFN:
             dense_cache = (None, None)
 
         cache = (flatten_x,) + moe_cache + dense_cache
+        final_output = final_output.astype(x.dtype)
         return final_output, cache, z_loss, normalized_histogram
 
     @staticmethod
@@ -323,7 +324,7 @@ class FFN:
 
         flatten_x, router_prob, top_expert_indices, top_gates32, flatten_top_expert_indices, assignement_tokens, valid, safe_slot, expert_input, expert_gate, projected, hidden, raw_output, normalized_histogram, scores, dense_projected, dense_hidden = caches
 
-        dx_flat = nx.zeros((N,D), dtype=gradient.dtype)
+        dx_flat = nx.zeros((N,D), dtype=nx.float32)
 
         if n_dense > 0:
             if recompute_activation:
@@ -439,7 +440,7 @@ class FFN:
         else:
             ret_moe = (None, None, None)
 
-        dx = dx_flat.reshape(B,T,D)
+        dx = dx_flat.reshape(B,T,D).astype(gradient.dtype)
 
         del dx_flat, top_expert_indices, valid, safe_slot
 
@@ -458,7 +459,7 @@ class FFN:
         wcombined_scale, wout_scale,dense_expert_scale,dense_expert_out_scale, wcombined_bias, wout_bias, dense_expert_bias,  dense_expert_out_bias = quantization  #type:ignore
 
         flatten_x = x.reshape(-1, D)
-        final_output = nx.zeros((B,T,D), dtype=x.dtype )
+        final_output = nx.zeros((B,T,D), dtype=nx.float32 )
 
         if n_experts > 0:
 
@@ -546,8 +547,9 @@ class FFN:
 
             dense_output = raw_dense_output.reshape(B,T,D)
 
-            final_output += dense_output.astype(x.dtype)
+            final_output += dense_output.astype(nx.float32)
 
+        final_output = final_output.astype(x.dtype)
         return final_output
 
     def copy(self):
@@ -559,15 +561,15 @@ class FFN:
             moe_copy.Wcombined = nx.copy(self.Wcombined)
             moe_copy.Wout = nx.copy(self.Wout)
             if self.quantized:
-                moe_copy.scales = (nx.copy(self.scales[0]), nx.copy(self.scales[1]), self.scales[2], self.scales[3])
-                moe_copy.biases = (nx.copy(self.biases[0]), nx.copy(self.biases[1]), self.biases[2], self.biases[3])
+                moe_copy.scales = (nx.copy(self.scales[0]), nx.copy(self.scales[1]), moe_copy.scales[2], moe_copy.scales[3])
+                moe_copy.biases = (nx.copy(self.biases[0]), nx.copy(self.biases[1]), moe_copy.biases[2], moe_copy.biases[3])
 
         if self.n_dense > 0:
             moe_copy.W_dense_combined = nx.copy(self.W_dense_combined)
             moe_copy.W_dense_out = nx.copy(self.W_dense_out)
             if self.quantized:
-                moe_copy.scales = (self.scales[0], self.scales[1], nx.copy(self.scales[2]), nx.copy(self.scales[3]))
-                moe_copy.biases = (self.biases[0], self.biases[1], nx.copy(self.biases[2]), nx.copy(self.biases[3]))
+                moe_copy.scales = (moe_copy.scales[0], moe_copy.scales[1], nx.copy(self.scales[2]), nx.copy(self.scales[3]))
+                moe_copy.biases = (moe_copy.biases[0], moe_copy.biases[1], nx.copy(self.biases[2]), nx.copy(self.biases[3]))
 
         return moe_copy
 

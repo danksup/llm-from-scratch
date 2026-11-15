@@ -17,18 +17,22 @@ if backend == "auto":
     try:
         import mlx.core as _nx # type: ignore
         backend = "MLX"
+        arr_type = _nx.array
         os.environ["BACKEND"] = "MLX"
     except ImportError:
         import numpy as _nx # type: ignore
         backend = "NumPy"
+        arr_type = _nx.ndarray
         os.environ["BACKEND"] = "NumPy"
 elif backend == "mlx":
     import mlx.core as _nx # type: ignore
     backend = "MLX"
+    arr_type = _nx.array
     os.environ["BACKEND"] = "MLX"
 else:
     import numpy as _nx # type: ignore
     backend = "NumPy"
+    arr_type = _nx.ndarray
     os.environ["BACKEND"] = "NumPy"
 
 if backend in ["MLX"]:
@@ -57,7 +61,6 @@ uint32 = _nx.uint32
 uint16 = _nx.uint16
 uint8 = _nx.uint8
 bool_ = _nx.bool_
-
 
 inf16 = _nx.array(float('inf'), dtype=_nx.float16)
 inf32 = _nx.array(float('inf'), dtype=_nx.float32)
@@ -143,10 +146,10 @@ def tolist(a):
     return a
 
 def array(a:Any, dtype=None) -> ArrayLike:
-    if hasattr(a, "dtype"):
+    if isinstance(a, arr_type):
         if dtype is not None:
             if a.dtype != dtype:
-                return _nx.array(a, dtype=dtype)
+                return a.astype(dtype)
             return a
         return a
     if dtype is not None:
@@ -209,11 +212,12 @@ def unique(a:ArrayLike,/, return_counts:bool=False ) -> Any:
     return unique_array
 
 def zeros_like(a:ArrayLike, dtype=None) -> ArrayLike:
+    to_dtype = a.dtype
     if dtype is not None and dtype != a.dtype:
-        a = a.astype(dtype)
+        to_dtype = dtype
     if backend == "MLX":
-        return _nx.zeros_like(a)
-    return _nx.zeros_like(a, dtype=dtype)
+        return _nx.zeros_like(a).astype(to_dtype)
+    return _nx.zeros_like(a, dtype=to_dtype)
 
 def zeros(size:Any, dtype=None) -> ArrayLike:
     if dtype is None:
@@ -221,11 +225,12 @@ def zeros(size:Any, dtype=None) -> ArrayLike:
     return _nx.zeros(size, dtype=dtype)
 
 def ones_like( a:ArrayLike, dtype=None) -> ArrayLike:
+    to_dtype = a.dtype
     if dtype is not None and dtype != a.dtype:
-        a = a.astype(dtype)
+        to_dtype = dtype
     if backend == "MLX":
-        return _nx.ones_like(a)
-    return _nx.ones_like(a, dtype=dtype)
+        return _nx.ones_like(a).astype(to_dtype)
+    return _nx.ones_like(a, dtype=to_dtype)
 
 def ones(size:Any, dtype=None) -> ArrayLike:
     if dtype is None:

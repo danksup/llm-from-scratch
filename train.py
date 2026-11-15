@@ -68,6 +68,7 @@ model_configs = {
     "embed_dim":EMBED_DIM,
     "dtype": "float16",
     "gradient_scale":8192,
+    "min_gradient_scale":2048,
     "vocab_size": len(tokenizer1.vocab),
     "quantized":True,
     "doc_id":True,

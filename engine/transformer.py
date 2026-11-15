@@ -88,8 +88,9 @@ class Transformer:
         self.embedding = Embedding(self.vocab_size, self.embed_dim, self.dtype, self.quantized, init=init)
         self.rmsnorm_final = RMSNorm(self.embed_dim, init=init)
 
-        self.gradient_scale = max(nx.array(4096, nx.int32) if configs.get("gradient_scale", None) is None else nx.array(configs.get("gradient_scale"), nx.int32), nx.array(1, nx.int32))
+        self.gradient_scale = nx.maximum(nx.array(16384, nx.int32) if configs.get("gradient_scale", None) is None else nx.array(configs.get("gradient_scale"), nx.int32), nx.array(1, nx.int32))
         self.max_gradient_scale = self.gradient_scale
+        self.min_gradient_scale = nx.minimum(nx.array(2048, nx.int32) if configs.get("min_gradient_scale", None) is None else nx.array(max(configs.get("min_gradient_scale"), 1), nx.int32), self.gradient_scale) #type:ignore
 
         no_class_attn_type = copy.deepcopy(ATTN_TYPE)
         no_class_attn_type[default_block_configs["attn_type"]].pop('attn')
@@ -515,6 +516,7 @@ class Transformer:
 
         for key, val in failures.items():
             texts += f"block_{key}: {val}"
+
         return non_finite, texts
 
     def zeroes_gradient(self):
@@ -542,7 +544,7 @@ class Transformer:
             microstep = 0
             total_histograms = None
             clean_step = 0
-            self.gradient_scale = max(nx.array(1, nx.int32), self.gradient_scale//2)
+            self.gradient_scale = nx.maximum(self.min_gradient_scale, self.gradient_scale//2)
 
             self.zeroes_gradient()
 
@@ -613,7 +615,7 @@ class Transformer:
                 if self.check_non_finite:
                     gradient_mean = nx.mean(current_grad)
                     if not nx.isfinite(loss).item() or not nx.isfinite(gradient_mean).item():
-                        if self.gradient_scale <= 1:
+                        if self.gradient_scale <= self.min_gradient_scale:
                             self.error_logger(msg="non-finite :(", log_msg="", category=FloatingPointError)
 
                         forward_nan = nx.isnan(loss)
@@ -632,6 +634,8 @@ class Transformer:
                 if self.check_non_finite:
                     check = self.network_non_finite_check()
                     if check[0]:
+                        if self.gradient_scale <= self.min_gradient_scale:
+                            self.error_logger(msg="non-finite :(", log_msg="", category=FloatingPointError)
                         reset_and_halve_grad_scale()
                         self.warn_logger(msg=f"[NON-FINITE step: {step}] non finite loss at microstep {microstep}. \ngradient_scale is halved: {self.gradient_scale.item()}", log_msg=f"\n non-finite weights:\n{check[1]}", category= UserWarning)
                         continue
@@ -721,7 +725,7 @@ class Transformer:
 
                 clean_step += 1
                 if clean_step > 0 and clean_step % 1000 == 0:
-                    self.gradient_scale = min(self.gradient_scale * 2, self.max_gradient_scale)
+                    self.gradient_scale = nx.minimum(self.gradient_scale * 2, self.max_gradient_scale)
 
                 self.eval_networks(optimizer=optimizer)
 
@@ -835,6 +839,7 @@ class Transformer:
         configs["dtype"] = nx.dtype_to_srt[self.dtype]
         configs["quantized"] =  self.quantized
         configs["gradient_scale"] = self.gradient_scale.item() if hasattr(self.gradient_scale, "item") else self.gradient_scale
+        configs["min_gradient_scale"] = self.min_gradient_scale.item() if hasattr(self.min_gradient_scale, "item") else self.min_gradient_scale
         configs["recompute_activation"] = self.recompute_activation
         configs["n_mtp_block"] = len(self.mtp_blocks)
         return configs

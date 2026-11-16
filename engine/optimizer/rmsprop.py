@@ -27,12 +27,15 @@ class RMSProp:
         self.foreach= foreach
 
         if scheduler:
-            self.schedule = SCHEDULER[scheduler](self.init_lr, min_lr)
             if min_lr is not None:
                 if min_lr > lr:
                     raise ValueError("min lr cant be bigger than init lr")
-                if isinstance(min_lr, float):
-                    self.min_lr = nx.float_32(min_lr)
+                self.min_lr = nx.float_32(min_lr)
+            else:
+                raise ValueError("?")
+
+            self.schedule = SCHEDULER[scheduler](self.init_lr, self.min_lr)
+
         self.beta2 = nx.float_32(beta2)
 
         self.epsilon = nx.float_32(epsilon)
@@ -186,7 +189,7 @@ class RMSProp:
 
     def to_dict(self) -> dict[Any, Any]:
         adamw = {"state":{}}
-        adamw["state"]["optimizer.t"] = nx.copy(self.state["t"])
+        adamw["state"]["rmsprop.t"] = nx.copy(self.state["t"])
 
         state = copy.deepcopy(self.state)
 
@@ -196,9 +199,9 @@ class RMSProp:
                 for b, c in a.items():
                     if b != "names":
                         if c is not None:
-                            adamw["state"][f"optimizer.{str(shape)}.{b}"] = c
+                            adamw["state"][f"rmsprop.{str(shape)}.{b}"] = c
                     else:
-                        optimizer_state_name[f"optimizer.{str(shape)}.{b}"] = c
+                        optimizer_state_name[f"rmsprop.{str(shape)}.{b}"] = c
 
         adamw_configs = {
             "type":"rmsprop",
@@ -223,23 +226,28 @@ class RMSProp:
     def from_dict(cls, configs, states) -> "RMSProp":
         if configs.get("type", None) is not None:
             configs.pop("type")
+
         names = None
         if configs.get("names", None) is not None:
-                names = configs.pop("names")
+            names = configs.pop("names")
 
         init_lr = 1e-3
         if configs.get("init_lr", None) is not None:
             init_lr = configs.pop("init_lr")
 
-        adamw = cls(**configs)
-        adamw.init_lr = nx.float_32(init_lr)
+        saved_lr = 1e-3
+        if configs.get("lr", None) is not None:
+            saved_lr = configs.pop("lr")
+            configs["lr"] = init_lr
 
+        adamw = cls(**configs)
+        adamw.lr = nx.float_32(saved_lr)
 
         built = {}
 
         for name_shape, tensor in states.items():
-            if name_shape.startswith("optimizer"):
-                name_shape = name_shape[10:]
+            if name_shape.startswith("rmsprop."):
+                name_shape = name_shape[8:]
                 if name_shape != "t":
                     a,b = name_shape.rsplit(".", 1)
                     try:
@@ -257,7 +265,7 @@ class RMSProp:
 
         if names is not None:
             for name_shape, tensor in names.items():
-                name_shape = name_shape[10:]
+                name_shape = name_shape[8:]
                 a,b = name_shape.rsplit(".", 1)
                 formatted = ast.literal_eval(a)
                 if formatted not in built:

@@ -1,6 +1,5 @@
 import ast
 import copy
-import pickle
 import time
 import uuid
 import warnings
@@ -14,16 +13,13 @@ from engine.optimizer import scheduler
 from engine.tokenizer import Tokenizer
 from engine.transformer import Transformer
 from helper.singleton import colorize, sleep
-from engine.transformer_block import TransformerBlock
-from engine.rmsnorm import RMSNorm
-from engine.embedding import Embedding
 
 from helper.validate_and_raise import validate_choice, validate_match
 from helper.logger import Logger
 
 
-optimizers = Union[optim.AdamW, optim.SGD, optim.RMSProp]
-OPTIMIZER_TYPES = (optim.AdamW,optim.SGD, optim.RMSProp)
+optimizers = Union[optim.AdamW, optim.SGD, optim.RMSProp, optim.Muon]
+OPTIMIZER_TYPES = (optim.AdamW,optim.SGD, optim.RMSProp, optim.Muon)
 
 DEFAULT_CONFIGS = {
     "epochs": 1,
@@ -48,7 +44,8 @@ DEFAULT_CONFIGS = {
 OPTIMIZERS = {
     "sgd": optim.SGD,
     "adamw": optim.AdamW,
-    "rmsprop": optim.RMSProp
+    "rmsprop": optim.RMSProp,
+    "muon":optim.Muon
 }
 
 SCHEDULER = {
@@ -87,7 +84,7 @@ DEFAULT_OPTIMIZER_ARGS = {
         "lr":1e-3,
         "beta2":0.999,
         "momentum":0,
-        "weight_decay":1e-4,
+        "weight_decay":1e-2,
         "use_master":False,
         "scheduler":None,
         "min_lr":None,
@@ -95,11 +92,28 @@ DEFAULT_OPTIMIZER_ARGS = {
         "foreach":False,
         "epsilon":1e-8,
         },
+    "muon":{
+        "lr":1e-3,
+        "momentum":0.95,
+        "weight_decay":1e-2,
+        "use_master":False,
+        "nesterov": True,
+        "ns_step":5,
+        "ns_dtype":"float32",
+        "scheduler":None,
+        "min_lr":None,
+        "t_warmup": max(1,int(DEFAULT_CONFIGS["max_step"] * 0.015)),
+        "foreach":False,
+        "eight_bit":False,
+        "fallback_optimizer":"adamw",
+        "fallback_configs":{}
+    }
 }
 
 BACKEND_SPECIFICS = {
     "MLX":{
         "mlx_disable_compile":False,
+        "mlx_set_device_cpu":False
     },
     "CuPy": {},
     "NumPy": {}
@@ -151,6 +165,9 @@ class Session:
         if nx.backend == "MLX":
             if self.configs["backend"]["mlx_disable_compile"]:
                 nx._nx.disable_compile() #type:ignore
+
+            if self.configs["backend"]["mlx_set_device_cpu"]:
+                nx._nx.set_default_device(nx._nx.cpu) #type:ignore
 
         self.optimizer = None
         optimizer_args = self.configs["optimizer_args"].copy()
@@ -211,7 +228,10 @@ class Session:
         info += "precision: full (float32)\n" if self.transformer.dtype == nx.float32 else f"precision: mixed precision ({self.transformer.dtype})\n"
 
         if self.optimizer is not None :
-            info += f"optimizer: {self.configs["optimizer"]}\n"
+            opt = f"optimizer: {self.configs["optimizer"]}"
+            if self.configs["optimizer"] in ["adamw", "muon"]:
+                opt += f" | eight_bit: {self.optimizer.eight_bit}" #type:ignore
+            info += opt + '\n'
 
         for key,val in self.transformer.configs.items():
             if key in ["check_non_finite", "quantized"]:
@@ -233,6 +253,9 @@ class Session:
         if nx.backend == "MLX":
             if self.configs["backend"]["mlx_disable_compile"]:
                 info += f"mlx_disable_compile: {colorize("True", "red")}\n"
+
+            if self.configs["backend"]["mlx_set_device_cpu"]:
+                info += f"mlx_set_device_cpu: {colorize("True", "yellow")}\n"
 
         if not self.configs["logger"]:
             info += f"logger: {colorize("False", "red")}"

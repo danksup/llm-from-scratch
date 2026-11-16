@@ -1,4 +1,6 @@
 import os
+
+from engine.optimizer import adamw
 os.environ["BACKEND"] = "auto"
 
 import time
@@ -13,16 +15,16 @@ SEED = 42
 nx.set_seed(SEED)
 
 EPOCHS = 1
-EMBED_DIM = 1536
-CONTEXT_SIZE = 2048
-BATCH_SIZE = 1
-N_HEADS = 12
-N_KV_HEADS = max(1, N_HEADS // 3)
+EMBED_DIM = 512
+CONTEXT_SIZE = 4096
+BATCH_SIZE = 2
+N_HEADS = 8
+N_KV_HEADS = max(1, N_HEADS // 2)
 N_EXPERTS = 8
 CF = 1.25
-VAL = .9
+VAL = 1
 TOP_K = 2
-MAX_STEP = 5
+MAX_STEP = 10
 
 CORPUS_PATH = "artifacts/dataloader/2025_26"
 TOKENIZER_PATH = "artifacts/tokenizer/tokenizer32768_1624612680len.tokenizer"
@@ -32,55 +34,57 @@ session_configs = {
     "epochs":EPOCHS,
     "max_step":MAX_STEP,
     "train_split": VAL,
-    "max_val_step":20,
+    "max_val_step":10,
     "eval_every":1,
     "validate_every":10,
     "context_size": CONTEXT_SIZE,
     "batch_size": BATCH_SIZE,
-    "microbatch_size":1,
-    "optimizer":"adamw",
+    "microbatch_size":16,
+    "optimizer":"muon",
     "optimizer_args":{
         "lr": 1e-3,
         "use_master": True,
         "scheduler": "cosine_decay",
         "min_lr": 8e-5,
         "t_warmup": max(1, int(MAX_STEP * 0.02)),
-        "eight_bit":True,
-        "foreach":True
+        "eight_bit":False,
+        "foreach":True,
+        "fallback_optimizer":"adamw",
+        "fallback_configs":{}
     },
     "save":True,
     "logger":True,
     "error_save":True,
     "create_checkpoint":True,
     "checkpoint_every":100,
-    "weight_only": False,
+    "weight_only": True,
     "backend": {
         "mlx_disable_compile":False,
-        "mlx_save_quantized_weights_as_symmetric":True
+        "mlx_set_device_cpu":True
     }
 }
 
 model_configs = {
-    "n_blocks":24,
+    "n_blocks":10,
     "n_mtp":1,
     "discard_mtp":False,
     "mtp_lambda":0.5,
     "embed_dim":EMBED_DIM,
     "dtype": "float16",
-    "gradient_scale":8192,
+    "gradient_scale":16384,
     "min_gradient_scale":2048,
     "vocab_size": len(tokenizer1.vocab),
-    "quantized":True,
+    "quantized": False,
     "doc_id":True,
     "check_non_finite":True,
     "recompute_activation":True,
     "block_configs":{
-        "ff_hidden_width": 2304,#int(2 * EMBED_DIM),
+        "ff_hidden_width": int(2 * EMBED_DIM),
         "ff_n_experts":N_EXPERTS,
         "ff_topk":TOP_K,
         "ff_cf":CF,
         "ff_init":"glorot_uniform",
-        "ff_dense_hidden_width": 3584,#int(4 * EMBED_DIM),
+        "ff_dense_hidden_width": int(4 * EMBED_DIM),
         "ff_n_dense":1,
         "ff_jitter_eps":0.02,
         "ff_bias_gamma": 1e-3,

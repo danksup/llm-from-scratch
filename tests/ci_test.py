@@ -38,7 +38,7 @@ session_configs = {
     },
     "using":os.environ.get("BACKEND"),
     "save":False,
-    "create_checkpoint":True,
+    "create_checkpoint":False,
     "checkpoint_every":1000,
     "weight_only": True,
     "logger":False,

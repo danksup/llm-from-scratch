@@ -1,7 +1,7 @@
 from typing import Any
 import engine.backend as nx
 
-def fused_cross_entropy(input:Any, embedding:Any, target_logits:Any, chunk_size=512, is_training=True, gradient_scale=1):
+def fused_cross_entropy(input:Any, embedding:Any, target_logits:Any, chunk_size=512, is_training=True, gradient_scale:Any=1):
     B,T,D = input.shape
     N= B*T
     input = input.astype(embedding.dtype)
@@ -21,7 +21,6 @@ def fused_cross_entropy(input:Any, embedding:Any, target_logits:Any, chunk_size=
         correct_logits = logit[rows, flat_target_]
         loss = nx.logsumexp(logit.astype(nx.float32), axis=-1)  - correct_logits.astype(nx.float32)
         total_loss += nx.sum(loss, dtype=nx.float32)
-        # nx.eval(*[total_loss])
 
         if is_training:
             probs = nx.softmax(logit.astype(nx.float32))

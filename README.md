@@ -75,9 +75,9 @@ logs:
 - multi token prediction nov 5 2026
 - 8bit adam nov 7 2026
 - yarn (rope) nov 8 2026
+- muon nov 16 2026
 
 ## Ongoing:
-- muon
 - fix optimizer states saving to safetensors
 - ram usage optimization
 - optimizing/cleanup/docs

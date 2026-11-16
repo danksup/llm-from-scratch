@@ -41,8 +41,8 @@ else:
     rng = _nx.random.default_rng(seed) # type: ignore
 
 if backend in ["NumPy"]:
-    from safetensors.numpy import save_file, load_file
-    from safetensors import safe_open
+    from safetensors.numpy import save_file, load_file # type: ignore
+    from safetensors import safe_open # type: ignore
 
 ArrayLike = Any
 e = _nx.e
@@ -113,11 +113,11 @@ QUANTIZATION_GROUP_SIZE = 64
 def using_backend():
     backend_str = backend
     if backend == "MLX":
-        compute_api = ""
-        if _nx.cuda.is_available():
-            compute_api = "cuda"
-        elif _nx.metal.is_available():
-            compute_api = "metal"
+        dev = _nx.default_device()
+        if dev == _nx.gpu:
+            compute_api = "metal" if _nx.metal.is_available() else "cuda"
+        elif dev == _nx.cpu:
+            compute_api = "cpu"
         else:
             compute_api = "erm..."
         backend_str += f"({compute_api})"

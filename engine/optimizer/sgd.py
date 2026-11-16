@@ -30,12 +30,15 @@ class SGD:
         self.foreach= foreach
 
         if scheduler:
-            self.schedule = SCHEDULER[scheduler](self.init_lr, min_lr)
             if min_lr is not None:
                 if min_lr > lr:
                     raise ValueError("min lr cant be bigger than init lr")
-                if isinstance(min_lr, float):
-                    self.min_lr = nx.float_32(min_lr)
+                self.min_lr = nx.float_32(min_lr)
+            else:
+                raise ValueError("?")
+
+            self.schedule = SCHEDULER[scheduler](self.init_lr, self.min_lr)
+
 
         self.state = {}
         self.state["t"] = nx.array(1, dtype=nx.int32)
@@ -165,7 +168,7 @@ class SGD:
 
     def to_dict(self) -> dict[str,Any]:
         sgd = {"state":{}}
-        sgd["state"]["optimizer.t"] = nx.copy(self.state["t"])
+        sgd["state"]["sgd.t"] = nx.copy(self.state["t"])
 
         state = copy.deepcopy(self.state)
 
@@ -175,9 +178,9 @@ class SGD:
                 for b, c in a.items():
                     if b != "names":
                         if c is not None:
-                            sgd["state"][f"optimizer.{str(shape)}.{b}"] = c
+                            sgd["state"][f"sgd.{str(shape)}.{b}"] = c
                     else:
-                        optimizer_state_name[f"optimizer.{str(shape)}.{b}"] = c
+                        optimizer_state_name[f"sgd.{str(shape)}.{b}"] = c
 
         sgd["configs"] = {
             "type":"sgd",
@@ -200,6 +203,7 @@ class SGD:
     def from_dict(cls, configs, states) -> "SGD":
         if configs.get("type", None) is not None:
             configs.pop("type")
+
         names = None
         if configs.get("names", None) is not None:
             names = configs.pop("names")
@@ -208,14 +212,20 @@ class SGD:
         if configs.get("init_lr", None) is not None:
             init_lr = configs.pop("init_lr")
 
+        saved_lr = 1e-3
+        if configs.get("lr", None) is not None:
+            saved_lr = configs.pop("lr")
+            configs["lr"] = init_lr
+
+
         sgd = cls(**configs)
-        sgd.init_lr = nx.float_32(init_lr)
+        sgd.lr = nx.float_32(saved_lr)
 
         built = {}
 
         for name_shape, tensor in states.items():
-            if name_shape.startswith("optimizer"):
-                name_shape = name_shape[10:]
+            if name_shape.startswith("sgd."):
+                name_shape = name_shape[4:]
                 if name_shape != "t":
                     a,b = name_shape.rsplit(".", 1)
                     try:
@@ -233,7 +243,7 @@ class SGD:
 
         if names is not None:
             for name_shape, tensor in names.items():
-                name_shape = name_shape[10:]
+                name_shape = name_shape[4:]
                 a,b = name_shape.rsplit(".", 1)
                 formatted = ast.literal_eval(a)
                 if formatted not in built:

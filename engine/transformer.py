@@ -17,7 +17,7 @@ from helper.validate_and_raise import validate_choice
 from helper.singleton import sleep
 import warnings
 
-optimizers = optim.AdamW | optim.SGD | optim.RMSProp
+optimizers = optim.AdamW | optim.SGD | optim.RMSProp | optim.Muon
 
 default_block_configs = {
     "ff_hidden_width": 1024,
@@ -655,7 +655,7 @@ class Transformer:
 
                             decay = True
                             use_muon = True
-                            if w in ["lookup_table", "gamma", "router"]:
+                            if w in ["lookup_table", "gamma", "router"] or w_.ndim <=1:
                                 decay = False
                                 use_muon = False
 
@@ -690,7 +690,7 @@ class Transformer:
 
                             decay = True
                             use_muon = True
-                            if w in ["lookup_table", "gamma", "router"]:
+                            if w in ["lookup_table", "gamma", "router"] or w_.ndim <=1:
                                 decay = use_muon = False
 
                             if self.quantized and w not in ["gamma", "router"]:

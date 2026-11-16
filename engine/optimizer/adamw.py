@@ -27,12 +27,15 @@ class AdamW:
         self.foreach= foreach
 
         if scheduler:
-            self.schedule = SCHEDULER[scheduler](self.init_lr, min_lr)
             if min_lr is not None:
                 if min_lr > lr:
                     raise ValueError("min lr cant be bigger than init lr")
-                if isinstance(min_lr, float):
-                    self.min_lr = nx.float_32(min_lr)
+                self.min_lr = nx.float_32(min_lr)
+            else:
+                raise ValueError("?")
+
+            self.schedule = SCHEDULER[scheduler](self.init_lr, self.min_lr)
+
         self.beta1 = nx.float_32(beta1)
         self.beta2 = nx.float_32(beta2)
 
@@ -84,7 +87,7 @@ class AdamW:
             state_shape = self.state[group_tuple]
             thing.clear()
 
-            m_v_t = (state_shape["m"], state_shape["v"], self.state["t"], state_shape["m_scales"], state_shape["v_scales"],)
+            m_v_t = (state_shape["m"], state_shape["v"], self.state["t"], state_shape.get("m_scales", None), state_shape.get("v_scales", None),)
 
             weight_decay = self.weight_decay if should_decay else nx.float_32(0.0)
 
@@ -184,7 +187,8 @@ class AdamW:
 
     def to_dict(self) -> dict[Any, Any]:
         adamw = {"state":{}}
-        adamw["state"]["optimizer.t"] = nx.copy(self.state["t"])
+
+        adamw["state"]["adamw.t"] = nx.copy(self.state["t"])
 
         state = copy.deepcopy(self.state)
 
@@ -194,13 +198,13 @@ class AdamW:
                 for b, c in a.items():
                     if b != "names":
                         if c is not None:
-                            adamw["state"][f"optimizer.{str(shape)}.{b}"] = c
+                            adamw["state"][f"adamw.{str(shape)}.{b}"] = c
                     else:
-                        optimizer_state_name[f"optimizer.{str(shape)}.{b}"] = c
+                        optimizer_state_name[f"adamw.{str(shape)}.{b}"] = c
 
         adamw_configs = {
             "type":"adamw",
-            "lr": self.lr.item(),
+            "lr": self.lr.item() if hasattr(self.lr, "item") else self.lr,
             "init_lr": self.init_lr.item()if hasattr(self.init_lr, "item") else self.init_lr,
             "beta1": self.beta1.item()if hasattr(self.beta1, "item") else self.beta1,
             "beta2": self.beta2.item()if hasattr(self.beta2, "item") else self.beta2,
@@ -220,27 +224,33 @@ class AdamW:
         return adamw
 
     @classmethod
-    def from_dict(cls,  configs, states) -> "AdamW":
+    def from_dict(cls,  configs:dict, states:dict) -> "AdamW":
+        cfg = copy.deepcopy(configs)
+
         if configs.get("type", None) is not None:
-            configs.pop("type")
+            cfg.pop("type")
 
         names = None
         if configs.get("names", None) is not None:
-            names = configs.pop("names")
+            names = cfg.pop("names")
 
         init_lr = 1e-3
         if configs.get("init_lr", None) is not None:
-            init_lr = configs.pop("init_lr")
+            init_lr = cfg.pop("init_lr")
 
-        adamw = cls(**configs)
-        adamw.init_lr = nx.float_32(init_lr)
+        saved_lr = 1e-3
+        if configs.get("lr", None) is not None:
+            saved_lr = cfg.pop("lr")
+            cfg["lr"] = init_lr
+
+        adamw = cls(**cfg)
+        adamw.lr = nx.float_32(saved_lr)
 
         built = {}
-        # built["names"] = names
 
         for name_shape, tensor in states.items():
-            if name_shape.startswith("optimizer"):
-                name_shape = name_shape[10:]
+            if name_shape.startswith("adamw."):
+                name_shape = name_shape[6:]
                 if name_shape != "t":
                     a,b = name_shape.rsplit(".", 1)
                     try:
@@ -257,7 +267,7 @@ class AdamW:
 
         if names is not None:
             for name_shape, tensor in names.items():
-                name_shape = name_shape[10:]
+                name_shape = name_shape[6:]
                 a,b = name_shape.rsplit(".", 1)
                 formatted = ast.literal_eval(a)
                 if formatted not in built:

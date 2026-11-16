@@ -44,7 +44,7 @@ class Inference:
         self.mtp_acceptance = 0
 
     def infer(self, context:Any) -> Any:
-        max_cache_len = self.session_configs["context_size"] * self.attn_rope_scale
+        max_cache_len = int(self.session_configs["context_size"] * self.attn_rope_scale)
         T = context.shape[1]
         if self.temp < 0:
             warnings.warn(colorize("temp < 0 = greedy (like temp = 0)", "yellow"))

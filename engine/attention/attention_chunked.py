@@ -318,9 +318,6 @@ class AttentionChunked:
             cached_v[:, :, -T:, :] = V
             active_K = cached_k
             active_V = cached_v
-            # cached_k = cached_k[:, :, -max_cache_len:, :]
-            # cached_v = cached_v[:, :, -max_cache_len:, :]
-
 
         Q = combined[..., :self.embed_dim]
         Q = Q.reshape(B, T, self.n_heads, self.head_dim).transpose(0,2,1,3)

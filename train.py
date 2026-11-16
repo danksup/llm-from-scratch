@@ -24,7 +24,7 @@ N_EXPERTS = 8
 CF = 1.25
 VAL = 1
 TOP_K = 2
-MAX_STEP = 10
+MAX_STEP = 500
 
 CORPUS_PATH = "artifacts/dataloader/2025_26"
 TOKENIZER_PATH = "artifacts/tokenizer/tokenizer32768_1624612680len.tokenizer"
@@ -39,18 +39,23 @@ session_configs = {
     "validate_every":10,
     "context_size": CONTEXT_SIZE,
     "batch_size": BATCH_SIZE,
-    "microbatch_size":16,
+    "microbatch_size":8,
     "optimizer":"muon",
     "optimizer_args":{
-        "lr": 1e-3,
+        "lr": 4e-3,
         "use_master": True,
         "scheduler": "cosine_decay",
         "min_lr": 8e-5,
         "t_warmup": max(1, int(MAX_STEP * 0.02)),
-        "eight_bit":False,
+        "eight_bit":True,
         "foreach":True,
+        "ns_dtype":"float16",
+        "ns_step":3,
         "fallback_optimizer":"adamw",
-        "fallback_configs":{}
+        "fallback_configs":{
+            "lr": 1e-3,
+        }
+
     },
     "save":True,
     "logger":True,
@@ -60,7 +65,7 @@ session_configs = {
     "weight_only": True,
     "backend": {
         "mlx_disable_compile":False,
-        "mlx_set_device_cpu":True
+        "mlx_set_device_cpu":False
     }
 }
 
@@ -89,7 +94,7 @@ model_configs = {
         "ff_jitter_eps":0.02,
         "ff_bias_gamma": 1e-3,
         "attn_type":"chunked",
-        "attn_chunk_size":CONTEXT_SIZE//16,
+        "attn_chunk_size":CONTEXT_SIZE//8,
         "attn_variant":"gqa",
         "attn_n_heads":N_HEADS,
         "attn_n_kv_heads":N_KV_HEADS,
@@ -102,6 +107,8 @@ model_configs = {
         "dropout_p":0.0
         },
     "block_overrides":{
+        # 3:{"attn_type":"full"},
+        # 7:{"attn_type":"full"},
       }
 }
 

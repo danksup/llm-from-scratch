@@ -78,7 +78,6 @@ logs:
 - muon nov 16 2026
 
 ## Ongoing:
-- fix optimizer states saving to safetensors
 - ram usage optimization
 - optimizing/cleanup/docs
 

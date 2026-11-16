@@ -82,9 +82,10 @@ logs:
 - optimizing/cleanup/docs
 
 ## TODO (not in order):
-- parallelizing tokenizer word frequency counting
+- online softmax
   
 #### Maybe:
+- parallelizing tokenizer word frequency counting
 - fill in the middle transformer
 - multimodal (or maybe bimodal image-in -> text first)
 - LoRA

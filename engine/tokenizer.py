@@ -50,13 +50,13 @@ class Tokenizer:
         then "hello" -> [3,4,8,8,7,5]\n
         """
         tokenized = []
-        # stripped = word.lstrip().encode() 
+        # stripped = word.lstrip().encode()
         chars = re.split(r'(<EOT>|<\|endofdoc\|>|<PAD>|\n|\r|\t| )', word)
         chars = [i for i in chars if i]
         # if stripped in self.special_tokens:
         for char in chars:
             encoded = char.encode()
-            if encoded.isspace() or encoded in self.special_tokens:
+            if encoded in self.special_tokens:
                 tokenized.append(self.vocab.get(encoded))
             else:
                 for b in encoded:
@@ -209,7 +209,7 @@ class Tokenizer:
             path = Path(filepath)
             iterate = path.iterdir()
         for file in iterate:
-            if file.is_file(): 
+            if file.is_file():
                 if file.suffix == ".txt": #type:ignore
                     with open(file, "r", encoding="utf-8", errors='ignore') as f:
                         while True:
@@ -226,7 +226,8 @@ class Tokenizer:
                                             break
                                     else:
                                         break
-                                yield chunk
+                            yield chunk
+
                 elif file.suffix == ".parquet":
                     with pyarrow.parquet.ParquetFile(file) as f:
                         for batch in f.iter_batches(batch_size=1024, columns=["text"]):
@@ -277,7 +278,7 @@ class Tokenizer:
 
             if len(self.vocab) >= self.target_vocab_size:
                 break
-                
+
             if not pair_counts:
                 break
             best_pair = pair_counts.most_common(1)[0][0]
@@ -349,7 +350,7 @@ class Tokenizer:
         tokenizer = cls(vocab_size)
         a = tokenizer.fit(filepath, targets=targets)
         start = time.perf_counter()
-        
+
         for i in a:
             end = time.perf_counter()
             tokenizer_save_name = f"{i}_vocab"
@@ -358,7 +359,7 @@ class Tokenizer:
             else:
                 tokenizer.save(tokenizer_save_name)
             print(f"{tokenizer_save_name} saved. fitting finished in {end-start:.3f}")
-        
+
     def to_dict(self,*, include_id:bool=False) -> dict[str,dict[Any,Any]]:
         vocab = {
             "merge_rank":self.merge_rank.copy(),

@@ -3,12 +3,12 @@ from typing import Any, Callable
 import copy
 import ast
 
-from .scheduler import LinearSchedule, CosineDecay
+from .scheduler import LinearSchedule, CosineDecay, WarmupStableDecay
 
 SCHEDULER = {
-    "none": None,
     "cosine_decay": CosineDecay,
-    "linear_schedule": LinearSchedule
+    "linear_schedule": LinearSchedule,
+    "wsd": WarmupStableDecay
 }
 
 class SGD:

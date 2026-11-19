@@ -2,84 +2,84 @@
 just a fun little project i do on my days off. a small llm project built for (my) learning purposes. you can read  [here](engine/README.md) to see the flow or [here](docs/) to see the explanation of each individual piece.
 
 logs:
-- did not track
-  - older stuff
-  - save/load 
-  - layernorm (replaced by rmsnorm)
-  - attention 
-  - transformer 
-- apple silicon acceleration (MLX) (jun 23 2026)
-- jun 24 2026
-  - rmsnorm
-  - multi head attention 
-  - top p 
-  - weight tying 
-- jun 25 2026
-  - dropout (jun 25 2026)
-  - rope (jun 25 2026)
-  - train/valid split (jun 25 2026)
-  - mixed precision(jun 25 2026)
-- swiglu(jun 26 2026)
-- purely optimizing in june 27 2026
-- purely optimizing in june 28 2026
-- purely optimizing in june 29 2026
-- jun 30 2026
-  - KV caching 
-  - grouped query attention 
-- BPE tokenizer (jul 1 2026)
-- jul 2 2026
-  - rewrote some BPE functions in C 
-  - use hashing for counting on C BPE 
-  - revert back to pythonic BPE 
-- optimizing BPE in jul 3 2026
-- jul 4 2026
-  - incremental BPE 
-  - logsumexp crossentropy 
-- misc stuff jul 5 2026
-- lr scheduling (cosine decay) in jul 6 2026
-- jul 7 2026
-  - checkpointing
-  - validation-loss based logging
-- shuffled dataloader contexts jul 9 2026
-- sliding frequency penalty jul 10 2026
-- jul 13 2026
-  - MoE (top-1)
-  - MoE load balancing
-- MoE top k jul 15 2026
-- sliding windows attention jul 17 2026
-- jul 18 - jul 25: optimizing, fixed mix precision
-- exposing more apis,bug fix, stability jul 27 - aug 7 2026
-- lazy BPE aug 8 2026
-- fully lazy dataloader aug 10 2026
-- gradient accumulation aug 12 2026
-- prefetching encoded chunk aug 13 2026
-- int8 weight-only quantization aug 17 2026 
-- replace pickle with safetensors aug 30 2026
-- byte-level BPE sep 2 2026
-- cuda support is now using MLX (deleted cupy) -> `pip install mlx[cuda12]` or `pip install mlx[cuda13]` if ur machine supports cuda
-- adaptive gradient scaling and better non-finite handling sep 4 2026
-- better logging sep 5 2026
-- add rmsnorm before the final projection sep 6 2026
--  sep 10 2026:
-   -  global grad clipping
-   -  QKnorm
-- chunked attention sep 23 2026
-- recompute activation (selective) sep 26 2026
-- mmap for dataloader oct 14 2026
-- shared experts oct 16 2026
-- static kv caching oct 18 2026
-- moe jitter oct 27 2026
-- lr warmup oct 29 2026
-- doc boundary masking oct 31 2026
-- moe aux loss free balancing nov 1 2026
-- multi token prediction nov 5 2026
-- 8bit adam nov 7 2026
-- yarn (rope) nov 8 2026
-- muon nov 16 2026
-- online softmax on `attention_reg.py`, inspired by FlashAttention (Dao et al., 2022), FlashAttention-2 (Dao, 2023), and Online normalizer calculation for softmax (Milakov & Gimelshein, 2018)
+  - did not track
+    - older stuff
+    - save/load 
+    - layernorm (replaced by rmsnorm)
+    - attention 
+    - transformer 
+  - apple silicon acceleration (MLX) (jun 23 2026)
+  - jun 24 2026
+    - rmsnorm
+    - multi head attention 
+    - top p 
+    - weight tying 
+  - jun 25 2026
+    - dropout (jun 25 2026)
+    - rope (jun 25 2026)
+    - train/valid split (jun 25 2026)
+    - mixed precision(jun 25 2026)
+  - swiglu(jun 26 2026)
+  - purely optimizing in june 27 2026
+  - purely optimizing in june 28 2026
+  - purely optimizing in june 29 2026
+  - jun 30 2026
+    - KV caching 
+    - grouped query attention 
+  - BPE tokenizer (jul 1 2026)
+  - jul 2 2026
+    - rewrote some BPE functions in C 
+    - use hashing for counting on C BPE 
+    - revert back to pythonic BPE 
+  - optimizing BPE in jul 3 2026
+  - jul 4 2026
+    - incremental BPE 
+    - logsumexp crossentropy 
+  - misc stuff jul 5 2026
+  - lr scheduling (cosine decay) in jul 6 2026
+  - jul 7 2026
+    - checkpointing
+    - validation-loss based logging
+  - shuffled dataloader contexts jul 9 2026
+  - sliding frequency penalty jul 10 2026
+  - jul 13 2026
+    - MoE (top-1)
+    - MoE load balancing
+  - MoE top k jul 15 2026
+  - sliding windows attention jul 17 2026
+  - jul 18 - jul 25: optimizing, fixed mix precision
+  - exposing more apis,bug fix, stability jul 27 - aug 7 2026
+  - lazy BPE aug 8 2026
+  - fully lazy dataloader aug 10 2026
+  - gradient accumulation aug 12 2026
+  - prefetching encoded chunk aug 13 2026
+  - int8 weight-only quantization aug 17 2026 
+  - replace pickle with safetensors aug 30 2026
+  - byte-level BPE sep 2 2026
+  - cuda support is now using MLX (deleted cupy) -> `pip install mlx[cuda12]` or `pip install mlx[cuda13]` if ur machine supports cuda
+  - adaptive gradient scaling and better non-finite handling sep 4 2026
+  - better logging sep 5 2026
+  - add rmsnorm before the final projection sep 6 2026
+  -  sep 10 2026:
+     -  global grad clipping
+     -  QKnorm
+  - chunked attention sep 23 2026
+  - recompute activation (selective) sep 26 2026
+  - mmap for dataloader oct 14 2026
+  - shared experts oct 16 2026
+  - static kv caching oct 18 2026
+  - moe jitter oct 27 2026
+  - lr warmup oct 29 2026
+  - doc boundary masking oct 31 2026
+  - moe aux loss free balancing nov 1 2026
+  - multi token prediction nov 5 2026
+  - 8bit adam nov 7 2026
+  - yarn (rope) nov 8 2026
+  - muon nov 16 2026
+  - online softmax on `attention_reg.py`, inspired by FlashAttention (Dao et al., 2022), FlashAttention-2 (Dao, 2023), and Online normalizer calculation for softmax (Milakov & Gimelshein, 2018)
+  - WSD scheduler nov 16 2026 (not configurable for now)
 
 ## Ongoing:
-  - WSD scheduler
   - ram usage optimization
   - optimizing/cleanup/docs
 

@@ -44,7 +44,7 @@ session_configs = {
     "optimizer_args":{
         "lr": 4e-3,
         "use_master": True,
-        "scheduler": "cosine_decay",
+        "scheduler": "wsd",
         "min_lr": 8e-5,
         "t_warmup": max(1, int(MAX_STEP * 0.02)),
         "eight_bit":True,

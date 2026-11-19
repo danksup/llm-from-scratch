@@ -2,13 +2,13 @@ import engine.backend as nx
 from typing import Any, Callable
 import copy
 import ast
-from .scheduler import LinearSchedule, CosineDecay
+from .scheduler import LinearSchedule, CosineDecay, WarmupStableDecay
 
 SCHEDULER = {
     "cosine_decay": CosineDecay,
-    "linear_schedule": LinearSchedule
+    "linear_schedule": LinearSchedule,
+    "wsd": WarmupStableDecay
 }
-
 class RMSProp:
     def __init__(self, lr=1e-3, momentum:float=0.0, beta2:float=0.999, epsilon:float=1e-8, weight_decay:float=0.01, use_master:bool=True, scheduler:None|str=None, min_lr:None | float= None, t_warmup:None|int=None, *, _all_not_decayed:bool=False, foreach=False) -> None:
         assert lr >= 0, "lr must be non-negative"

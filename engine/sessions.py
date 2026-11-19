@@ -51,7 +51,8 @@ OPTIMIZERS = {
 SCHEDULER = {
     "none": None,
     "cosine_decay": scheduler.CosineDecay,
-    "linear_schedule":scheduler.LinearSchedule
+    "linear_schedule":scheduler.LinearSchedule,
+    "wsd":scheduler.WarmupStableDecay
 }
 
 DEFAULT_OPTIMIZER_ARGS = {

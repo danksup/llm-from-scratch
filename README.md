@@ -76,13 +76,13 @@ logs:
 - 8bit adam nov 7 2026
 - yarn (rope) nov 8 2026
 - muon nov 16 2026
+- online softmax on `attention_reg.py`, inspired by FlashAttention (Dao et al., 2022), FlashAttention-2 (Dao, 2023), and Online normalizer calculation for softmax (Milakov & Gimelshein, 2018)
 
 ## Ongoing:
 - ram usage optimization
 - optimizing/cleanup/docs
 
 ## TODO (not in order):
-- online softmax
   
 #### Maybe:
 - parallelizing tokenizer word frequency counting

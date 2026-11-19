@@ -1,5 +1,4 @@
 import engine.backend as nx
-from engine.activations import softmax_derivative
 from engine.rope import rope_forward, rope_inverse
 from typing import Any, Callable
 import engine.initializers as initializer
@@ -96,18 +95,6 @@ class AttentionFull:
         return "full"
 
     @staticmethod
-    def compute_weights(causal_mask, head_dim, Q, K, dtype):
-        scores = nx.einsum("bkrQh,bkKh->bkrQK",Q, K) #(B, n_kv_heads, n_rep, Tq, Tk)
-
-        scores = scores.astype(nx.float32) / nx.sqrt(head_dim, dtype=nx.float32) #type:ignore
-        scores = nx.where(causal_mask, -1e9, scores)
-
-        weights = nx.softmax(scores)
-        weights = weights.astype(dtype)
-
-        return weights
-
-    @staticmethod
     def _forward(x:nx.ArrayLike, causal_mask:nx.ArrayLike,doc_id,  attn_configs:tuple[Any,...], attn_params: tuple[Any,...], quantization,  *, recompute_activation=True) -> tuple[nx.ArrayLike, tuple[nx.ArrayLike,...]]:
         #fp_16_x shape = (B,T,D)
         #Wqkv.T (D, D + 2 * n_kv_heads * H)
@@ -146,9 +133,7 @@ class AttentionFull:
         else:
             combined_mask = causal_mask
 
-        weights = AttentionFull.compute_weights(combined_mask, head_dim, Q, K, x.dtype)
-
-        output = nx.einsum("bkrQK,bkKh->bkrQh",weights, V) #(B, n_kv_heads, n_rep, Tq, Dh)
+        output, lse = AttentionFull.online_forward(Q, K, V, combined_mask, 512, 512)
 
         output = output.reshape(B, -1, T, head_dim)
         output_concat = output.transpose(0, 2, 1, 3).reshape(B, T, embed_dim)
@@ -158,12 +143,56 @@ class AttentionFull:
         else:
             output_projected = output_concat @ Wo
 
-        if not recompute_activation:
-            cache =  (x, Q, Q_norm_caches, K, K_norm_caches, V, weights, output_concat)
-        else:
-            cache =  (x, Q, Q_norm_caches, K, K_norm_caches, V, output_concat, combined_mask)
+
+        cache =  (x, Q, Q_norm_caches, K, K_norm_caches, V, output_concat, combined_mask, lse)
 
         return output_projected, cache
+
+    @staticmethod
+    def online_forward(Q, K, V, combined_mask, Bq=512, Bk=512):
+        B, n_kv_heads, n_rep, T, head_dim = Q.shape
+        outputs = []
+        lse_list = []
+
+        for i in range(0, T, Bq):
+            q_len = min(Bq, T - i)
+            mi = nx.full((B, n_kv_heads, n_rep, q_len, 1),-1e9, nx.float32)
+            li = nx.zeros((B, n_kv_heads, n_rep, q_len, 1), nx.float32)
+            oi = nx.zeros((B, n_kv_heads, n_rep, q_len, head_dim), nx.float32)
+            Qi = Q[..., i : i + q_len, :]
+
+            for j in range(0, T, Bk):
+                if j >= i + q_len:
+                    break
+
+                k_len = min(Bk, T - j)
+                Kj = K[..., j : j + k_len, :]
+                s_ij = nx.einsum("bkrQh, bkKh->bkrQK", Qi, Kj)
+                s_ij = s_ij.astype(nx.float32) / nx.sqrt(head_dim, dtype=nx.float32)
+
+                mask_ij = combined_mask[..., i : i + q_len, j : j + k_len]
+                s_ij = nx.where(mask_ij, -1e9, s_ij)
+
+                m_new = nx.maximum(nx.max(s_ij, axis=-1, keepdims=True), mi)
+                alpha = nx.exp(mi - m_new)
+                p_ij = nx.where(mask_ij, 0.0, nx.exp(s_ij - m_new))
+                li = li * alpha + nx.sum(p_ij, axis=-1, keepdims=True)
+
+                vj = V[..., j : j + k_len, :]
+                vr = nx.einsum("bkrQK, bkKh->bkrQh", p_ij, vj.astype(nx.float32))
+                oi = vr.astype(nx.float32) + oi*alpha
+                mi = m_new
+
+            oi = oi / nx.maximum(li, 1e-9)
+            oi = oi.astype(Q.dtype)
+            outputs.append(oi)
+            logsumexp = mi + nx.log(nx.maximum(li, 1e-9))
+            nx.eval(*[oi, logsumexp])
+            lse_list.append(logsumexp)
+
+        outputs = nx.concatenate(outputs, axis=3)
+        lse_list = nx.concatenate(lse_list, axis=3)
+        return outputs, lse_list
 
     @staticmethod
     def _backward(gradient:nx.ArrayLike, caches:tuple[Any,...], attn_configs:tuple[Any,...], attn_params: tuple[Any,...], quantization:tuple[Any,...]|None=None,  *, recompute_activation=True) -> tuple[nx.ArrayLike,...]:
@@ -173,12 +202,7 @@ class AttentionFull:
 
         wqkv_scale, wo_scale, wqkv_bias, wo_bias = quantization #type:ignore
 
-        if not recompute_activation:
-            x, Q,Q_norm_caches, K,K_norm_caches, V, weights, output_concat = caches
-        else:
-            x, Q,Q_norm_caches, K,K_norm_caches, V, output_concat, combined_mask = caches
-
-            weights = AttentionFull.compute_weights(combined_mask,head_dim, Q, K, x.dtype)
+        x, Q, Q_norm_caches, K, K_norm_caches, V, output_concat, combined_mask, lse = caches
 
         B, T, _ = x.shape
 
@@ -190,18 +214,10 @@ class AttentionFull:
         d_output = d_output_concat.reshape(B, T, n_heads, head_dim).transpose(0, 2, 1, 3)
         d_output = d_output.reshape(B, n_kv_heads, n_rep, T, head_dim)
 
-        dweights = nx.einsum("bkrQh,bkKh->bkrQK", d_output, V) #(B, n_kv_heads, n_rep, Tq, Tk)
+        output = output_concat.reshape(B, T, n_kv_heads, n_rep, head_dim).transpose(0,2,3,1,4)
+        dQ, dK, dV = AttentionFull.online_backward(d_output, output, lse, Q, K, V, combined_mask)
 
-        dV = nx.einsum("bkrQK,bkrQh->bkKh", weights, d_output)
-
-        dscores = softmax_derivative(weights.astype(nx.float32), dweights.astype(nx.float32)) / nx.sqrt(head_dim, dtype=nx.float32) #type:ignore
-        dscores = dscores.astype(gradient.dtype) #(B, n_kv_heads, n_rep, Tq, Tk)
-
-        dQ = nx.einsum("bkrQK,bkKh->bkrQh", dscores, K) #(B, nkv, n_rep, Tq, Dh)
-
-        dK = nx.einsum("bkrQK,bkrQh->bkKh",dscores, Q) #(B, nkv, Tk, Dh)
-
-        del Q, dscores, dweights, d_output, d_output_concat
+        del Q, K, V, d_output, d_output_concat
 
         dQ = dQ.reshape(B, -1, T, head_dim)
         dQ = rope_inverse(dQ, freqs, freq_multiplier=theta, s=s, ori_T=ori_T, alpha=alpha, beta=beta)
@@ -233,6 +249,54 @@ class AttentionFull:
 
         del x, output_concat, freqs, Wqkv, Wo
         return dx,dWqkv,dWo,Q_norm_d_gamma,K_norm_d_gamma
+
+    @staticmethod
+    def online_backward(d_output, output, lse, Q, K, V, combined_mask, Bq=512, Bk=512):
+        B, n_kv_heads, n_rep, T, head_dim = output.shape
+        D = nx.sum(d_output.astype(nx.float32)*output.astype(nx.float32), axis=-1, keepdims=True, dtype=nx.float32)
+
+        dQ = nx.zeros((B,n_kv_heads, n_rep, T, head_dim), nx.float32)
+        dK = nx.zeros((B,n_kv_heads, T, head_dim), nx.float32)
+        dV = nx.zeros((B,n_kv_heads, T, head_dim), nx.float32)
+
+        for i in range(0, T, Bq):
+            q_len = min(Bq, T - i)
+            Qi = Q[...,i:i+q_len, :]
+            dOi = d_output[..., i:i+q_len, :]
+            dOi = dOi.astype(nx.float32)
+            Li = lse[..., i:i+q_len, :]
+            Di = D[..., i : i + q_len, :]
+
+            for j in range(0, T, Bk):
+                if j >= i + q_len:
+                    break
+
+                k_len = min(Bk, T - j)
+                Kj = K[..., j : j + k_len, :]
+                s_ij = nx.einsum("bkrQh, bkKh->bkrQK", Qi, Kj)
+                s_ij = s_ij.astype(nx.float32) / nx.sqrt(head_dim, dtype=nx.float32)
+
+                mask_ij = combined_mask[..., i : i + q_len, j : j + k_len]
+                s_ij = nx.where(mask_ij, -1e9, s_ij)
+
+                p_ij = nx.where(mask_ij, 0.0, nx.exp(s_ij - Li))
+
+                dVj = nx.einsum("bkrQK,bkrQh->bkKh", p_ij, dOi)
+                dV[..., j:j+k_len, :] += dVj
+
+                Vj = V[..., j:j+k_len, :].astype(nx.float32)
+                d_p_ij = nx.einsum("bkrQh,bkKh->bkrQK", dOi, Vj)
+                d_s_ij = p_ij * (d_p_ij - Di) / nx.sqrt(head_dim, dtype=nx.float32)
+
+                dQ[..., i : i + q_len, :] += nx.einsum("bkrQK, bkKh->bkrQh", d_s_ij, Kj.astype(nx.float32))
+                dK[..., j : j + k_len, :] += nx.einsum("bkrQK,bkrQh->bkKh", d_s_ij, Qi.astype(nx.float32))
+
+            nx.eval(*[dQ, dK, dV])
+        dQ = dQ.astype(d_output.dtype)
+        dK = dK.astype(d_output.dtype)
+        dV = dV.astype(d_output.dtype)
+
+        return dQ, dK, dV
 
     def inference_forward(self, x, max_cache_len, freqs, quantization, cached_k, cached_v, position = 0):
         wqkv_scale, wo_scale, wqkv_bias, wo_bias = quantization #type:ignore
@@ -266,9 +330,6 @@ class AttentionFull:
             cached_v[:, :, -T:, :] = V
             active_K = cached_k
             active_V = cached_v
-            # cached_k = cached_k[:, :, -max_cache_len:, :]
-            # cached_v = cached_v[:, :, -max_cache_len:, :]
-
 
         Q = combined[..., :self.embed_dim]
         Q = Q.reshape(B, T, self.n_heads, self.head_dim).transpose(0,2,1,3)

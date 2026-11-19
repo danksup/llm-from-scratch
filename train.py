@@ -16,7 +16,7 @@ nx.set_seed(SEED)
 
 EPOCHS = 1
 EMBED_DIM = 512
-CONTEXT_SIZE = 4096
+CONTEXT_SIZE = 8192
 BATCH_SIZE = 2
 N_HEADS = 8
 N_KV_HEADS = max(1, N_HEADS // 2)
@@ -93,8 +93,8 @@ model_configs = {
         "ff_n_dense":1,
         "ff_jitter_eps":0.02,
         "ff_bias_gamma": 1e-3,
-        "attn_type":"chunked",
-        "attn_chunk_size":CONTEXT_SIZE//8,
+        "attn_type":"full",
+        # "attn_chunk_size":CONTEXT_SIZE//8,
         "attn_variant":"gqa",
         "attn_n_heads":N_HEADS,
         "attn_n_kv_heads":N_KV_HEADS,

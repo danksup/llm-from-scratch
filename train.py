@@ -16,7 +16,7 @@ nx.set_seed(SEED)
 
 EPOCHS = 1
 EMBED_DIM = 512
-CONTEXT_SIZE = 8192
+CONTEXT_SIZE = 4096
 BATCH_SIZE = 2
 N_HEADS = 8
 N_KV_HEADS = max(1, N_HEADS // 2)
@@ -24,7 +24,7 @@ N_EXPERTS = 8
 CF = 1.25
 VAL = 1
 TOP_K = 2
-MAX_STEP = 500
+MAX_STEP = 10
 
 CORPUS_PATH = "artifacts/dataloader/2025_26"
 TOKENIZER_PATH = "artifacts/tokenizer/tokenizer32768_1624612680len.tokenizer"
@@ -94,7 +94,7 @@ model_configs = {
         "ff_jitter_eps":0.02,
         "ff_bias_gamma": 1e-3,
         "attn_type":"full",
-        # "attn_chunk_size":CONTEXT_SIZE//8,
+        "attn_chunk_size":CONTEXT_SIZE//8,
         "attn_variant":"gqa",
         "attn_n_heads":N_HEADS,
         "attn_n_kv_heads":N_KV_HEADS,
@@ -107,8 +107,8 @@ model_configs = {
         "dropout_p":0.0
         },
     "block_overrides":{
-        # 3:{"attn_type":"full"},
-        # 7:{"attn_type":"full"},
+        3:{"attn_type":"full"},
+        8:{"attn_type":"full"},
       }
 }
 

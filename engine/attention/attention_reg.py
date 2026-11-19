@@ -187,7 +187,7 @@ class AttentionFull:
             oi = oi.astype(Q.dtype)
             outputs.append(oi)
             logsumexp = mi + nx.log(nx.maximum(li, 1e-9))
-            nx.eval(*[oi, logsumexp])
+            # nx.eval(*[oi, logsumexp])
             lse_list.append(logsumexp)
 
         outputs = nx.concatenate(outputs, axis=3)
@@ -291,7 +291,7 @@ class AttentionFull:
                 dQ[..., i : i + q_len, :] += nx.einsum("bkrQK, bkKh->bkrQh", d_s_ij, Kj.astype(nx.float32))
                 dK[..., j : j + k_len, :] += nx.einsum("bkrQK,bkrQh->bkKh", d_s_ij, Qi.astype(nx.float32))
 
-            nx.eval(*[dQ, dK, dV])
+            # nx.eval(*[dQ, dK, dV])
         dQ = dQ.astype(d_output.dtype)
         dK = dK.astype(d_output.dtype)
         dV = dV.astype(d_output.dtype)

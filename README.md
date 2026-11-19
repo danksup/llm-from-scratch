@@ -79,20 +79,25 @@ logs:
 - online softmax on `attention_reg.py`, inspired by FlashAttention (Dao et al., 2022), FlashAttention-2 (Dao, 2023), and Online normalizer calculation for softmax (Milakov & Gimelshein, 2018)
 
 ## Ongoing:
-- ram usage optimization
-- optimizing/cleanup/docs
+  - WSD scheduler
+  - ram usage optimization
+  - optimizing/cleanup/docs
 
 ## TODO (not in order):
-  
+  - gated attention
+
 #### Maybe:
-- parallelizing tokenizer word frequency counting
-- fill in the middle transformer
-- multimodal (or maybe bimodal image-in -> text first)
-- LoRA
-- GaLoRA
-- conversation memory
-- autograd
-- support exporting and importing other model(like gguf or huggingfacemodel or llama or etc)
+  - MLA
+  - sparse attention
+  - option to untie final projection from the embedding
+  - parallelizing tokenizer word frequency counting
+  - fill in the middle transformer
+  - multimodal (or maybe bimodal image-in -> text first)
+  - LoRA
+  - GaLoRA
+  - conversation memory
+  - autograd
+  - support exporting and importing other model(like gguf or huggingfacemodel or llama or etc)
 
 ## Bugs:
 ### Fixed

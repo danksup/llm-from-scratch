@@ -149,7 +149,7 @@ class AttentionFull:
         return output_projected, cache
 
     @staticmethod
-    def online_forward(Q, K, V, combined_mask, Bq=512, Bk=512):
+    def online_forward(Q, K, V, combined_mask, Bq=1024, Bk=1024):
         B, n_kv_heads, n_rep, T, head_dim = Q.shape
         outputs = []
         lse_list = []
@@ -251,7 +251,7 @@ class AttentionFull:
         return dx,dWqkv,dWo,Q_norm_d_gamma,K_norm_d_gamma
 
     @staticmethod
-    def online_backward(d_output, output, lse, Q, K, V, combined_mask, Bq=512, Bk=512):
+    def online_backward(d_output, output, lse, Q, K, V, combined_mask, Bq=1024, Bk=1024):
         B, n_kv_heads, n_rep, T, head_dim = output.shape
         D = nx.sum(d_output.astype(nx.float32)*output.astype(nx.float32), axis=-1, keepdims=True, dtype=nx.float32)
 

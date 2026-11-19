@@ -76,8 +76,8 @@ logs:
   - 8bit adam nov 7 2026
   - yarn (rope) nov 8 2026
   - muon nov 16 2026
-  - online softmax on `attention_reg.py`, inspired by FlashAttention (Dao et al., 2022), FlashAttention-2 (Dao, 2023), and Online normalizer calculation for softmax (Milakov & Gimelshein, 2018)
-  - WSD scheduler nov 16 2026 (not configurable for now)
+  - online softmax on `attention_reg.py`, inspired by FlashAttention (Dao et al., 2022), FlashAttention-2 (Dao, 2023), and Online normalizer calculation for softmax (Milakov & Gimelshein, 2018) nov 19 2026
+  - WSD scheduler nov 19 2026 (not configurable for now)
 
 ## Ongoing:
   - ram usage optimization

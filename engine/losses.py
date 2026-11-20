@@ -1,7 +1,7 @@
 from typing import Any
 import engine.backend as nx
 
-def fused_cross_entropy(input:Any, embedding:Any, target_logits:Any, chunk_size=512, is_training=True, gradient_scale:Any=1):
+def fused_cross_entropy(input:Any, embedding:Any, target_logits:Any, chunk_size=1024, is_training=True, gradient_scale:Any=1):
     B,T,D = input.shape
     N= B*T
     input = input.astype(embedding.dtype)
@@ -17,13 +17,17 @@ def fused_cross_entropy(input:Any, embedding:Any, target_logits:Any, chunk_size=
     for i in range(0, N, chunk_size):
         flat_target_ = flat_target[i:i+chunk_size]
         logit = flatten_input[i:i+chunk_size,...] @ embedding.T #C,V
+        logit = logit.astype(nx.float32)
         rows = nx.arange(logit.shape[0], dtype=nx.int32)
         correct_logits = logit[rows, flat_target_]
-        loss = nx.logsumexp(logit.astype(nx.float32), axis=-1)  - correct_logits.astype(nx.float32)
+        correct_logits = correct_logits[:,None]
+        lse_logits = nx.logsumexp(logit, axis=-1, keepdims=True)
+        loss = lse_logits  - correct_logits.astype(nx.float32)
         total_loss += nx.sum(loss, dtype=nx.float32)
 
         if is_training:
-            probs = nx.softmax(logit.astype(nx.float32))
+            # probs = nx.softmax(logit.astype(nx.float32))
+            probs =  nx.exp(logit - lse_logits)
             probs[rows, flat_target_] -= 1.0
             probs = probs * scale_factor
             probs = probs.astype(input.dtype)

@@ -3,7 +3,7 @@ from typing import Any, Callable
 
 import engine.backend as nx
 import engine.initializers as initializer
-from engine.activations import softmax_derivative, swish, swish_derivative
+from engine.activations import softmax_derivative, swish, fused_swish
 from helper.singleton import sleep
 
 C = nx.array(1e-4)
@@ -220,7 +220,9 @@ class FFN:
 
             if is_training and jitter_eps > 0:
                 scores += nx.uniform(-jitter_eps, jitter_eps,size=scores.shape, dtype=nx.float32)
-            z_loss = C * nx.mean(nx.square(nx.logsumexp(scores, -1)))
+
+            lse = nx.logsumexp(scores, -1, keepdims=True)
+            z_loss = C * nx.mean(nx.square(lse))
             router_prob = nx.softmax(scores + router_bias, -1) #(N, E)
 
             #top-k
@@ -274,15 +276,15 @@ class FFN:
             final_output += moe_output
 
             if not recompute_activation:
-                moe_cache = (router_prob, top_expert_indices, top_gates32, flatten_top_expert_indices, assignement_tokens, valid, safe_slot, expert_input, expert_gate, projected, hidden, raw_output, normalized_histogram, scores)
+                moe_cache = (router_prob, top_expert_indices, top_gates32, flatten_top_expert_indices, assignement_tokens, valid, safe_slot, expert_input, expert_gate, projected, hidden, raw_output, lse)
             else:
-                moe_cache = (router_prob, top_expert_indices, top_gates32, flatten_top_expert_indices, assignement_tokens, valid, safe_slot, None,         expert_gate, None,      None,   raw_output, normalized_histogram, scores)
+                moe_cache = (router_prob, top_expert_indices, top_gates32, flatten_top_expert_indices, assignement_tokens, valid, safe_slot, None,         expert_gate, None,      None,   raw_output, lse)
 
         else:
             moe_output = nx.zeros((B,T,D), dtype=x.dtype)
             z_loss = nx.zeros((), dtype=nx.float32)
             normalized_histogram = None
-            moe_cache = (None, None, None, None, None, None, None, None, None, None, None, None, None, None)
+            moe_cache = (None, None, None, None, None, None, None, None, None, None, None, None, None)
 
         if n_dense > 0:
             dense_projected = FFN.compute_projected(flatten_x, W_dense_combined, (dense_combined_scale, dense_combined_bias)) #(N, ns * 2Hs)
@@ -322,7 +324,7 @@ class FFN:
 
         hidden_width, D, n_experts, capacity_factor, top_k,dense_hidden_width, n_dense, _ = moe_configs
 
-        flatten_x, router_prob, top_expert_indices, top_gates32, flatten_top_expert_indices, assignement_tokens, valid, safe_slot, expert_input, expert_gate, projected, hidden, raw_output, normalized_histogram, scores, dense_projected, dense_hidden = caches
+        flatten_x, router_prob, top_expert_indices, top_gates32, flatten_top_expert_indices, assignement_tokens, valid, safe_slot, expert_input, expert_gate, projected, hidden, raw_output, lse_score, dense_projected, dense_hidden = caches
 
         dx_flat = nx.zeros((N,D), dtype=nx.float32)
 
@@ -340,8 +342,9 @@ class FFN:
             dense_gate_half = dense_projected[..., :dense_hidden_width * n_dense] #N,H
             dense_value_half = dense_projected[..., dense_hidden_width* n_dense:]
 
-            d_dense_gate_half = d_dense_hidden * dense_value_half * swish_derivative(dense_gate_half, dtype=dense_gate_half.dtype)
-            d_dense_value_half = d_dense_hidden * swish(dense_gate_half, dtype=dense_value_half.dtype)
+            dense_sw, dense_swd = fused_swish(dense_gate_half, dtype=dense_gate_half.dtype)
+            d_dense_gate_half = d_dense_hidden * dense_value_half * dense_swd
+            d_dense_value_half = d_dense_hidden * dense_sw
             d_dense_projected = nx.concatenate([d_dense_gate_half, d_dense_value_half], axis=-1) #N,2H
 
             dW_dense_combined = flatten_x.T @ d_dense_projected #D, 2H
@@ -387,8 +390,9 @@ class FFN:
             gate_half = projected[..., :hidden_width]
             value_half = projected[..., hidden_width:]
 
-            d_gate_half = d_hidden * value_half * swish_derivative(gate_half, dtype=gate_half.dtype)
-            d_value_half = d_hidden * swish(gate_half, dtype=value_half.dtype)
+            sw, swd = fused_swish(gate_half, dtype=gate_half.dtype)
+            d_gate_half = d_hidden * value_half * swd
+            d_value_half = d_hidden * sw
             d_projected = nx.concatenate([d_gate_half, d_value_half], axis=-1) #(E, C, 2H)  fp16
 
             del projected, d_hidden, gate_half, value_half, d_gate_half, d_value_half
@@ -423,14 +427,14 @@ class FFN:
             del coupling, gate_sum, token_rows, selected_prob, top_gates32, d_chosen_gate,d_selected_prob, assignement_tokens, flatten_top_expert_indices
 
             d_scores = softmax_derivative(router_prob, d_router_prob) #(N,E)
-            d_z_loss = ((2 * C) / N) * nx.logsumexp(scores, -1, keepdims=True) * router_prob
+            d_z_loss = ((2 * C) / N) * lse_score * router_prob
             d_scores += d_z_loss * gradient_scale
 
 
             d_router = flatten_x.astype(nx.float32).T @ d_scores #(D,E) #fp32
             d_x_router = d_scores @ router.T #(N, D)
 
-            del normalized_histogram,flatten_x, d_scores, router
+            del flatten_x, d_scores, router
 
             d_x_expert = d_x_expert.reshape(N, top_k, D)
             d_x_expert = nx.sum(d_x_expert, axis=1, dtype=nx.float32) #(N,D)

@@ -46,13 +46,13 @@ class SGD:
     def step_many(self, name_param_gradient_decay:list[Any]):
         group = {}
         for x in name_param_gradient_decay:
-            name,param,gradient,decay_bool, _ = x
-            shape = param.shape
+            name,param,gradient,decay_bool, _ , scale, bias= x
+            shape = gradient.shape
             grouping = (shape,decay_bool)
             if grouping not in group:
                 group[grouping] = []
 
-            group[grouping].append((name,param,gradient,decay_bool))
+            group[grouping].append((name,param,gradient,decay_bool, scale, bias))
         name_param_gradient_decay.clear()
 
         optimized = {}
@@ -61,7 +61,11 @@ class SGD:
             names = [i[0] for i in thing]
             gradients = nx.stack([i[2] for i in thing])
             if group_tuple not in self.state:
-                params = nx.stack([i[1] for i in thing])
+                params = []
+                for i in thing:
+                    param = self.dequantize_incoming_param(i[1], i[4], i[5])
+                    params.append(param)
+                params = nx.stack(params)
                 self.state[group_tuple] = {
                     "names": names.copy() ,
                 }
@@ -71,7 +75,11 @@ class SGD:
                 if self.use_master:
                     params = self.state[group_tuple]["master"]
                 else:
-                    params = nx.stack([i[1] for i in thing])
+                    params = []
+                    for i in thing:
+                        param = self.dequantize_incoming_param(i[1], i[4], i[5])
+                        params.append(param)
+                    params = nx.stack(params)
 
             thing.clear()
 
@@ -105,9 +113,10 @@ class SGD:
         return optimized
 
     def step(self, tup):
-        name, w, dw, decay, _ = tup
+        name, w, dw, decay, _, scale, bias = tup
 
         if name not in self.state:
+            w = self.dequantize_incoming_param(w, scale, bias)
             self.state[name] = {}
             if self.momentum > 0.0:
                 self.state[name]["v"] = nx.zeros_like(w, nx.float32)
@@ -115,6 +124,8 @@ class SGD:
         else:
             if self.use_master:
                 w = self.state[name]["master"]
+            else:
+                w = self.dequantize_incoming_param(w, scale, bias)
 
         weight_decay = self.weight_decay if decay else nx.float_32(0.0)
 
@@ -254,3 +265,7 @@ class SGD:
         sgd.state = built
 
         return sgd
+
+    @staticmethod
+    def dequantize_incoming_param(param, scale, bias):
+        return nx.dequantize(param, scale, bias, nx.float32).astype(nx.float32)

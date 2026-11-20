@@ -16,6 +16,7 @@ from helper.logger import Logger
 from helper.validate_and_raise import validate_choice
 from helper.singleton import sleep
 import warnings
+from engine.rope import precompute_freqs
 
 optimizers = optim.AdamW | optim.SGD | optim.RMSProp | optim.Muon
 
@@ -300,8 +301,12 @@ class Transformer:
         if total_dh is not None:
             current_grad[:,:-1] += total_dh
         self.rmsnorm_final.d_gamma = rmsnorm_final_d_gamma if getattr(self.rmsnorm_final, "d_gamma", None) is None else self.rmsnorm_final.d_gamma + rmsnorm_final_d_gamma
-        for block, masks,caches in zip(self.blocks[::-1], all_masks[::-1],all_caches[::-1]):
-            # current_grad = current_grad#.astype(self.dtype)
+        # for block, masks,caches in zip(self.blocks[::-1], all_masks[::-1],all_caches[::-1]):
+        for i in range(len(self.blocks)-1, -1, -1):
+            block = self.blocks[i]
+            caches = all_caches.pop()
+            masks = all_masks.pop()
+
             _,T,_ = current_grad.shape
             caches_attn, caches_ff, caches_rmsnorm1, caches_rmsnorm2 = caches
             mask1, mask2 = masks
@@ -464,15 +469,15 @@ class Transformer:
             if dw is not None:
                 param = getattr(layer, dw)
                 if dw == "d_lookup_table":
-                    summed += nx.sum(nx.square(param.astype(nx.float32) / microbatch_size))
+                    summed += nx.sum(nx.square(param.astype(nx.float32) ))
                 else:
-                    summed += nx.sum(nx.square(param.astype(nx.float32) / self.gradient_scale / microbatch_size))
+                    summed += nx.sum(nx.square(param.astype(nx.float32) / self.gradient_scale))
 
-        l2_norm = nx.sqrt(summed)
+        l2_norm = nx.sqrt(summed)  / microbatch_size
         raw_scale = max_norm / (l2_norm + nx.float_32(1e-6))
         scale = nx.minimum(nx.float_32(1.0), raw_scale)
 
-        return scale
+        return scale, l2_norm
 
     def network_non_finite_check(self, additional:dict[str,list[Any]]|None=None):
         texts = ""
@@ -632,16 +637,17 @@ class Transformer:
                         continue
 
             if microstep == microbatch_size:
+                gscale, l2_norm = self.gradient_clipping_factor(microbatch_size)
+
                 if self.check_non_finite:
-                    check = self.network_non_finite_check()
-                    if check[0]:
+                    if not nx.isfinite(l2_norm):
+                        check = self.network_non_finite_check()
                         if self.gradient_scale <= self.min_gradient_scale:
                             self.error_logger(msg="non-finite :(", log_msg="", category=FloatingPointError)
                         reset_and_halve_grad_scale()
                         self.warn_logger(msg=f"[NON-FINITE step: {step}] non finite loss at microstep {microstep}. \ngradient_scale is halved: {self.gradient_scale.item()}", log_msg=f"\n non-finite weights:\n{check[1]}", category= UserWarning)
                         continue
 
-                gscale = self.gradient_clipping_factor(microbatch_size)
 
                 optimizer.calculate_lr(max_step, total_epoch)
 
@@ -662,11 +668,11 @@ class Transformer:
 
                             exc = ["router", "gamma"]
 
-                            if self.quantized and w not in exc:
-                                quants = obj.get_quants(name=w) #type:ignore
-                                w_ = nx.dequantize(w_, scales=quants[0], biases=quants[1])
+                            scale = bias = None
+                            if self.quantized and w not in ["gamma", "router"]:
+                                 scale, bias = obj.get_quants(name=w) #type:ignore
 
-                            new_param = optimizer.step((full_w_name, w_.astype(nx.float32), dw_, decay, use_muon)) #type:ignore
+                            new_param = optimizer.step((full_w_name, w_, dw_, decay, use_muon, scale, bias)) #type:ignore
 
                             if self.quantized and w not in exc:
                                 new_param = new_param.astype(self.dtype)
@@ -694,11 +700,10 @@ class Transformer:
                             if w in ["lookup_table", "gamma", "router"] or w_.ndim <=1:
                                 decay = use_muon = False
 
+                            scale = bias = None
                             if self.quantized and w not in ["gamma", "router"]:
-                                quants = obj.get_quants(name=w) #type:ignore
-                                w_ = nx.dequantize(w_, scales=quants[0], biases=quants[1])
-
-                            all_network_params.append((full_w_name, w_.astype(nx.float32), dw_, decay, use_muon)) #type:ignore
+                                 scale, bias = obj.get_quants(name=w) #type:ignore
+                            all_network_params.append((full_w_name, w_, dw_, decay, use_muon, scale, bias)) #type:ignore
 
                     optimized = optimizer.step_many(all_network_params)
                     del all_network_params

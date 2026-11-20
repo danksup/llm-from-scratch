@@ -31,16 +31,16 @@ class RMSNorm:
         rms = nx.sqrt(nx.mean(x32 * x32, axis=-1, keepdims=True) + epsilon)
         normalized = x32 / rms
         rmsnorm = gamma * normalized
-        caches = (normalized, rms, x32)
+        caches = (normalized, rms)
         return rmsnorm, caches
 
     @staticmethod
     def _backward(gradient:nx.ArrayLike, caches:tuple[Any,...], gamma:nx.ArrayLike) -> tuple[nx.ArrayLike,...]:
-        normalized, rms, x32  = caches
+        normalized, rms  = caches
         axis = tuple(range(gradient.ndim - 1))
         d_gamma = nx.sum(gradient * normalized, axis=axis, dtype=nx.float32)
         dx_norm = gradient * gamma
-        d = x32.shape[-1]
+        d = normalized.shape[-1]
         sum_term = nx.sum(dx_norm * normalized, axis=-1, keepdims=True)
         dx = (dx_norm - (normalized / d) * sum_term) / rms
 

@@ -335,21 +335,24 @@ class AttentionChunked:
         Q = Q.reshape(B, T, self.n_heads, self.head_dim).transpose(0,2,1,3)
         Q, _ = RMSNorm._forward(Q, self.Q_norm.gamma, self.Q_norm.epsilon)
         Q = rope_forward(Q, freqs, position, freq_multiplier=self.theta, s=self.s, ori_T=self.ori_T, alpha=self.alpha, beta=self.beta)
-        Q = Q.astype(self.dtype)
+        Q = Q.reshape(B, self.n_kv_heads, self.n_rep, T, self.head_dim).astype(self.dtype)
 
-        repeats_cached_k = nx.repeat(active_K, self.n_rep, axis=1 )
-        repeats_cached_v = nx.repeat(active_V, self.n_rep, axis=1 )
+        # repeats_cached_k = nx.repeat(active_K, self.n_rep, axis=1 )
+        # repeats_cached_v = nx.repeat(active_V, self.n_rep, axis=1 )
+        repeats_cached_k = active_K[:,:,None,:,:]
+        repeats_cached_v = active_V[:,:,None,:,:] #B,n_kv_heads,1, T, headdim
 
-        scores = (Q @ repeats_cached_k.transpose(0,1,3,2)).astype(nx.float32) / nx.float_32(nx.sqrt(self.head_dim))
+        scores = (Q @ repeats_cached_k.transpose(0,1,2,4,3)).astype(nx.float32) / nx.float_32(nx.sqrt(self.head_dim))
         if T > 1:
             if position > 0:
                 scores[..., -T:] = nx.where(self.compute_mask_inference(T), -1e9, scores[..., -T:])
             else:
                 scores = nx.where(self.compute_mask_inference(T), -1e9, scores)
+
         weights = nx.softmax(scores)
         weights = weights.astype(x.dtype)
-        output = weights @ repeats_cached_v
-        output_concat = output.transpose(0, 2, 1, 3).reshape(B, T, self.embed_dim)
+        output = weights @ repeats_cached_v #B, n_kv_heads, n_rep, T, headdim
+        output_concat = output.transpose(0, 3, 1, 2, 4).reshape(B, T, self.embed_dim)
 
         gate_logits = nx.mul(x, self.Wg, wg_scale, wg_bias) #B,T,D
         s = sigmoid(gate_logits.astype(nx.float32), nx.float32)

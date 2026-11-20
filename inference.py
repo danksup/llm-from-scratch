@@ -11,7 +11,7 @@ import random
 nx.set_seed(random.randrange(0,99999))
 
 tokenizer = Tokenizer.load("artifacts/tokenizer/tokenizer32768_1624612680len.tokenizer")
-session = Session.load("artifacts/sessions/session_(199026648, 95172480)_param_1_epochs_weight_only_a6d5259f-01e4-4747-8d1d-8a03d1da628c.safetensors", tokenizer)
+session = Session.load("artifacts/sessions/session_checkpoint_latest_0e64fc90-7fc2-426f-b06f-ec4c9e8e3823.safetensors", tokenizer)
 
 configs = {
     "seed":12345,
@@ -25,7 +25,7 @@ configs = {
 }
 
 inference = Inference(session, **configs)
-context = "Artificial Intelligence"
+context = "Attention"
 print(configs)
 print(f"input: {context}")
 

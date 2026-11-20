@@ -137,13 +137,7 @@ class AttentionFull:
         Q = Q.reshape(B,n_kv_heads, n_rep, T, head_dim).astype(x.dtype)
         K = K.astype(x.dtype)
 
-        if doc_id is not None:
-            combined_mask = causal_mask | (doc_id[:,None,None,:] != doc_id[:,None,:,None])
-            combined_mask = combined_mask[:,:,None,:,:]
-        else:
-            combined_mask = causal_mask
-
-        output, lse = AttentionFull.online_forward(Q, K, V, combined_mask, 1024, 1024)
+        output, lse = AttentionFull.online_forward(Q, K, V, causal_mask, doc_id, 1024, 1024)
 
         output = output.reshape(B, -1, T, head_dim)
         output_concat = output.transpose(0, 2, 1, 3).reshape(B, T, embed_dim)
@@ -155,12 +149,12 @@ class AttentionFull:
 
         output_projected = nx.mul(gated, Wo, wo_scale, wo_bias) #BTD
 
-        cache =  (x, Q, Q_norm_caches, K, K_norm_caches, V, output_concat, combined_mask, lse, gate)
+        cache =  (x, Q, Q_norm_caches, K, K_norm_caches, V, output_concat, causal_mask, doc_id, lse, gate)
 
         return output_projected, cache
 
     @staticmethod
-    def online_forward(Q, K, V, combined_mask, Bq=1024, Bk=1024):
+    def online_forward(Q, K, V, causal_mask, doc_id, Bq=1024, Bk=1024):
         B, n_kv_heads, n_rep, T, head_dim = Q.shape
         outputs = []
         lse_list = []
@@ -181,7 +175,12 @@ class AttentionFull:
                 s_ij = nx.einsum("bkrQh, bkKh->bkrQK", Qi, Kj)
                 s_ij = s_ij.astype(nx.float32) / nx.sqrt(head_dim, dtype=nx.float32)
 
-                mask_ij = combined_mask[..., i : i + q_len, j : j + k_len]
+                if doc_id is not None:
+                    doc_id_k = doc_id[:, j : j + k_len]
+                    doc_id_q = doc_id[:, i : i + q_len]
+                    mask_ij = causal_mask[..., i : i + q_len, j : j + k_len] | (doc_id_k[:,None,None,None,:] != doc_id_q[:,None,None,:, None])
+                else:
+                    mask_ij = causal_mask[..., i : i + q_len, j : j + k_len]
                 s_ij = nx.where(mask_ij, -1e9, s_ij)
 
                 m_new = nx.maximum(nx.max(s_ij, axis=-1, keepdims=True), mi)
@@ -190,7 +189,7 @@ class AttentionFull:
                 li = li * alpha + nx.sum(p_ij, axis=-1, keepdims=True)
 
                 vj = V[..., j : j + k_len, :]
-                vr = nx.einsum("bkrQK, bkKh->bkrQh", p_ij, vj.astype(nx.float32))
+                vr = nx.einsum("bkrQK, bkKh->bkrQh", p_ij.astype(Q.dtype), vj.astype(Q.dtype))
                 oi = vr.astype(nx.float32) + oi*alpha
                 mi = m_new
 
@@ -213,7 +212,7 @@ class AttentionFull:
 
         wqkv_scale, wo_scale, wg_scale, wqkv_bias, wo_bias, wg_bias = quantization#type:ignore
 
-        x, Q, Q_norm_caches, K, K_norm_caches, V, output_concat, combined_mask, lse, gate = caches
+        x, Q, Q_norm_caches, K, K_norm_caches, V, output_concat, causal_mask, doc_id, lse, gate = caches
 
         B, T, _ = x.shape
 
@@ -224,7 +223,7 @@ class AttentionFull:
         d_output = d_output.reshape(B, n_kv_heads, n_rep, T, head_dim)
 
         output = output_concat.reshape(B, T, n_kv_heads, n_rep, head_dim).transpose(0,2,3,1,4)
-        dQ, dK, dV = AttentionFull.online_backward(d_output, output, lse, Q, K, V, combined_mask, 1024, 1024)
+        dQ, dK, dV = AttentionFull.online_backward(d_output, output, lse, Q, K, V, causal_mask, doc_id, 1024, 1024)
 
         del Q, K, V, d_output, d_output_concat
 
@@ -266,11 +265,12 @@ class AttentionFull:
         return dx,dWqkv,dWo, dWg, Q_norm_d_gamma,K_norm_d_gamma
 
     @staticmethod
-    def online_backward(d_output, output, lse, Q, K, V, combined_mask, Bq=1024, Bk=1024):
+    def online_backward(d_output, output, lse, Q, K, V, causal_mask, doc_id, Bq=1024, Bk=1024):
         B, n_kv_heads, n_rep, T, head_dim = output.shape
         D = nx.sum(d_output.astype(nx.float32)*output.astype(nx.float32), axis=-1, keepdims=True, dtype=nx.float32)
 
-        dQ = nx.zeros((B,n_kv_heads, n_rep, T, head_dim), nx.float32)
+        # dQ = nx.zeros((B,n_kv_heads, n_rep, T, head_dim), nx.float32)
+        dQ = []
         dK = nx.zeros((B,n_kv_heads, T, head_dim), nx.float32)
         dV = nx.zeros((B,n_kv_heads, T, head_dim), nx.float32)
 
@@ -278,9 +278,11 @@ class AttentionFull:
             q_len = min(Bq, T - i)
             Qi = Q[...,i:i+q_len, :]
             dOi = d_output[..., i:i+q_len, :]
-            dOi = dOi.astype(nx.float32)
+            dOi = dOi.astype(Q.dtype)
             Li = lse[..., i:i+q_len, :]
             Di = D[..., i : i + q_len, :]
+
+            dQi = nx.zeros((B,n_kv_heads, n_rep, q_len, head_dim), nx.float32)
 
             for j in range(0, T, Bk):
                 if j >= i + q_len:
@@ -291,23 +293,33 @@ class AttentionFull:
                 s_ij = nx.einsum("bkrQh, bkKh->bkrQK", Qi, Kj)
                 s_ij = s_ij.astype(nx.float32) / nx.sqrt(head_dim, dtype=nx.float32)
 
-                mask_ij = combined_mask[..., i : i + q_len, j : j + k_len]
+                if doc_id is not None:
+                    doc_id_k = doc_id[:, j : j + k_len]
+                    doc_id_q = doc_id[:, i : i + q_len]
+                    mask_ij = causal_mask[..., i : i + q_len, j : j + k_len] | (doc_id_k[:,None,None,None,:] != doc_id_q[:,None,None,:, None])
+                else:
+                    mask_ij = causal_mask[..., i : i + q_len, j : j + k_len]
+
                 s_ij = nx.where(mask_ij, -1e9, s_ij)
 
                 p_ij = nx.where(mask_ij, 0.0, nx.exp(s_ij - Li))
 
-                dVj = nx.einsum("bkrQK,bkrQh->bkKh", p_ij, dOi)
+                dVj = nx.einsum("bkrQK,bkrQh->bkKh", p_ij.astype(Q.dtype), dOi)
                 dV[..., j:j+k_len, :] += dVj
 
-                Vj = V[..., j:j+k_len, :].astype(nx.float32)
+                Vj = V[..., j:j+k_len, :].astype(Q.dtype)
                 d_p_ij = nx.einsum("bkrQh,bkKh->bkrQK", dOi, Vj)
                 d_s_ij = p_ij * (d_p_ij - Di) / nx.sqrt(head_dim, dtype=nx.float32)
 
-                dQ[..., i : i + q_len, :] += nx.einsum("bkrQK, bkKh->bkrQh", d_s_ij, Kj.astype(nx.float32))
-                dK[..., j : j + k_len, :] += nx.einsum("bkrQK,bkrQh->bkKh", d_s_ij, Qi.astype(nx.float32))
+                # dQ[..., i : i + q_len, :] += nx.einsum("bkrQK, bkKh->bkrQh", d_s_ij, Kj.astype(nx.float32))
+                d_s_ij = d_s_ij.astype(Q.dtype)
+                dQi += nx.einsum("bkrQK, bkKh->bkrQh", d_s_ij, Kj.astype(Q.dtype))
+                dK[..., j : j + k_len, :] += nx.einsum("bkrQK,bkrQh->bkKh", d_s_ij, Qi.astype(Q.dtype))
 
             # nx.eval(*[dQ, dK, dV])
-        dQ = dQ.astype(d_output.dtype)
+            dQ.append(dQi)
+
+        dQ = nx.concatenate(dQ, axis=3).astype(d_output.dtype)
         dK = dK.astype(d_output.dtype)
         dV = dV.astype(d_output.dtype)
 
@@ -349,21 +361,24 @@ class AttentionFull:
         Q = Q.reshape(B, T, self.n_heads, self.head_dim).transpose(0,2,1,3)
         Q, _ = RMSNorm._forward(Q, self.Q_norm.gamma, self.Q_norm.epsilon)
         Q = rope_forward(Q, freqs, position, freq_multiplier=self.theta, s=self.s, ori_T=self.ori_T, alpha=self.alpha, beta=self.beta)
-        Q = Q.astype(self.dtype)
+        Q = Q.reshape(B, self.n_kv_heads, self.n_rep, T, self.head_dim).astype(self.dtype)
 
-        repeats_cached_k = nx.repeat(active_K, self.n_rep, axis=1 )
-        repeats_cached_v = nx.repeat(active_V, self.n_rep, axis=1 )
+        # repeats_cached_k = nx.repeat(active_K, self.n_rep, axis=1 )
+        # repeats_cached_v = nx.repeat(active_V, self.n_rep, axis=1 )
+        repeats_cached_k = active_K[:,:,None,:,:]
+        repeats_cached_v = active_V[:,:,None,:,:]
 
-        scores = (Q @ repeats_cached_k.transpose(0,1,3,2)).astype(nx.float32) / nx.float_32(nx.sqrt(self.head_dim))
+        scores = (Q @ repeats_cached_k.transpose(0,1,2,4,3)).astype(nx.float32) / nx.float_32(nx.sqrt(self.head_dim))
         if T > 1:
             if position > 0:
                 scores[..., -T:] = nx.where(self.compute_mask(T), -1e9, scores[..., -T:])
             else:
                 scores = nx.where(self.compute_mask(T), -1e9, scores)
+
         weights = nx.softmax(scores)
         weights = weights.astype(x.dtype)
-        output = weights @ repeats_cached_v
-        output_concat = output.transpose(0, 2, 1, 3).reshape(B, T, self.embed_dim)
+        output = weights @ repeats_cached_v #B, n_kv_heads, n_rep, T, headdim
+        output_concat = output.transpose(0, 3, 1, 2, 4).reshape(B, T, self.embed_dim)
 
         gate_logits = nx.mul(x, self.Wg, wg_scale, wg_bias) #B,T,D
         s = sigmoid(gate_logits.astype(nx.float32), nx.float32)

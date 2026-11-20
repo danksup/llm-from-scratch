@@ -79,14 +79,14 @@ class Muon:
         no_muon = []
         m_dtype = nx.float32 if not self.eight_bit else nx.int8
         for x in name_param_gradient_decay:
-            name,param,gradient,decay_bool, use_muon = x
+            name,param,gradient,decay_bool, use_muon, scale, bias = x
             if use_muon:
-                shape = param.shape
+                shape = gradient.shape
                 grouping = (shape,decay_bool)
                 if grouping not in group:
                     group[grouping] = []
 
-                group[grouping].append((name,param,gradient,decay_bool, use_muon))
+                group[grouping].append((name,param,gradient,decay_bool, use_muon, scale, bias))
             else:
                 no_muon.append(x)
 
@@ -99,7 +99,11 @@ class Muon:
             gradients = nx.stack([i[2] for i in thing])
 
             if group_tuple not in self.state:
-                params = nx.stack([i[1] for i in thing])
+                params = []
+                for i in thing:
+                    param = self.dequantize_incoming_param(i[1], i[5], i[6])
+                    params.append(param)
+                params = nx.stack(params)
                 self.state[group_tuple] = {
                     "names": names.copy() ,
                     "m": nx.zeros_like(params, m_dtype),
@@ -109,7 +113,11 @@ class Muon:
                 if self.use_master:
                     params = self.state[group_tuple]["master"]
                 else:
-                    params = nx.stack([i[1] for i in thing])
+                    params = []
+                    for i in thing:
+                        param = self.dequantize_incoming_param(i[1], i[5], i[6])
+                        params.append(param)
+                    params = nx.stack(params)
 
             state_shape = self.state[group_tuple]
             thing.clear()
@@ -140,11 +148,13 @@ class Muon:
         return optimized | fallback_optimized
 
     def step(self, tup):
-        name, w, dw, decay, use_muon = tup
+        name, w, dw, decay, use_muon, scale, bias = tup
         if use_muon:
             m_dtype = nx.float32 if not self.eight_bit else nx.int8
 
             if name not in self.state:
+                w = self.dequantize_incoming_param(w, scale, bias)
+
                 self.state[name] = {
                     "m": nx.zeros_like(w, m_dtype),
                     "m_scales": None,
@@ -152,6 +162,9 @@ class Muon:
             else:
                 if self.use_master:
                     w = self.state[name]["master"]
+                else:
+                    w = self.dequantize_incoming_param(w, scale, bias)
+
 
 
             state_shape = self.state[name]
@@ -346,3 +359,7 @@ class Muon:
         muon.state = built
 
         return muon
+
+    @staticmethod
+    def dequantize_incoming_param(param, scale, bias):
+        return nx.dequantize(param, scale, bias, nx.float32).astype(nx.float32)

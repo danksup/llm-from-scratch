@@ -51,15 +51,15 @@ class AdamW:
         m_dtype = nx.float32 if not self.eight_bit else nx.int8
         v_dtype = nx.float32 if not self.eight_bit else nx.uint8
         for x in name_param_gradient_decay:
-            name,param,gradient,decay_bool, _ = x
-            shape = param.shape
+            name,param,gradient,decay_bool, _, scale, bias = x
+            shape = gradient.shape
             if self.__all_not_decayed:
                 decay_bool = False
             grouping = (shape,decay_bool)
             if grouping not in group:
                 group[grouping] = []
 
-            group[grouping].append((name,param,gradient,decay_bool))
+            group[grouping].append((name,param,gradient,decay_bool, scale, bias))
 
         name_param_gradient_decay.clear()
 
@@ -71,7 +71,12 @@ class AdamW:
             gradients = nx.stack([i[2] for i in thing])
 
             if group_tuple not in self.state:
-                params = nx.stack([i[1] for i in thing])
+                params = []
+                for i in thing:
+                    param = self.dequantize_incoming_param(i[1], i[4], i[5])
+                    params.append(param)
+
+                params = nx.stack(params)
                 self.state[group_tuple] = {
                     "names": names.copy() ,
                     "m": nx.zeros_like(params, m_dtype),
@@ -83,7 +88,11 @@ class AdamW:
                 if self.use_master:
                     params = self.state[group_tuple]["master"]
                 else:
-                    params = nx.stack([i[1] for i in thing])
+                    params = []
+                    for i in thing:
+                        param = self.dequantize_incoming_param(i[1], i[4], i[5])
+                        params.append(param)
+                    params = nx.stack(params)
 
             state_shape = self.state[group_tuple]
             thing.clear()
@@ -113,13 +122,14 @@ class AdamW:
         return optimized
 
     def step(self, tup):
-        name, w, dw, decay, _ = tup
+        name, w, dw, decay, _, scale, bias = tup
         if self.__all_not_decayed:
             decay = False
 
         m_dtype = nx.float32 if not self.eight_bit else nx.int8
         v_dtype = nx.float32 if not self.eight_bit else nx.uint8
         if name not in self.state:
+            w = self.dequantize_incoming_param(w, scale, bias)
             self.state[name] = {
                 "m": nx.zeros_like(w, m_dtype),
                 "v": nx.zeros_like(w, v_dtype),
@@ -129,6 +139,8 @@ class AdamW:
         else:
             if self.use_master:
                 w = self.state[name]["master"]
+            else:
+                w = self.dequantize_incoming_param(w, scale, bias)
 
         state_shape = self.state[name]
         m_v_t = (state_shape["m"], state_shape["v"], self.state["t"], state_shape.get("m_scales", None), state_shape.get("v_scales", None),)
@@ -279,3 +291,7 @@ class AdamW:
         adamw.state = built
 
         return adamw
+
+    @staticmethod
+    def dequantize_incoming_param(param, scale, bias):
+        return nx.dequantize(param, scale, bias, nx.float32).astype(nx.float32)

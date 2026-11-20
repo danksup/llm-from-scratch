@@ -47,15 +47,15 @@ class RMSProp:
     def step_many(self, name_param_gradient_decay:list[Any]) -> dict[Any,Any]:
         group = {}
         for x in name_param_gradient_decay:
-            name,param,gradient,decay_bool, _ = x
-            shape = param.shape
+            name,param,gradient,decay_bool, _, scale, bias = x
+            shape = gradient.shape
             if self.__all_not_decayed:
                 decay_bool = False
             grouping = (shape,decay_bool)
             if grouping not in group:
                 group[grouping] = []
 
-            group[grouping].append((name,param,gradient,decay_bool))
+            group[grouping].append((name,param,gradient,decay_bool, scale, bias))
 
         name_param_gradient_decay.clear()
 
@@ -66,7 +66,12 @@ class RMSProp:
             gradients = nx.stack([i[2] for i in thing])
 
             if group_tuple not in self.state:
-                params = nx.stack([i[1] for i in thing])
+                params = []
+                for i in thing:
+                    param = self.dequantize_incoming_param(i[1], i[4], i[5])
+                    params.append(param)
+                params = nx.stack(params)
+
                 self.state[group_tuple] = {
                     "names": names.copy() ,
                     "v": nx.zeros_like(params,  nx.float32),
@@ -77,7 +82,11 @@ class RMSProp:
                 if self.use_master:
                     params = self.state[group_tuple]["master"]
                 else:
-                    params = nx.stack([i[1] for i in thing])
+                    params = []
+                    for i in thing:
+                        param = self.dequantize_incoming_param(i[1], i[4], i[5])
+                        params.append(param)
+                    params = nx.stack(params)
             thing.clear()
 
             state_shape = self.state[group_tuple]
@@ -111,11 +120,13 @@ class RMSProp:
         return optimized
 
     def step(self, tup):
-        name, w, dw, decay, _ = tup
+        name, w, dw, decay, _, scale, bias = tup
         if self.__all_not_decayed:
             decay = False
 
         if name not in self.state:
+            w = self.dequantize_incoming_param(w, scale, bias)
+
             self.state[name] = {
                 "v": nx.zeros_like(w, nx.float32),
             }
@@ -125,6 +136,8 @@ class RMSProp:
         else:
             if self.use_master:
                 w = self.state[name]["master"]
+            else:
+                w = self.dequantize_incoming_param(w, scale, bias)
 
         state_shape = self.state[name]
         weight_decay = self.weight_decay if decay else nx.float_32(0.0)
@@ -276,3 +289,7 @@ class RMSProp:
         adamw.state = built
 
         return adamw
+
+    @staticmethod
+    def dequantize_incoming_param(param, scale, bias):
+        return nx.dequantize(param, scale, bias, nx.float32).astype(nx.float32)

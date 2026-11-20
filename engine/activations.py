@@ -37,6 +37,14 @@ def sigmoid_derivative(x:Any):
     s = sigmoid(x)
     return s * (1.0 - s)
 
+def fused_swish(x:Any, dtype=None) -> Any:
+    if dtype is None:
+        dtype = x.dtype
+    s = sigmoid(x, dtype=dtype)
+    sw = x * s
+    dsw = s + x * s * (1.0 - s)
+    return sw, dsw
+
 def swish(x:Any, dtype=None) -> Any:
     """
     f(x) = x * sigmoid(Bx)\n

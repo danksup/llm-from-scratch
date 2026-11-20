@@ -1,3 +1,4 @@
+from engine.activations import sigmoid
 import engine.backend as nx
 from engine.rope import rope_forward, rope_inverse
 from typing import Any, Callable
@@ -21,7 +22,6 @@ class AttentionChunked:
         head_dim = embed_dim // n_heads
         self.head_dim = head_dim
         assert self.head_dim % 2 == 0,  f"rope needs headdim to be multiple of 2, get headdim of {self.head_dim} instead. math: embed_dim // n_heads -> {embed_dim} // {n_heads} = {embed_dim//n_heads}"
-
         self.chunk_size = chunk_size
         self.dtype = dtype
 
@@ -38,11 +38,12 @@ class AttentionChunked:
 
         self.quantized = quantized
 
-        self.scales = (None, None)
-        self.biases = (None,None)
+        self.scales = (None, None, None)
+        self.biases = (None,None, None)
 
         wqkv_shape = embed_dim + 2 * n_kv_heads * self.head_dim, embed_dim
         wo_shape = embed_dim,embed_dim
+        wg_shape = embed_dim,embed_dim
 
         self.Q_norm = Q_norm
         self.K_norm = K_norm
@@ -50,6 +51,7 @@ class AttentionChunked:
         self.quant_map = {
             "Wqkv": 0,
             "Wo": 1,
+            "Wg": 2,
         }
         if init:
             self.Wqkv = initializer(wqkv_shape, dtype=dtype)
@@ -58,28 +60,37 @@ class AttentionChunked:
             self.Wo = initializer(wo_shape, dtype=dtype)
             assert nx.isfinite(self.Wo).all(), f"non-finite detected when initializing attentipn.Wo."
 
+            self.Wg = initializer(wg_shape, dtype=dtype)
+            assert nx.isfinite(self.Wg).all(), f"non-finite detected when initializing attentipn.Wg."
+
             if quantized:
                 self.Wqkv, wqkv_scale, wqkv_bias = nx.quantize(self.Wqkv)
                 self.Wo, wo_scale, wo_bias = nx.quantize(self.Wo)
-                self.scales = (wqkv_scale, wo_scale)
-                self.biases = (wqkv_bias, wo_bias)
+                self.Wg, wg_scale, wg_bias = nx.quantize(self.Wg)
+
+                self.scales = (wqkv_scale, wo_scale, wg_scale)
+                self.biases = (wqkv_bias, wo_bias,wg_bias)
         else:
             self.Wqkv = nx.empty(wqkv_shape)
             self.Wo = nx.empty(wo_shape)
+            self.Wg = nx.empty(wg_shape)
 
 
         self.dWqkv = nx.zeros(wqkv_shape)
         self.dWo = nx.zeros(wo_shape)
+        self.dWg = nx.zeros(wg_shape)
 
     def zeroes_gradient(self):
         self.dWqkv = nx.zeros_like(self.dWqkv)
         self.dWo = nx.zeros_like(self.dWo)
+        self.dWg = nx.zeros_like(self.dWg)
         self.Q_norm.zeroes_gradient()
         self.K_norm.zeroes_gradient()
 
-    def set_gradient(self, dwqkv, dwo, Q_d_gamma, K_d_gamma):
+    def set_gradient(self, dwqkv, dwo, dwg, Q_d_gamma, K_d_gamma):
         self.dWqkv += dwqkv
         self.dWo += dwo
+        self.dWg += dwg
         self.Q_norm.set_gradient(Q_d_gamma)
         self.K_norm.set_gradient(K_d_gamma)
 
@@ -110,14 +121,10 @@ class AttentionChunked:
     @staticmethod
     def _forward(x:nx.ArrayLike, causal_mask:nx.ArrayLike,doc_id, configs:tuple[Any,...], params:tuple[Any,...], quantization, *, recompute_activation=True):
         embed_dim, n_kv_heads, n_heads, n_rep, head_dim, chunk_size,theta, s,ori_T, alpha, beta, freqs = configs
-        Wqkv, Wo, Q_norm_gamma, K_norm_gamma = params
+        Wqkv, Wo, Wg, Q_norm_gamma, K_norm_gamma = params
+        wqkv_scale, wo_scale, wg_scale, wqkv_bias, wo_bias, wg_bias = quantization
 
-        wqkv_scale, wo_scale, wqkv_bias, wo_bias = quantization
-
-        if wqkv_scale is not None:
-            combined = nx.quantized_matmul(x, Wqkv, wqkv_scale,wqkv_bias, transpose=True)
-        else:
-            combined = x @ Wqkv.T
+        combined = nx.mul(x, Wqkv, wqkv_scale, wqkv_bias, transpose=True)
 
         Q = combined[..., :embed_dim] #shape: (B, T, D)
         K = combined[..., embed_dim: embed_dim + (n_kv_heads * head_dim)]  #shape: (B, T, n_kv_heads * H)
@@ -184,44 +191,41 @@ class AttentionChunked:
         output_unchunked = output_unchunked[:,:,:T,:] #(B, n_heads, T, Dh)
         output_unchunked = output_unchunked.transpose(0,2,1,3).reshape(B,T,-1)
 
-        if wo_scale is not None:
-            output_projected = nx.quantized_matmul(output_unchunked, Wo, wo_scale, wo_bias) #B,T,D #dtype
-        else:
-            output_projected = output_unchunked @ Wo
+        gate_logits = nx.mul(x, Wg, wg_scale, wg_bias) #B,T,D
+        gate = sigmoid(gate_logits.astype(nx.float32), nx.float32)
+        gate = gate.astype(x.dtype)
+        gated = output_unchunked * gate
+
+        output_projected = nx.mul(gated, Wo, wo_scale, wo_bias)
 
         if not recompute_activation:
-            cache = (x, Q, K_chunked, V_chunked, Q_norm_caches,K_norm_caches, weights_softmax, output_unchunked)
+            cache = (x, Q, K_chunked, V_chunked, Q_norm_caches,K_norm_caches, weights_softmax, output_unchunked,                gate)
         else:
-            cache = (x, Q, K_chunked, V_chunked, Q_norm_caches,K_norm_caches, output_unchunked, combined_mask)
+            cache = (x, Q, K_chunked, V_chunked, Q_norm_caches,K_norm_caches,                  output_unchunked, combined_mask, gate)
 
         return output_projected, cache
 
     @staticmethod
     def _backward(gradient:nx.ArrayLike, caches:tuple[Any,...], attn_configs:tuple[Any,...], attn_params: tuple[Any,...], quantization, *, recompute_activation=True) :#-> tuple[nx.ArrayLike,...]:
         embed_dim, n_kv_heads, n_heads, n_rep, head_dim, chunk_size, theta,s,ori_T, alpha,beta, freqs = attn_configs
-        Wqkv, Wo, Q_norm_gamma, K_norm_gamma = attn_params
+        Wqkv, Wo, Wg, Q_norm_gamma, K_norm_gamma = attn_params
         B, T, D = gradient.shape
 
         if not recompute_activation:
-            x, Q, K_chunked, V_chunked, Q_norm_caches,K_norm_caches, weights_softmax, output_unchunked = caches
+            x, Q, K_chunked, V_chunked, Q_norm_caches,K_norm_caches, weights_softmax, output_unchunked, gate = caches
         else:
-            x, Q, K_chunked, V_chunked, Q_norm_caches,K_norm_caches, output_unchunked, combined_mask = caches
+            x, Q, K_chunked, V_chunked, Q_norm_caches,K_norm_caches, output_unchunked, combined_mask, gate = caches
 
             weights_softmax = AttentionChunked.compute_weights_softmax(combined_mask, head_dim, Q, K_chunked)
 
-        wqkv_scale, wo_scale, wqkv_bias, wo_bias = quantization
-
-        if wqkv_scale is not None :
-            Wqkv = nx.dequantize(Wqkv, wqkv_scale,wqkv_bias, x.dtype)
+        wqkv_scale, wo_scale, wg_scale, wqkv_bias, wo_bias, wg_bias  = quantization
 
         chunk_size = min(chunk_size, T-1)
 
-        if wo_scale is not None:
-            d_output_unchunked = nx.quantized_matmul(gradient, Wo, wo_scale, wo_bias, True)
-        else:
-            d_output_unchunked = gradient @ Wo.T #(B,T,D)
+        d_gated = nx.mul(gradient, Wo, wo_scale, wo_bias, True)
+        d_output_concat = (d_gated * gate).astype(gradient.dtype)
 
-        d_output_unchunked = d_output_unchunked.reshape(B,T, n_heads, head_dim).transpose(0,2,1,3)
+        d_output_unchunked = d_output_concat.reshape(B,T, n_heads, head_dim).transpose(0,2,1,3)
 
         remainder = (chunk_size - (T % chunk_size)) % chunk_size
         if remainder > 0:
@@ -236,7 +240,6 @@ class AttentionChunked:
         d_output_chunked = d_output_chunked.reshape(B, n_kv_heads, n_rep,n_chunk, chunk_size, head_dim)
 
         d_weights = d_output_chunked @ V_chunked.transpose(0,1,2,3,5,4)
-        # d_weights = nx.einsum("bkrcwd,bkcxd->bkrcwx", d_output_chunked, V_chunked)
 
         weights_softmax_6d = weights_softmax.astype(gradient.dtype).reshape(B, n_kv_heads,n_rep, n_chunk, chunk_size, 2*chunk_size)
         d_chunked_V = weights_softmax_6d.transpose(0,1,2,3,5,4) @ d_output_chunked
@@ -278,20 +281,29 @@ class AttentionChunked:
         X = x.reshape(-1, embed_dim)
         dWqkv = DQKV.T @ X
 
-        H = output_unchunked.reshape(-1, embed_dim)
+        H = output_unchunked * gate
+        H = H.reshape(-1, embed_dim)
         G = gradient.reshape(-1, embed_dim)
 
-        dWo = H.T @ G
-        dx = dQKV @ Wqkv
+        dWo = H.T @ G #D, D
+        dx = nx.mul(dQKV, Wqkv, wqkv_scale, wqkv_bias)
 
-        return dx,dWqkv,dWo, Q_norm_d_gamma, K_norm_d_gamma
+        dg = d_gated.astype(nx.float32) * output_unchunked.astype(nx.float32)
+        gate = gate.astype(nx.float32)
+        dz = dg * gate * (1 - gate)
+        dz = dz.astype(x.dtype)
+        dx_gate = nx.mul(dz, Wg, wg_scale, wg_bias, True)
+        dWg = X.T @ dz.reshape(-1, D) #D,D
+
+        dx += dx_gate
+
+        return dx,dWqkv,dWo, dWg, Q_norm_d_gamma, K_norm_d_gamma
 
     def inference_forward(self, x, max_cache_len, freqs, quantization, cached_k, cached_v, position = 0):
-        wqkv_scale, wo_scale, wqkv_bias, wo_bias = quantization #type:ignore
-        if wqkv_scale is not None:
-            combined = nx.quantized_matmul(x, self.Wqkv, wqkv_scale,wqkv_bias, transpose=True)
-        else:
-            combined =  x @ self.Wqkv.T  # dtype
+        wqkv_scale, wo_scale, wg_scale, wqkv_bias, wo_bias, wg_bias = quantization #type:ignore
+
+        combined = nx.mul(x, self.Wqkv, wqkv_scale, wqkv_bias, True)
+
         B, T, _ = x.shape
 
         K = combined[..., self.embed_dim: self.embed_dim + (self.n_kv_heads * self.head_dim)]
@@ -339,10 +351,12 @@ class AttentionChunked:
         output = weights @ repeats_cached_v
         output_concat = output.transpose(0, 2, 1, 3).reshape(B, T, self.embed_dim)
 
-        if wo_scale is not None:
-            output_projected = nx.quantized_matmul(output_concat, self.Wo, wo_scale, wo_bias) #BTD
-        else:
-            output_projected = output_concat @ self.Wo #type:ignore
+        gate_logits = nx.mul(x, self.Wg, wg_scale, wg_bias) #B,T,D
+        s = sigmoid(gate_logits.astype(nx.float32), nx.float32)
+        s = s.astype(x.dtype)
+        gated = output_concat * s
+
+        output_projected = nx.mul(gated, self.Wo, wo_scale, wo_bias)
 
         return output_projected, cached_k, cached_v
 
@@ -368,12 +382,13 @@ class AttentionChunked:
     def copy(self):
         Q_norm_copy = self.Q_norm.copy()
         K_norm_copy = self.K_norm.copy()
-        attn_copy = AttentionChunked(embed_dim=self.embed_dim, n_heads=self.n_heads, Q_norm=Q_norm_copy, K_norm=K_norm_copy, n_kv_heads=self.n_kv_heads, chunk_size=self.chunk_size,theta=self.theta, ori_T=self.ori_T, s=self.s, alpha=self.alpha, beta=self.beta, dtype=self.dtype, quantized=self.quantized, init=False)
+        attn_copy = AttentionChunked(embed_dim=self.embed_dim, n_heads=self.n_heads, Q_norm=Q_norm_copy, K_norm=K_norm_copy, n_kv_heads=self.n_kv_heads, theta=self.theta,ori_T=self.ori_T, s=self.s, alpha=self.alpha, beta=self.beta,dtype=self.dtype,chunk_size=self.chunk_size, quantized=self.quantized, init=False)
         attn_copy.Wqkv = nx.copy(self.Wqkv)
         attn_copy.Wo = nx.copy(self.Wo)
+        attn_copy.Wg = nx.copy(self.Wg)
         if self.quantized:
-            attn_copy.scales = (nx.copy(self.scales[0]), nx.copy(self.scales[1]))
-            attn_copy.biases = (nx.copy(self.biases[0]), nx.copy(self.biases[1]))
+            attn_copy.scales = (nx.copy(self.scales[0]), nx.copy(self.scales[1]), nx.copy(self.scales[2]))
+            attn_copy.biases = (nx.copy(self.biases[0]), nx.copy(self.biases[1]), nx.copy(self.biases[2]))
 
         return attn_copy
 
@@ -384,6 +399,7 @@ class AttentionChunked:
         self.quantized = True
         self.Wqkv, scale_wcombined, bias_wcombined = nx.quantize(self.Wqkv)
         self.Wo, scale_wout, bias_out = nx.quantize(self.Wo)
+        self.Wg, scale_wg, bias_g = nx.quantize(self.Wg)
 
-        self.scales = (scale_wcombined, scale_wout)
-        self.biases = (bias_wcombined, bias_out)
+        self.scales = (scale_wcombined, scale_wout, scale_wg)
+        self.biases = (bias_wcombined, bias_out, bias_g)

@@ -4,6 +4,7 @@ from typing import Any, Callable
 import engine.initializers as initializer
 from engine.rope import precompute_freqs
 from engine.rmsnorm import RMSNorm
+from engine.activations import sigmoid
 
 class AttentionFull:
     def __init__(self,embed_dim:int, n_heads:int,Q_norm:RMSNorm, K_norm:RMSNorm,  n_kv_heads:int=-1,theta=10000,s=1.0, ori_T=None, alpha=1.0, beta=32.0, dtype:Any=nx.float16,  initializer:Callable=initializer.glorot_uniform, quantized:bool=False, *, init=True) -> None:
@@ -20,7 +21,6 @@ class AttentionFull:
         self.head_dim = embed_dim // n_heads
         assert self.head_dim % 2 == 0,  f"rope needs headdim to be multiple of 2, get headdim of {self.head_dim} instead. math: embed_dim // n_heads -> {embed_dim} // {n_heads} = {embed_dim//n_heads}"
         self.dtype = dtype
-
         self.n_rep = self.n_heads // self.n_kv_heads
 
         self.theta = theta
@@ -33,17 +33,21 @@ class AttentionFull:
         self.configs = self.embed_dim, self.n_kv_heads, self.n_heads, self.n_rep, self.head_dim, self.theta, self.s,self.ori_T, self.alpha,self.beta, self.freqs
 
         self.quantized = quantized
-        self.scales = (None, None)
-        self.biases = (None,None)
+        self.scales = (None, None, None)
+        self.biases = (None,None, None)
 
         wqkv_shape = embed_dim + 2 * n_kv_heads * self.head_dim, embed_dim
         wo_shape = embed_dim,embed_dim
+        wg_shape = embed_dim,embed_dim
+
+        self.Q_norm = Q_norm
+        self.K_norm = K_norm
 
         self.quant_map = {
             "Wqkv": 0,
             "Wo": 1,
+            "Wg": 2,
         }
-
         if init:
             self.Wqkv = initializer(wqkv_shape, dtype=dtype)
             assert nx.isfinite(self.Wqkv).all(), f"non-finite detected when initializing attentipn.Wqkv."
@@ -51,30 +55,37 @@ class AttentionFull:
             self.Wo = initializer(wo_shape, dtype=dtype)
             assert nx.isfinite(self.Wo).all(), f"non-finite detected when initializing attentipn.Wo."
 
+            self.Wg = initializer(wg_shape, dtype=dtype)
+            assert nx.isfinite(self.Wg).all(), f"non-finite detected when initializing attentipn.Wg."
+
             if quantized:
                 self.Wqkv, wqkv_scale, wqkv_bias = nx.quantize(self.Wqkv)
                 self.Wo, wo_scale, wo_bias = nx.quantize(self.Wo)
-                self.scales = (wqkv_scale, wo_scale)
-                self.biases = (wqkv_bias, wo_bias)
+                self.Wg, wg_scale, wg_bias = nx.quantize(self.Wg)
+
+                self.scales = (wqkv_scale, wo_scale, wg_scale)
+                self.biases = (wqkv_bias, wo_bias,wg_bias)
         else:
             self.Wqkv = nx.empty(wqkv_shape)
             self.Wo = nx.empty(wo_shape)
+            self.Wg = nx.empty(wg_shape)
+
 
         self.dWqkv = nx.zeros(wqkv_shape)
         self.dWo = nx.zeros(wo_shape)
-
-        self.Q_norm = Q_norm
-        self.K_norm = K_norm
+        self.dWg = nx.zeros(wg_shape)
 
     def zeroes_gradient(self):
         self.dWqkv = nx.zeros_like(self.dWqkv)
         self.dWo = nx.zeros_like(self.dWo)
-        self.Q_norm.d_gamma = nx.zeros_like(self.Q_norm.d_gamma)
-        self.K_norm.d_gamma = nx.zeros_like(self.K_norm.d_gamma)
+        self.dWg = nx.zeros_like(self.dWg)
+        self.Q_norm.zeroes_gradient()
+        self.K_norm.zeroes_gradient()
 
-    def set_gradient(self, dwqkv, dwo, Q_d_gamma, K_d_gamma):
+    def set_gradient(self, dwqkv, dwo, dwg, Q_d_gamma, K_d_gamma):
         self.dWqkv += dwqkv
         self.dWo += dwo
+        self.dWg += dwg
         self.Q_norm.set_gradient(Q_d_gamma)
         self.K_norm.set_gradient(K_d_gamma)
 
@@ -101,9 +112,8 @@ class AttentionFull:
         #combined (B, T, D + 2 * n_kv_heads * H)
         embed_dim, n_kv_heads, n_heads, n_rep, head_dim, theta, s,ori_T, alpha, beta, freqs = attn_configs
 
-        Wqkv, Wo, Q_norm_gamma, K_norm_gamma = attn_params
-
-        wqkv_scale, wo_scale, wqkv_bias, wo_bias = quantization
+        Wqkv, Wo, Wg, Q_norm_gamma, K_norm_gamma = attn_params
+        wqkv_scale, wo_scale, wg_scale, wqkv_bias, wo_bias, wg_bias = quantization
 
         if wqkv_scale is not None:
             combined = nx.quantized_matmul(x, Wqkv, wqkv_scale,wqkv_bias, transpose=True)
@@ -133,18 +143,19 @@ class AttentionFull:
         else:
             combined_mask = causal_mask
 
-        output, lse = AttentionFull.online_forward(Q, K, V, combined_mask, 512, 512)
+        output, lse = AttentionFull.online_forward(Q, K, V, combined_mask, 1024, 1024)
 
         output = output.reshape(B, -1, T, head_dim)
         output_concat = output.transpose(0, 2, 1, 3).reshape(B, T, embed_dim)
 
-        if wo_scale is not None:
-            output_projected = nx.quantized_matmul(output_concat, Wo, wo_scale, wo_bias) #BTD
-        else:
-            output_projected = output_concat @ Wo
+        gate_logits = nx.mul(x, Wg, wg_scale, wg_bias) #B,T,D
+        gate = sigmoid(gate_logits.astype(nx.float32), nx.float32)
+        gate = gate.astype(x.dtype)
+        gated = output_concat * gate
 
+        output_projected = nx.mul(gated, Wo, wo_scale, wo_bias) #BTD
 
-        cache =  (x, Q, Q_norm_caches, K, K_norm_caches, V, output_concat, combined_mask, lse)
+        cache =  (x, Q, Q_norm_caches, K, K_norm_caches, V, output_concat, combined_mask, lse, gate)
 
         return output_projected, cache
 
@@ -198,24 +209,22 @@ class AttentionFull:
     def _backward(gradient:nx.ArrayLike, caches:tuple[Any,...], attn_configs:tuple[Any,...], attn_params: tuple[Any,...], quantization:tuple[Any,...]|None=None,  *, recompute_activation=True) -> tuple[nx.ArrayLike,...]:
         embed_dim, n_kv_heads, n_heads, n_rep, head_dim,theta, s,ori_T, alpha, beta, freqs = attn_configs
 
-        Wqkv, Wo, Q_norm_gamma, K_norm_gamma = attn_params
+        Wqkv, Wo, Wg, Q_norm_gamma, K_norm_gamma = attn_params
 
-        wqkv_scale, wo_scale, wqkv_bias, wo_bias = quantization #type:ignore
+        wqkv_scale, wo_scale, wg_scale, wqkv_bias, wo_bias, wg_bias = quantization#type:ignore
 
-        x, Q, Q_norm_caches, K, K_norm_caches, V, output_concat, combined_mask, lse = caches
+        x, Q, Q_norm_caches, K, K_norm_caches, V, output_concat, combined_mask, lse, gate = caches
 
         B, T, _ = x.shape
 
-        if wo_scale is not None:
-            d_output_concat = nx.quantized_matmul(gradient, Wo, wo_scale,wo_bias, transpose=True) #B,T,D
-        else:
-            d_output_concat = gradient @ Wo.T
+        d_gated = nx.mul(gradient, Wo, wo_scale, wo_bias, True)
+        d_output_concat = (d_gated * gate).astype(gradient.dtype)
 
         d_output = d_output_concat.reshape(B, T, n_heads, head_dim).transpose(0, 2, 1, 3)
         d_output = d_output.reshape(B, n_kv_heads, n_rep, T, head_dim)
 
         output = output_concat.reshape(B, T, n_kv_heads, n_rep, head_dim).transpose(0,2,3,1,4)
-        dQ, dK, dV = AttentionFull.online_backward(d_output, output, lse, Q, K, V, combined_mask)
+        dQ, dK, dV = AttentionFull.online_backward(d_output, output, lse, Q, K, V, combined_mask, 1024, 1024)
 
         del Q, K, V, d_output, d_output_concat
 
@@ -237,18 +246,24 @@ class AttentionFull:
         X = x.reshape(-1, embed_dim)
         dWqkv = DQKV.T @ X
 
-        H = output_concat.reshape(-1, embed_dim)
+        H = output_concat * gate
+        H = H.reshape(-1, embed_dim)
         G = gradient.reshape(-1, embed_dim)
 
-        dWo = H.T @ G
+        dWo = H.T @ G #D, D
+        dx = nx.mul(dQKV, Wqkv, wqkv_scale, wqkv_bias)
 
-        if wqkv_scale is not None:
-            dx = nx.quantized_matmul(dQKV, Wqkv, wqkv_scale, wqkv_bias)
-        else:
-            dx = dQKV @ Wqkv
+        dg = d_gated.astype(nx.float32) * output_concat.astype(nx.float32)
+        gate = gate.astype(nx.float32)
+        dz = dg * gate * (1 - gate)
+        dz = dz.astype(x.dtype)
+        dx_gate = nx.mul(dz, Wg, wg_scale, wg_bias, True)
+        dWg = X.T @ dz.reshape(-1, embed_dim) #D,D
 
-        del x, output_concat, freqs, Wqkv, Wo
-        return dx,dWqkv,dWo,Q_norm_d_gamma,K_norm_d_gamma
+        dx += dx_gate
+
+        del x, output_concat, freqs, Wqkv, Wo, Wg, gate, dz
+        return dx,dWqkv,dWo, dWg, Q_norm_d_gamma,K_norm_d_gamma
 
     @staticmethod
     def online_backward(d_output, output, lse, Q, K, V, combined_mask, Bq=1024, Bk=1024):
@@ -299,11 +314,10 @@ class AttentionFull:
         return dQ, dK, dV
 
     def inference_forward(self, x, max_cache_len, freqs, quantization, cached_k, cached_v, position = 0):
-        wqkv_scale, wo_scale, wqkv_bias, wo_bias = quantization #type:ignore
-        if wqkv_scale is not None:
-            combined = nx.quantized_matmul(x, self.Wqkv, wqkv_scale,wqkv_bias, transpose=True)
-        else:
-            combined =  x @ self.Wqkv.T  # dtype
+        wqkv_scale, wo_scale, wg_scale, wqkv_bias, wo_bias, wg_bias = quantization #type:ignore
+
+        combined = nx.mul(x, self.Wqkv, wqkv_scale, wqkv_bias, True)
+
         B, T, _ = x.shape
 
         K = combined[..., self.embed_dim: self.embed_dim + (self.n_kv_heads * self.head_dim)]
@@ -351,10 +365,12 @@ class AttentionFull:
         output = weights @ repeats_cached_v
         output_concat = output.transpose(0, 2, 1, 3).reshape(B, T, self.embed_dim)
 
-        if wo_scale is not None:
-            output_projected = nx.quantized_matmul(output_concat, self.Wo, wo_scale, wo_bias) #BTD
-        else:
-            output_projected = output_concat @ self.Wo #type:ignore
+        gate_logits = nx.mul(x, self.Wg, wg_scale, wg_bias) #B,T,D
+        s = sigmoid(gate_logits.astype(nx.float32), nx.float32)
+        s = s.astype(x.dtype)
+        gated = output_concat * s
+
+        output_projected = nx.mul(gated, self.Wo, wo_scale, wo_bias)
 
         return output_projected, cached_k, cached_v
 
@@ -373,9 +389,10 @@ class AttentionFull:
         attn_copy = AttentionFull(embed_dim=self.embed_dim, n_heads=self.n_heads, Q_norm=Q_norm_copy, K_norm=K_norm_copy, n_kv_heads=self.n_kv_heads, theta=self.theta,ori_T=self.ori_T, s=self.s, alpha=self.alpha, beta=self.beta,dtype=self.dtype, quantized=self.quantized, init=False)
         attn_copy.Wqkv = nx.copy(self.Wqkv)
         attn_copy.Wo = nx.copy(self.Wo)
+        attn_copy.Wg = nx.copy(self.Wg)
         if self.quantized:
-            attn_copy.scales = (nx.copy(self.scales[0]), nx.copy(self.scales[1]))
-            attn_copy.biases = (nx.copy(self.biases[0]), nx.copy(self.biases[1]))
+            attn_copy.scales = (nx.copy(self.scales[0]), nx.copy(self.scales[1]), nx.copy(self.scales[2]))
+            attn_copy.biases = (nx.copy(self.biases[0]), nx.copy(self.biases[1]), nx.copy(self.biases[2]))
 
         return attn_copy
 
@@ -386,6 +403,7 @@ class AttentionFull:
         self.quantized = True
         self.Wqkv, scale_wcombined, bias_wcombined = nx.quantize(self.Wqkv)
         self.Wo, scale_wout, bias_out = nx.quantize(self.Wo)
+        self.Wg, scale_wg, bias_g = nx.quantize(self.Wg)
 
-        self.scales = (scale_wcombined, scale_wout)
-        self.biases = (bias_wcombined, bias_out)
+        self.scales = (scale_wcombined, scale_wout, scale_wg)
+        self.biases = (bias_wcombined, bias_out, bias_g)

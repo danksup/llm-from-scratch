@@ -42,9 +42,11 @@ class TransformerBlock:
         if quantized:
             total += self.attention.Wqkv.size * 4
             total += self.attention.Wo.size * 4
+            total += self.attention.Wg.size * 4
         else:
             total += self.attention.Wqkv.size
             total += self.attention.Wo.size
+            total += self.attention.Wg.size
 
         ff_param_sparse, ff_param_dense = self.ff.count_params()
         total += ff_param_dense if dense else ff_param_sparse
@@ -80,7 +82,7 @@ class TransformerBlock:
 
     @staticmethod
     @nx.compile
-    def _backward(gradient:Any, mask1:Any, mask2:Any, attention:str, p, caches_attn:tuple[Any,...], caches_ff:tuple[Any,...], caches_rmsnorm1:tuple[Any,...], caches_rmsnorm2:tuple[Any,...], attn_configs:tuple[Any,...], attn_params:tuple[Any,...], gamma1:Any, gamma2:Any, ff_params:tuple, ff_configs, gradient_scale, quantization:tuple[Any,...]|None=None, dtype="float16", *, recompute_activation:bool=True) -> tuple[Any, Any, Any, Any, Any, Any, Any, Any,Any, Any, Any, Any]:
+    def _backward(gradient:Any, mask1:Any, mask2:Any, attention:str, p, caches_attn:tuple[Any,...], caches_ff:tuple[Any,...], caches_rmsnorm1:tuple[Any,...], caches_rmsnorm2:tuple[Any,...], attn_configs:tuple[Any,...], attn_params:tuple[Any,...], gamma1:Any, gamma2:Any, ff_params:tuple, ff_configs, gradient_scale, quantization:tuple[Any,...]|None=None, dtype="float16", *, recompute_activation:bool=True) -> tuple[Any, Any, Any, Any, Any, Any, Any, Any,Any, Any, Any, Any, Any]:
         grad = gradient.astype(nx.str_to_dtype[dtype])
         d_ff_drop = Dropout._backward(grad, mask2, p) #grad dtype
         dx_ff, dWcombined, dWout, d_router, dW_dense_combined, dW_dense_out = FFN.backward(d_ff_drop, caches_ff, ff_configs, ff_params,gradient_scale, quantization[1], recompute_activation=recompute_activation) #out:fp32 #type:ignore
@@ -91,13 +93,13 @@ class TransformerBlock:
 
         d_attn_out_ = d_attn_out.astype(nx.str_to_dtype[dtype])
         d_attn_drop = Dropout._backward(d_attn_out_, mask1, p)
-        d_attn, dWqkv, dWo, Q_norm_d_gamma, K_norm_d_gamma = ATTN_TYPE[attention]._backward(d_attn_drop, caches_attn, attn_configs, attn_params, quantization[0], recompute_activation=recompute_activation) #type:ignore
+        d_attn, dWqkv, dWo,dWg, Q_norm_d_gamma, K_norm_d_gamma = ATTN_TYPE[attention]._backward(d_attn_drop, caches_attn, attn_configs, attn_params, quantization[0], recompute_activation=recompute_activation) #type:ignore
 
         d_rmsn1, d_gamma1 = RMSNorm._backward(d_attn,caches_rmsnorm1,gamma1)
 
         dx = d_rmsn1 + d_attn_out.astype(nx.float32)
         # dx = dx.astype(nx.str_to_dtype[dtype])
-        return dx, dWout, dWcombined, d_router,dW_dense_combined, dW_dense_out, dWqkv,dWo, d_gamma1, d_gamma2, Q_norm_d_gamma, K_norm_d_gamma
+        return dx, dWout, dWcombined, d_router,dW_dense_combined, dW_dense_out, dWqkv,dWo, dWg, d_gamma1, d_gamma2, Q_norm_d_gamma, K_norm_d_gamma
 
     #TODO:compiled, dtype consistency fix/check
     def inference_forward(self, x, max_cache_len, cached_k=None, cached_v=None,  position=0, dtype=nx.float16):
@@ -142,8 +144,8 @@ class TransformerBlock:
         self.attention.quantize()
         self.ff.quantize()
 
-    def set_gradient(self,**kwargs):#*, dWout, dWcombined, d_router,dW_dense_combined, dW_dense_out, dWqkv,dWo, d_gamma1, d_gamma2, Q_norm_d_gamma, K_norm_d_gamma):
-        self.attention.set_gradient(kwargs["dwqkv"], kwargs["dwo"], kwargs["q_d_gamma"], kwargs["k_d_gamma"])
+    def set_gradient(self,**kwargs):#*, dWout, dWcombined, d_router,dW_dense_combined, dW_dense_out, dWqkv,dWo,dWg, d_gamma1, d_gamma2, Q_norm_d_gamma, K_norm_d_gamma):
+        self.attention.set_gradient(kwargs["dwqkv"], kwargs["dwo"], kwargs["dWg"], kwargs["q_d_gamma"], kwargs["k_d_gamma"])
         self.rmsnorm1.set_gradient(kwargs["tblock_d_gamma1"])
         self.rmsnorm2.set_gradient(kwargs["tblock_d_gamma2"])
         self.ff.set_gradient(dWcombined=kwargs["dwcombined"], dWout=kwargs["dwout"], d_router=kwargs["d_router"], dW_dense_combined=kwargs["dw_dense_combined"],dW_dense_out=kwargs["dw_dense_out"])

@@ -24,7 +24,7 @@ N_EXPERTS = 8
 CF = 1.25
 VAL = 1
 TOP_K = 2
-MAX_STEP = 10
+MAX_STEP = 1
 
 CORPUS_PATH = "artifacts/dataloader/2025_26"
 TOKENIZER_PATH = "artifacts/tokenizer/tokenizer32768_1624612680len.tokenizer"

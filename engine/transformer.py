@@ -268,7 +268,7 @@ class Transformer:
 
                 self.compute_mask(attn_str, block, T)
 
-                attn_params = block.attention.Wqkv, block.attention.Wo, block.attention.Q_norm.gamma, block.attention.K_norm.gamma
+                attn_params = block.attention.Wqkv, block.attention.Wo, block.attention.Wg, block.attention.Q_norm.gamma, block.attention.K_norm.gamma
                 ff_params = block.ff.router, block.ff.Wcombined, block.ff.Wout, block.ff.W_dense_combined, block.ff.W_dense_out, block.ff.router_bias
                 quants = (block.attention.scales + block.attention.biases, block.ff.scales + block.ff.biases)
                 ff_out ,masks, caches, z_loss, normalized_histogram = block._forward(output, block.causal_mask,doc_id, attn_str ,block.attention.configs, attn_params, block.ff.configs, ff_params, epsilon, gamma1, gamma2, P, is_training, quants, dtype=nx.dtype_to_srt[self.dtype], recompute_activation=self.recompute_activation)
@@ -311,10 +311,10 @@ class Transformer:
             ff_params = (block.ff.router,block.ff.Wcombined, block.ff.Wout,  block.ff.W_dense_combined, block.ff.W_dense_out, block.ff.router_bias)
             attn_str = block.attention.self_type()
             attn_configs = block.attention.configs
-            attn_params = block.attention.Wqkv, block.attention.Wo, block.attention.Q_norm.gamma, block.attention.K_norm.gamma
+            attn_params = block.attention.Wqkv, block.attention.Wo, block.attention.Wg, block.attention.Q_norm.gamma, block.attention.K_norm.gamma
             scales = (block.attention.scales + block.attention.biases, block.ff.scales + block.ff.biases)
 
-            dx, dWout, dWcombined, d_router,dW_dense_combined, dW_dense_out, dWqkv,dWo, d_gamma1, d_gamma2, Q_norm_d_gamma, K_norm_d_gamma = block._backward(current_grad, mask1=mask1, mask2=mask2, p=P, attention=attn_str,
+            dx, dWout, dWcombined, d_router,dW_dense_combined, dW_dense_out, dWqkv,dWo,dWg, d_gamma1, d_gamma2, Q_norm_d_gamma, K_norm_d_gamma = block._backward(current_grad, mask1=mask1, mask2=mask2, p=P, attention=attn_str,
                                                                 caches_attn=caches_attn, caches_ff=caches_ff, caches_rmsnorm1=caches_rmsnorm1, caches_rmsnorm2=caches_rmsnorm2,
                                                                 attn_configs = attn_configs, attn_params=attn_params, gamma1=block.rmsnorm1.gamma, gamma2=block.rmsnorm2.gamma, ff_params=ff_params, ff_configs=ff_configs, gradient_scale=self.gradient_scale, quantization=scales, dtype=nx.dtype_to_srt[self.dtype], recompute_activation=self.recompute_activation)
             if block.ff.n_experts > 0:
@@ -328,6 +328,7 @@ class Transformer:
 
             block.attention.dWqkv += dWqkv
             block.attention.dWo += dWo
+            block.attention.dWg += dWg
             block.attention.Q_norm.d_gamma +=  Q_norm_d_gamma
             block.attention.K_norm.d_gamma +=  K_norm_d_gamma
 
@@ -415,7 +416,7 @@ class Transformer:
     def get_mtp_things(self):
         upper = [None, None, None , "transformer_block"]
         middle = [None, "rmsnorm1", "rmsnorm2", ["ff", "attention", "rmsnorm1", "rmsnorm2"]]
-        lower = [("Wproj", "dWproj"), ("gamma", "d_gamma"), ("gamma", "d_gamma"), [[("router", "d_router"), ("router_bias", None), ("Wcombined", "dWcombined"), ("Wout", "dWout"), ("W_dense_combined", "dW_dense_combined"), ("W_dense_out", "dW_dense_out")], [("Wqkv", "dWqkv"), ("Wo", "dWo"), ("Q_norm", "gamma", "d_gamma"), ("K_norm", "gamma", "d_gamma")], [("gamma", "d_gamma")], [("gamma", "d_gamma")]]]
+        lower = [("Wproj", "dWproj"), ("gamma", "d_gamma"), ("gamma", "d_gamma"), [[("router", "d_router"), ("router_bias", None), ("Wcombined", "dWcombined"), ("Wout", "dWout"), ("W_dense_combined", "dW_dense_combined"), ("W_dense_out", "dW_dense_out")], [("Wqkv", "dWqkv"), ("Wo", "dWo"), ("Wg", "dWg"), ("Q_norm", "gamma", "d_gamma"), ("K_norm", "gamma", "d_gamma")], [("gamma", "d_gamma")], [("gamma", "d_gamma")]]]
 
         for i, mtp in enumerate(self.mtp_blocks):
             for idx, thing in enumerate(upper):
@@ -448,7 +449,7 @@ class Transformer:
                 yield self.rmsnorm_final, "gamma","d_gamma", "rmsnorm_final.gamma","rmsnorm_final.d_gamma"
 
         layers = ["ff", "attention", "rmsnorm1", "rmsnorm2"]
-        params = [[("router", "d_router"),("router_bias", None),("Wcombined", "dWcombined"),("Wout", "dWout"),("W_dense_combined", "dW_dense_combined"),("W_dense_out", "dW_dense_out"),],[("Wqkv", "dWqkv"),("Wo", "dWo"),("Q_norm", "gamma", "d_gamma"),("K_norm", "gamma", "d_gamma"),],[("gamma", "d_gamma"),],[("gamma", "d_gamma"),],]
+        params = [[("router", "d_router"),("router_bias", None),("Wcombined", "dWcombined"),("Wout", "dWout"),("W_dense_combined", "dW_dense_combined"),("W_dense_out", "dW_dense_out"),],[("Wqkv", "dWqkv"),("Wo", "dWo"), ("Wg", "dWg"),("Q_norm", "gamma", "d_gamma"),("K_norm", "gamma", "d_gamma"),],[("gamma", "d_gamma"),],[("gamma", "d_gamma"),],]
         for a,b,c,d,e in self.get_block_weights(layers, params):
             yield a,b,c,d,e
 
